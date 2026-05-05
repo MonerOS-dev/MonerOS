@@ -1,0 +1,76 @@
+#!/bin/bash
+export PATH=/usr/bin:/bin:/usr/local/bin
+
+BASE_DIR="/mnt/sallyport/watch_litecoin"
+
+echo "Getting LTC Balance"
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet does not exist. Exiting."
+    exit 0
+fi
+
+BACKEND_DIR="/var/www/backend/Litecoin"
+
+# --- Configuration ---
+MAX_RETRIES=3
+RETRY_DELAY=20  # 20 seconds apart as requested
+mkdir -p "$BACKEND_DIR"
+
+fetch_balance_online() {
+    local addr=$1
+    local attempt=1
+    local result=""
+
+    while [ $attempt -le $MAX_RETRIES ]; do
+        # Fetching from BlockCypher API
+        # final_balance is returned in Satoshis
+        result=$(curl -s "https://api.blockcypher.com/v1/ltc/main/addrs/${addr}/balance")
+        
+        # Extract balance using grep and perl regex (stays light on dependencies)
+        local balance_sat=$(echo "$result" | grep -oP '"final_balance":\s*\K\d+')
+
+        if [ -n "$balance_sat" ]; then
+            # Convert Satoshis to LTC (8 decimal places)
+            local balance_ltc=$(awk "BEGIN {printf \"%.8f\", $balance_sat / 100000000}")
+            echo "$balance_ltc"
+            return 0
+        fi
+
+        echo "Attempt $attempt failed for $addr. Retrying in ${RETRY_DELAY}s..." >&2
+        attempt=$((attempt + 1))
+        [ $attempt -le $MAX_RETRIES ] && sleep $RETRY_DELAY
+    done
+
+    return 1
+}
+
+check_balance() {
+    local dir=$1
+    local INFO_FILE="${dir}watch_info.txt"
+    
+    if [ -f "$INFO_FILE" ]; then
+        local ADDR=$(grep "ADDRESS:" "$INFO_FILE" | awk '{print $2}' | tr -d '\r')
+        
+        if [ -n "$ADDR" ]; then
+            echo "Checking online Litecoin balance for: $ADDR"
+            local NEW_BAL=$(fetch_balance_online "$ADDR")
+            
+            if [ $? -eq 0 ]; then
+                # Writing to your backend directory
+                echo "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_balance.txt" > /dev/null
+                echo "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_unlocked.txt" > /dev/null
+                echo "SUCCESS: Updated $ADDR to $NEW_BAL LTC"
+            else
+                echo "ERROR: Failed to fetch balance for $ADDR after $MAX_RETRIES attempts."
+            fi
+        fi
+    fi
+}
+
+# --- Main Loop ---
+for dir in "$BASE_DIR"/*/; do
+    [ -d "$dir" ] || continue
+    check_balance "$dir"
+done
+
+echo "--- Litecoin online balance refresh cycle complete ---"

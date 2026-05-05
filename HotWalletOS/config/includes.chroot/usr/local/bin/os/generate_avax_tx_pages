@@ -1,0 +1,272 @@
+#!/bin/bash
+
+WATCH_DIR="/mnt/sallyport/watch_avalanche"
+WEB_DIR="/var/www/html"
+SINGLE_ADDR=$1
+
+generate_page() {
+    local ADDRESS=$1
+    local TARGET_FILE="${WEB_DIR}/${ADDRESS}.php"
+    
+    echo "Generating page for: $ADDRESS"
+
+    cat <<'EOF' > "$TARGET_FILE"
+<?php
+$address = "REPLACE_ME_ADDRESS";
+$message = "";
+$status_class = "";
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $dest = $_POST['destination'] ?? '';
+    $amount = strtolower($_POST['amount'] ?? '');
+    $tip_percent = $_POST['tip_percent'] ?? '1.25'; 
+    $input_pass = $_POST['password'] ?? '';
+    
+    $cmd = "sudo /usr/bin/bash /usr/local/bin/os/transfer_avalanche " . 
+           escapeshellarg($address) . " " . 
+           escapeshellarg($dest) . " " . 
+           escapeshellarg($amount) . " " . 
+           escapeshellarg($tip_percent) . " " . 
+           escapeshellarg($input_pass);
+           
+    $output = shell_exec($cmd . " 2>&1");
+    $message = trim($output);
+    
+    if (strpos($message, 'SUCCESS') !== false) {
+        $status_class = "success";
+    } else {
+        $status_class = "error";
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HotWalletOS - AVAX Transfer</title>
+    <style>
+        :root {
+            --silver-light: #e0e0e0;
+            --silver-mid: #C0C0C0;
+            --silver-dark: #8e8e8e;
+            --matte-black: #0a0a0a;
+            --glow-green: #00ff41;
+        }
+
+        body {
+            background: radial-gradient(circle at center, #1c1c1c 0%, #000000 100%);
+            background-attachment: fixed;
+            color: var(--silver-mid);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            margin: 0;
+            padding: 20px 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1 {
+            font-size: clamp(2.5rem, 10vw, 4rem); 
+            margin: 0;
+            letter-spacing: 8px;
+            color: var(--silver-light);
+            text-transform: none;
+            font-weight: 250;
+            text-shadow: 0 0 20px rgba(192, 192, 192, 0.2);
+            text-align: center;
+        }
+
+        .update-tag {
+            font-size: 0.8rem;
+            color: var(--silver-dark);
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .container {
+            background: linear-gradient(145deg, #1a1a1a, #050505);
+            border: 2px solid #444;
+            padding: 20px;
+            border-radius: 4px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+            max-width: 550px;
+            box-sizing: border-box;
+            margin-bottom: 20px;
+        }
+
+        .container::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(to right, transparent, var(--silver-mid), transparent);
+        }
+
+        .form-group { 
+            margin-bottom: 18px;
+            width: 100%; 
+            text-align: left;
+        }
+        
+        label { 
+            display: block; 
+            margin-bottom: 8px;
+            color: var(--silver-dark); 
+            font-size: 0.7rem; 
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: bold;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid #333;
+            color: var(--glow-green);
+            font-family: 'Roboto Mono', monospace;
+            box-sizing: border-box;
+            border-radius: 2px;
+            font-size: 0.95rem;
+        }
+
+        input[readonly] { 
+            color: #008f11;
+            border-color: #222;
+            background: rgba(0, 0, 0, 0.8);
+            cursor: not-allowed;
+        }
+        
+        pre {
+            background: #000;
+            color: var(--glow-green);
+            padding: 15px;
+            border: 2px solid #333;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-size: 0.8rem;
+            font-family: 'Roboto Mono', monospace;
+        }
+
+        .btn-cmd {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: #000;
+            text-decoration: none;
+            font-weight: bold;
+            letter-spacing: 2px;
+            transition: 0.3s;
+            text-transform: uppercase;
+            border: 2px solid #444;
+            text-align: center;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+
+        .btn-action { color: var(--silver-light); }
+        .btn-action:hover {
+            background: var(--silver-light);
+            color: #000;
+            border-color: var(--silver-light);
+        }
+
+        .btn-cancel {
+            color: #ff3333;
+            border-color: #444;
+            margin-top: 10px;
+        }
+        .btn-cancel:hover {
+            background: #ff3333;
+            color: #fff;
+            border-color: #ff3333;
+        }
+        
+        select {
+            color: #008f11 !important;
+            border-color: #222;
+            background: rgba(0, 0, 0, 0.8);
+        }
+        
+        select option {
+            background: #0a0a0a;
+            color: #ffffff;
+        }
+
+        .response { margin-top: 15px; padding: 15px; border: 2px solid; border-radius: 4px; }
+        .success { border-color: var(--glow-green); background: rgba(0, 255, 65, 0.05); }
+        .error { border-color: #ff3333; background: rgba(255, 0, 0, 0.05); color: #ff3333; }
+    </style>
+</head>
+<body>
+    <h1>HotWalletOS</h1>
+    <div class="update-tag">AVALANCHE TRANSFER</div>
+    
+    <div class="container">
+        <?php if ($message): ?>
+            <div class="response <?php echo $status_class; ?>">
+                <?php if ($status_class === "success"): ?>
+                    <p style="letter-spacing:1px; color: var(--glow-green); font-size: 0.75rem; font-weight: bold; margin-bottom: 10px;">GENERATE UNSIGNED JSONS:</p>
+                    <pre><?php echo htmlspecialchars($message); ?></pre>
+                    <p style="font-size: 0.7rem; color: var(--silver-dark); margin-top: 10px; text-transform: uppercase;">JSONs saved to wallet folder. Transfer to Offline device.</p>
+                <?php else: ?>
+                    <p style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem;"><?php echo nl2br(htmlspecialchars($message)); ?></p>
+                <?php endif; ?>
+            </div>
+            <a href="index.php" class="btn-cmd btn-action" style="margin-top:20px;">RETURN TO DASHBOARD</a>
+        <?php else: ?>
+            <form method="POST" autocomplete="off">
+                <div class="form-group">
+                    <label>From Address (Read-Only)</label>
+                    <input type="text" value="<?php echo $address; ?>" readonly tabindex="-1">
+                </div>
+                <div class="form-group">
+                    <label>Destination Address (0x...)</label>
+                    <input type="text" name="destination" placeholder="0x..." autocomplete="off" required>
+                </div>
+                <div class="form-group">
+                    <label>Amount (or 'sweep_all') in AVAX</label>
+                    <input type="text" name="amount" placeholder="0.1" autocomplete="off" required>
+                </div>
+                <div class="form-group">
+                    <label>Development Contribution</label>
+                    <select name="tip_percent">
+                        <option value="0.40">0.40% (Recommended)</option>
+                        <option value="0.30">0.30%</option>
+                        <option value="0.20">0.20%</option>
+                        <option value="0.10">0.10%</option>
+                        <option value="0">0.00% (No Contribution)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Wallet Password</label>
+                    <input type="password" name="password" autocomplete="new-password" required>
+                </div>
+                <button type="submit" class="btn-cmd btn-action">Create Unsigned AVAX Transaction</button>
+            </form>
+            <a href="index.php" class="btn-cmd btn-cancel">Cancel and Go Back</a>
+        <?php endif; ?>
+    </div>
+</body>
+</html>
+EOF
+
+    sed -i "s|REPLACE_ME_ADDRESS|$ADDRESS|g" "$TARGET_FILE"
+    chown www-data:www-data "$TARGET_FILE"
+    chmod 644 "$TARGET_FILE"
+}
+
+if [ -n "$SINGLE_ADDR" ]; then
+    generate_page "$SINGLE_ADDR"
+else
+    cd "$WATCH_DIR" || exit
+    for dir in 0x*/; do
+        generate_page "${dir%/}"
+    done
+fi

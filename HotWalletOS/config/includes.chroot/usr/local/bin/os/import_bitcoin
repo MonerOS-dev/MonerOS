@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Check for root privileges
+if [[ $EUID -ne 0 ]]; then
+   echo "FAILURE: This script must be run as root (use sudo)"
+   exit 1
+fi
+
+BASE_DIR="/mnt/sallyport/watch_bitcoin"
+
+echo "Importing Bitcoin"
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet does not exist. Exiting."
+    exit 0
+fi
+
+# Ensure Electrum daemon is running
+if ! electrum daemon status > /dev/null 2>&1; then
+    echo "Starting Electrum daemon..."
+    electrum daemon -d
+    sleep 2
+fi
+
+for dir in "$BASE_DIR"/*/; do
+    if [ -f "${dir}watch_info.txt" ]; then
+        CLEAN_DIR="${dir%/}"
+        ADDR_FOLDER=$(basename "$CLEAN_DIR")
+        
+        echo "--------------------------------------------------"
+        echo "Processing Folder: $ADDR_FOLDER"
+
+        WALLET_PATH="${CLEAN_DIR}/electrum_watch"
+        ADDR=$(grep "ADDRESS:" "${dir}watch_info.txt" | awk '{print $2}' | tr -d '\r')
+
+        if [ ! -f "$WALLET_PATH" ]; then
+            echo "Importing address: $ADDR"
+            
+            # This feeds:
+            # 1. [Enter] for empty password
+            # 2. [Enter] for empty confirm
+            # 3. The Address itself
+            electrum restore -w "$WALLET_PATH" "$ADDR" <<EOF
+
+
+EOF
+            
+            echo "Loading into daemon..."
+            # Now we load it. Since there's no password, it won't prompt.
+            electrum load_wallet -w "$WALLET_PATH"
+            echo "Success: $ADDR_FOLDER is now being watched."
+        else
+            echo "Wallet already exists. Skipping."
+        fi
+
+        echo "Generating transfer page..."
+        sudo bash /usr/local/bin/os/generate_bitcoin_tx_page "$ADDR"
+    fi
+done
+
+echo "--------------------------------------------------"
+echo "All wallets imported."
+
+echo "Submitting pending Bitcoin transactions"
+sudo bash /usr/local/bin/os/submit_bitcoin

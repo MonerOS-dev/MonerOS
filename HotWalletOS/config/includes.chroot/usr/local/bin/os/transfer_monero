@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# --- Inputs ---
+WATCH_ADDR=$1
+DEST=$2
+COMMAND_OR_AMOUNT=$3
+TIP_PERCENT=$4
+PASSWORD=$5
+
+# --- Configuration ---
+TIP_ADDRESS="48zwp1awjhZfppHv4yyuw4Zm4iwiekkBz3rGe3njZosESXFv4a2bVPEQbH1PB53vrG7eD5JoqVCrnbM3oxexYkbS9KdB8MN"
+BASE_DIR="/mnt/sallyport/watch_monero"
+OUTDIR="$BASE_DIR/$WATCH_ADDR"
+DAEMON="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
+PROXY="127.0.0.1:9050"
+TIMESTAMP=$(date +%s)
+DEBUG=false
+
+# --- 1. PRE-CHECK ---
+cd "$OUTDIR" || exit 1
+
+rm -f "outputs.bin"
+#echo "[CLEAN] Removed old outputs.bin to prevent overwrite prompt."
+
+# Check if a transaction is already waiting to be signed or submitted
+if ls unsigned_tx_* 1>/dev/null 2>&1 || ls signed_tx_* 1>/dev/null 2>&1; then
+    echo "ABORTING: A pending transaction already exists! Please sign and submit that one first."
+    exit 1
+fi
+
+# --- 2. Calculate Tip and Handle No-Tip Situation ---
+if [ "$COMMAND_OR_AMOUNT" == "sweep_all" ]; then
+    FINAL_CMD="sweep_all $DEST" 
+else
+    TIP_AMOUNT=$(printf "%.12f" "$(echo "scale=12; ($COMMAND_OR_AMOUNT * $TIP_PERCENT) / 100" | bc -l)")
+    
+    # If tip is 0, only send to one destination. If > 0, send to both.
+    if (( $(echo "$TIP_AMOUNT > 0" | bc -l) )); then
+        FINAL_CMD="transfer $DEST $COMMAND_OR_AMOUNT $TIP_ADDRESS $TIP_AMOUNT"
+    else
+        FINAL_CMD="transfer $DEST $COMMAND_OR_AMOUNT"
+    fi
+fi
+
+# Clean up internal artifacts before starting
+rm -f "unsigned_monero_tx" "outputs.bin"
+sudo killall -9 monero-wallet-cli 2>/dev/null
+
+# --- 3. SESSION: Linear Logic ---
+export PASSWORD DAEMON FINAL_CMD PROXY
+
+{
+expect <<'EOF'
+set timeout 600
+set PASS $env(PASSWORD)
+set NODE $env(DAEMON)
+set CMD  $env(FINAL_CMD)
+set PRX  $env(PROXY)  ;# Capture the proxy variable
+
+spawn monero-wallet-cli --wallet-file "watchonly" --daemon-address "$NODE" --proxy "$PRX" --trusted-daemon
+
+# 1. Login
+expect "Wallet password:"
+send -- "$PASS\r"
+
+# 2. Export Outputs
+expect -re ".*\]:"
+send "export_outputs all outputs.bin\r"
+
+# 3. Password for Export
+expect "Wallet password:"
+send -- "$PASS\r"
+
+# 4. Trigger Transfer
+expect -re ".*\]:"
+send -- "$CMD\r"
+
+# 5. Handle confirmations, final password, and success
+expect {
+    "Wallet password:" {
+        send -- "$PASS\r"
+        exp_continue
+    }
+    -re ".*(Is this okay|backlog|Privacy|old outputs|fee).*\[Y/n\]:?" {
+        send "y\r"
+        exp_continue
+    }
+    # IMPORTANT: We wait specifically for the success message BEFORE allowing an exit
+    "Unsigned transaction(s) successfully written to file: unsigned_monero_tx" {
+        # Now that we know it's written, we wait for the next prompt to exit
+        expect -re ".*\]:"
+        send "exit\r"
+    }
+    timeout {
+        puts "\n\[ERROR\] Request timed out."
+        exit 1
+    }
+    eof
+}
+EOF
+} > $( [ "$DEBUG" = true ] && echo "/dev/stdout" || echo "/dev/null" ) 2>&1
+
+# --- 4. Final Naming ---
+if ls unsigned_monero_tx* 1> /dev/null 2>&1; then
+    for f in unsigned_monero_tx*; do
+        suffix=${f#unsigned_monero_tx}
+        mv "$f" "unsigned_tx_${TIMESTAMP}${suffix}"
+    done
+    echo "SUCCESS: Created unsigned_tx_${TIMESTAMP}"
+else
+    echo "FAILURE: Transaction not created. Check your wallet balance or node connection."
+    exit 1
+fi

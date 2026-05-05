@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# --- VARIABLES ---
+LOG_FILE="/tmp/logs/cwos_dd.log"
+TARGET_LABEL="HWOS_SALLY"
+MNT_EXTERNAL="/mnt/external"
+# Partition size in bytes (1GB = 1073741824)
+TOTAL_SIZE=1073741824
+
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# 1. Identify Source
+LIVE_DEV=$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null)
+PARENT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n 1)
+SOURCE_PART="/dev/${PARENT_DISK}3"
+[[ "$PARENT_DISK" == nvme* ]] && SOURCE_PART="/dev/${PARENT_DISK}p3"
+
+# 2. Silent Mount
+mkdir -p /tmp/logs && sudo chown 1000:1000 /tmp/logs 2>/dev/null
+if ! mountpoint -q "$MNT_EXTERNAL"; then
+    DEVICE=$(sudo findfs LABEL="$TARGET_LABEL" 2>/dev/null)
+    [ -n "$DEVICE" ] && sudo mount "$DEVICE" "$MNT_EXTERNAL" >/dev/null 2>&1
+fi
+
+# 3. The DD Operation (Fixed AWK Logic)
+{
+    # We use stdbuf to ensure the pipe doesn't buffer, keeping the gauge moving
+    sudo stdbuf -i0 -o0 -e0 dd if="$SOURCE_PART" of="$MNT_EXTERNAL/cwosvault.bin" bs=4M status=progress 2>&1 | \
+    stdbuf -i0 -o0 -e0 awk -v total=$TOTAL_SIZE '{
+        if ($1 ~ /^[0-9]+$/) {
+            print int(($1 / total) * 100)
+        }
+    }' | whiptail --title " Cold Wallet Export " --gauge "\nCloning encrypted internal partition to external storage...\nDo not remove drive." 8 50 0
+
+    sudo sync >/dev/null 2>&1
+} 2>>"$LOG_FILE"
+
+# 4. Success & Recommendation
+if whiptail --fb --title " Export Complete " --yesno "Vault has been cloned to $TARGET_LABEL.\n\nFor maximum security, it is recommended to SHUTDOWN now.\n\nPower off system?" 12 50; then
+    clear
+    sudo poweroff
+else
+    exec /usr/local/bin/os/main_menu
+fi

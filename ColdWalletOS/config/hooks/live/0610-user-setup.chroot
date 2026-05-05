@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+dos2unix /usr/local/bin/cwinit
+find /usr/local/bin/os -type f -exec dos2unix {} +
+chmod 755 /usr/local/bin/os
+chown -R 1000:1000 /usr/local/bin/os
+chmod -R +x /usr/local/bin/os

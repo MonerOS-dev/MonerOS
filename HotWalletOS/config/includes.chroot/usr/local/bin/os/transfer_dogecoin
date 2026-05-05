@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# --- Configuration ---
+WATCH_DIR="/mnt/sallyport/watch_dogecoin"
+CONFIG_FILE="/home/user/password.cfg"
+TIP_ADDRESS="DT84ZBhpwX8fewSFgetkgTyBwC55xhnMus"
+LOG_FILE="/tmp/transfer_doge.log"
+
+# Arguments
+ADDRESS=$1
+DEST=$2
+AMOUNT=$3
+TIP_PERCENT=$4
+INPUT_PASS=$5
+
+# Paths
+WALLET_DIR="${WATCH_DIR}/${ADDRESS}"
+mkdir -p "$WALLET_DIR"
+TIMESTAMP=$(date +%s)
+
+# 1. Verification
+STORED_PASS=$(cat "$CONFIG_FILE" 2>/dev/null | tr -d '\r\n' | xargs)
+if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
+    echo "FAILURE: Incorrect Wallet Password."
+    exit 1
+fi
+
+# 2. Preparation
+# Base fee is 1 DOGE to be safe; threshold is 1 DOGE to avoid dust
+FEE_PER_INPUT_SAT=1000000 
+BASE_FEE_SAT=100000000 
+MIN_TIP_SAT=1000000
+
+if [[ "$AMOUNT" == "sweep_all" ]]; then
+    MAIN_SAT=0; TIP_SAT=0; IS_SWEEP="true"
+else
+    MAIN_SAT=$(python3 -c "print(int(float('$AMOUNT') * 100000000))")
+    TIP_SAT=$(python3 -c "print(int($MAIN_SAT * (float('$TIP_PERCENT') / 100)))")
+    IS_SWEEP="false"
+fi
+
+# 3. Fetch UTXOs (One single call)
+UTXO_DATA=$(curl -s "https://api.blockcypher.com/v1/doge/main/addrs/${ADDRESS}?unspentOnly=true&includeScript=true")
+if [[ -z "$UTXO_DATA" || "$UTXO_DATA" == *"error"* ]]; then
+    echo "FAILURE: Could not reach Dogecoin API or Address not found."
+    exit 1
+fi
+
+# 4. Python Logic
+export UTXO_DATA MAIN_SAT TIP_SAT BASE_FEE_SAT FEE_PER_INPUT_SAT ADDRESS DEST TIP_ADDRESS IS_SWEEP MIN_TIP_SAT
+MANIFEST=$(python3 -c "
+import json, sys, os
+
+try:
+    data = json.loads(os.environ['UTXO_DATA'])
+    is_sweep = os.environ['IS_SWEEP'] == 'true'
+    utxos = data.get('txrefs', [])
+    
+    if not utxos:
+        print('Error: No unspent outputs found.')
+        sys.exit(1)
+
+    sel_in, total_in = [], 0
+    m_sat = int(os.environ['MAIN_SAT'])
+    t_sat = int(os.environ['TIP_SAT'])
+    min_tip = int(os.environ['MIN_TIP_SAT'])
+    
+    # Calculate dynamic fee based on number of inputs
+    for u in utxos:
+        # BlockCypher includes script in txrefs if includeScript=true is passed
+        s_hex = u.get('script')
+        if not s_hex: continue
+        
+        sel_in.append({'txid':u['tx_hash'], 'vout':u['tx_output_n'], 'script':s_hex, 'value':u['value']})
+        total_in += u['value']
+        
+        # Stop collecting if we have enough (only for non-sweeps)
+        # Assuming a safe estimate for fees based on input count
+        current_fee = int(os.environ['BASE_FEE_SAT']) + (len(sel_in) * int(os.environ['FEE_PER_INPUT_SAT']))
+        if not is_sweep and total_in >= (m_sat + t_sat + current_fee): break
+
+    final_fee = int(os.environ['BASE_FEE_SAT']) + (len(sel_in) * int(os.environ['FEE_PER_INPUT_SAT']))
+
+    if is_sweep:
+        available = total_in - final_fee
+        t_sat = 0 # No tip on sweep
+        m_sat = available
+    else:
+        # Check if manual tip meets the economic floor
+        if t_sat < min_tip:
+            t_sat = 0
+            
+    needed = m_sat + t_sat + final_fee
+    
+    if total_in < needed or m_sat <= 0:
+        sys.exit(1)
+
+    manifest = {
+        'network': 'dogecoin-mainnet',
+        'from': os.environ['ADDRESS'],
+        'inputs': sel_in,
+        'outputs': [{'address': os.environ['DEST'], 'value': m_sat}],
+        'fee': final_fee
+    }
+    
+    if t_sat > 0:
+        manifest['outputs'].append({'address': os.environ['TIP_ADDRESS'], 'value': t_sat})
+    
+    # Add change output for non-sweeps
+    change = total_in - needed
+    if not is_sweep and change > 1000000: # Only create change if > 0.01 DOGE
+        manifest['outputs'].append({'address': os.environ['ADDRESS'], 'value': change})
+
+    print(json.dumps(manifest))
+except Exception as e:
+    sys.exit(1)
+")
+
+# 5. Final Output
+if [[ $? -eq 0 && -n "$MANIFEST" ]]; then
+    FILE_NAME="unsigned_doge_${TIMESTAMP}.json"
+    echo "$MANIFEST" > "${WALLET_DIR}/${FILE_NAME}"
+    
+    echo "SUCCESS: Created ${FILE_NAME}"
+    echo "NEXT: Sign this manifest on your cold-storage device."
+    echo "[$(date)] SUCCESS: $ADDRESS (Sweep: $IS_SWEEP)" >> "$LOG_FILE" 2>/dev/null
+else
+    echo "FAILURE: Transaction creation failed. Likely insufficient funds for amount + fee."
+    exit 1
+fi

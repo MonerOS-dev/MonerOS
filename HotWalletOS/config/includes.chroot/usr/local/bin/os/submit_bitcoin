@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# --- Configuration ---
+BASE_DIR="/mnt/sallyport/watch_bitcoin"
+ELECTRUM_BIN="/usr/local/bin/electrum"
+ELECTRUM_DATA="/home/user/.electrum"
+LOG_FILE="/tmp/logs/submit_btc.log"
+
+# --- Debug Mode ---
+DEBUG=true
+
+# Counters
+S_COUNT=0
+F_COUNT=0
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+echo "Submitting signed Bitcoin Transactions via Electrum"
+
+# 1. Find and sort all signed JSON transactions by timestamp
+TX_LIST=$(find "$BASE_DIR" -type f -name "signed_tx_*.json" | sort -t '_' -k3 -n)
+
+if [ -z "$TX_LIST" ]; then
+    echo "SUCCESS: No Bitcoin transactions to process"
+    exit 0
+fi
+
+for TX_PATH in $TX_LIST; do
+    DIR=$(dirname "$TX_PATH")
+    SIGNED_FILE=$(basename "$TX_PATH")
+    # Derived filename for cleanup: signed_tx_123.json -> unsigned_tx_123.psbt
+    UNSIGNED_FILE=$(echo "$SIGNED_FILE" | sed 's/signed_tx_/unsigned_tx_/' | sed 's/.json/.psbt/')
+    ADDR_ID=$(basename "$DIR")
+
+    if [ "$DEBUG" = true ]; then
+        echo "------------------------------------------------"
+        echo "Processing: $SIGNED_FILE ($ADDR_ID)"
+    fi
+
+    # 2. Extract the 'hex' string from the JSON
+    # Using python3 since your system uses it in the ETH script
+    RAW_HEX=$(python3 -c "import json; print(json.load(open('$TX_PATH'))['hex'])" 2>/dev/null)
+
+    if [ -z "$RAW_HEX" ]; then
+        echo "[FAILED] $SIGNED_FILE (JSON Parse Error)"
+        log_msg "ERROR: Could not parse hex from $SIGNED_FILE"
+        ((F_COUNT++))
+        continue
+    fi
+
+    # --- Retry Logic ---
+    ATTEMPT=1
+    MAX_ATTEMPTS=3
+    RETRY_DELAY=15
+    SUCCESS_FLAG=false
+
+    while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+        if [ "$DEBUG" = true ] && [ $ATTEMPT -gt 1 ]; then
+            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
+        fi
+
+        # 3. Broadcast via Electrum
+        RESPONSE=$("$ELECTRUM_BIN" broadcast "$RAW_HEX" 2>&1)
+
+        if [ "$DEBUG" = true ]; then
+            echo "Electrum Response: $RESPONSE"
+        fi
+
+        # 4. Check for Success
+        # Electrum returns the TXID (64 chars) on success
+        if [[ "$RESPONSE" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            TXID=$RESPONSE
+            echo "[OK] $SIGNED_FILE | TXID: $TXID"
+            log_msg "SUCCESS: $SIGNED_FILE | TXID: $TXID"
+            ((S_COUNT++))
+            
+            # Cleanup: Remove both signed JSON and the original unsigned PSBT
+            rm -f "$TX_PATH"
+            [ -f "$DIR/$UNSIGNED_FILE" ] && rm -f "$DIR/$UNSIGNED_FILE"
+            
+            SUCCESS_FLAG=true
+            break 
+        else
+            # Extract error (strip common Electrum noise)
+            ERR_MSG=$(echo "$RESPONSE" | tr '\n' ' ')
+            echo "[FAILED ATTEMPT $ATTEMPT] $SIGNED_FILE ($ERR_MSG)"
+            
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+                sleep $RETRY_DELAY
+                ((ATTEMPT++))
+            else
+                echo "[FINAL FAILURE] $SIGNED_FILE"
+                log_msg "FAILED: $SIGNED_FILE | Error: $ERR_MSG"
+                ((F_COUNT++))
+                break
+            fi
+        fi
+    done
+
+    sleep 1
+done
+
+echo "------------------------------------------------"
+if [ "$F_COUNT" -eq 0 ]; then
+    echo "SUMMARY_SUCCESS: $S_COUNT processed"
+else
+    echo "SUMMARY_FAILURE: $S_COUNT ok, $F_COUNT failed"
+fi

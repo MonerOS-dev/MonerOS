@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# make sure writing is complete
+sync
+
+# Close the Sallyport (VeraCrypt)
+sudo veracrypt -d 2>/dev/null
+    
+# Unmount the external physical drive
+sudo umount /mnt/external 2>/dev/null
+
+# Shutdown
+sudo shutdown -h now

@@ -1,0 +1,138 @@
+#!/bin/bash
+
+CW_VERSION=$(cat "/usr/local/bin/cwversion" | tr -d '\n' | xargs)
+
+# Ensure we can find cryptsetup/mount/etc
+export PATH=$PATH:/usr/sbin:/sbin
+
+# --- LOGGING SETUP ---
+LOG_FILE="/tmp/logs/cwos_unlock.log"
+sudo mkdir -p /tmp/logs
+sudo chown 1000:1000 /tmp/logs
+
+# Stop kernel messages from interrupting the UI
+sudo dmesg -n 3
+
+echo "--- ColdWalletOS Unlock Started: $(date) ---" > "$LOG_FILE"
+
+# Trap SIGINT, SIGTERM, and SIGTSTP
+trap '' SIGINT SIGTERM SIGTSTP
+
+# UI Styling
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+MOUNT_POINT="/mnt/vault"
+MAPPER_NAME="cwos_unlocked"
+FINAL_MOUNT="/mnt/sallyport"
+EXT_MNT="/mnt/external"
+TARGET_LABEL="HWOS_SALLY"
+CONTAINER_PATH="$EXT_MNT/sallyport.bin"
+
+# --- 1. IDENTIFY INTERNAL VAULT ---
+LIVE_DEV=$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null || findmnt -n -o SOURCE /)
+PARENT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n 1)
+
+if [[ "$PARENT_DISK" == nvme* || "$PARENT_DISK" == mmcblk* ]]; then
+    TARGET="/dev/${PARENT_DISK}p3"
+else
+    TARGET="/dev/${PARENT_DISK}3"
+fi
+
+# --- 2. UNLOCK & MOUNT INTERNAL VAULT ---
+if [ -b "$TARGET" ] && sudo cryptsetup isLuks "$TARGET" 2>/dev/null; then
+    if ! mountpoint -q "$MOUNT_POINT"; then
+        while true; do
+            VAULT_PASS=$(whiptail --title " $CW_VERSION " --fb --nocancel --passwordbox \
+                "\nEnter Vault Password:" 11 50 3>&1 1>&2 2>&3)
+            
+            if printf "%s" "$VAULT_PASS" | sudo cryptsetup open "$TARGET" "$MAPPER_NAME" -d - >> "$LOG_FILE" 2>&1; then
+                sudo mkdir -p "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
+                sudo mount "/dev/mapper/$MAPPER_NAME" "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
+                break
+            else
+                whiptail --title " Error " --msgbox "Incorrect password." 8 40
+            fi
+        done
+    fi
+else 
+    # Not encrypted? Go to setup.
+    exec /usr/local/bin/os/setup_menu
+fi
+
+# Retrieve saved password for VeraCrypt
+SAVED_PASS=$(cat "$MOUNT_POINT/config/password.cfg" 2>/dev/null)
+
+# --- 3. HARDWARE SEARCH ---
+if ! mountpoint -q "$FINAL_MOUNT"; then
+    sudo umount "$EXT_MNT" 2>/dev/null >> "$LOG_FILE" 2>&1
+    sudo mkdir -p "$EXT_MNT"
+    
+    # Attempt to find the hardware label
+    FOUND_DEV=$(sudo findfs LABEL="$TARGET_LABEL" 2>/dev/null)
+    
+    if [ -n "$FOUND_DEV" ] && sudo mount "$FOUND_DEV" "$EXT_MNT" >> "$LOG_FILE" 2>&1; then
+        if [ ! -f "$CONTAINER_PATH" ]; then
+            echo "FAILURE: $CONTAINER_PATH not found on $TARGET_LABEL" >> "$LOG_FILE"
+            exec /usr/local/bin/os/setup_menu
+        fi
+    else
+        # Label not found or mount failed
+        echo "FAILURE: $TARGET_LABEL not found or mount failed" >> "$LOG_FILE"
+        exec /usr/local/bin/os/setup_menu
+    fi
+fi
+
+# --- 4. MOUNT SALLYPORT (VERACRYPT) ---
+if ! mountpoint -q "$FINAL_MOUNT"; then
+    (
+        echo 50
+        sudo mkdir -p "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+        if printf '%s' "$SAVED_PASS" | sudo veracrypt --text --non-interactive --stdin \
+            --mount "$CONTAINER_PATH" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1; then
+            echo 100; sleep 1
+        else
+            echo "FAILED: VeraCrypt mount failed." >> "$LOG_FILE"
+            exit 1
+        fi
+    ) | whiptail --title " Opening Sallyport " --gauge "\nDecrypting and mounting sallyport..." 8 50 0
+fi
+
+# --- FINAL VERIFICATION ---
+if mountpoint -q "$FINAL_MOUNT"; then
+    # LAUNCH BACKGROUND REFRESH HERE
+    # The '&' sends it to background, and 'disown' ensures it keeps 
+    # running even after the unlock script exits.
+    /usr/local/bin/os/refresh_monero > /dev/null 2>&1 & disown
+    
+    exec /usr/local/bin/os/main_menu
+else
+    # Decryption failed or file missing? Go to setup.
+    exec /usr/local/bin/os/setup_menu
+fi

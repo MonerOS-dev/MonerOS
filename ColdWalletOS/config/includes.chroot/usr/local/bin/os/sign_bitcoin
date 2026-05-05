@@ -1,0 +1,134 @@
+#!/bin/bash
+
+# ---------------------------------------------------------
+#  UI THEME (Stealth)
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+# Configuration
+WATCH_DIR="/mnt/sallyport/watch_bitcoin"
+BASE_DIR="/mnt/vault/bitcoin"
+PASS_FILE="/mnt/vault/config/password.cfg"
+LOG_FILE="/tmp/logs/sign_btc.log"
+BTC_CLI="bitcoin-cli -datadir=$BASE_DIR"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# 1. Load Password
+PASSWORD=""
+[ -f "$PASS_FILE" ] && PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+
+# 2. Check bitcoind
+if ! pgrep -f bitcoind > /dev/null; then
+    log_msg "Starting bitcoind..."
+    bitcoind -datadir="$BASE_DIR" -daemon -connect=0 -listen=0 -dnsseed=0 >/dev/null 2>&1
+    for i in {1..20}; do [ -f "$BASE_DIR/.cookie" ] && break; sleep 1; done
+fi
+
+# 3. Find PSBTs
+UNSIGNED_LIST=$(find "$WATCH_DIR" -type f -name "unsigned_tx_*.psbt")
+if [ -z "$UNSIGNED_LIST" ]; then
+    log_msg "No unsigned BTC transactions found."
+    exit 0
+fi
+
+TOTAL_FILES=$(echo "$UNSIGNED_LIST" | wc -l)
+CURRENT_COUNT=0
+
+{
+    for TX_PATH in $UNSIGNED_LIST; do
+        BTC_ADDRESS=$(basename "$(dirname "$TX_PATH")")
+        UNSIGNED_FILE=$(basename "$TX_PATH")
+        ID_PART=$(echo "$UNSIGNED_FILE" | sed 's/unsigned_tx_//' | sed 's/.psbt//')
+        OUTDIR="$(dirname "$TX_PATH")"
+        SIGNED_TX_FINAL="$OUTDIR/signed_tx_$ID_PART.json"
+
+        # PROGRESS UPDATE
+        echo "XXX"
+        echo $(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
+        echo ""
+        echo "XXX"
+
+        # Load Wallet - Redirection to /dev/null is CRITICAL to keep whiptail happy
+        $BTC_CLI loadwallet "$BTC_ADDRESS" >/dev/null 2>&1
+
+        # Check Encryption & Unlock
+        IS_LOCKED=$($BTC_CLI -rpcwallet="$BTC_ADDRESS" getwalletinfo 2>/dev/null | grep -c "unlocked_until")
+        if [ "$IS_LOCKED" -gt 0 ] && [ -n "$PASSWORD" ]; then
+            $BTC_CLI -rpcwallet="$BTC_ADDRESS" walletpassphrase "$PASSWORD" 60 >/dev/null 2>&1
+        fi
+
+        # Sign PSBT
+        PSBT_BASE64=$(tr -d '\n\r ' < "$TX_PATH")
+        RAW_OUT=$($BTC_CLI -rpcwallet="$BTC_ADDRESS" walletprocesspsbt "$PSBT_BASE64" 2>> "$LOG_FILE")
+        
+        # Manual parsing for no-jq environments
+        IS_COMPLETE=$(echo "$RAW_OUT" | grep '"complete":' | sed 's/.*: //;s/[, ]//g')
+        SIGNED_PSBT=$(echo "$RAW_OUT" | grep '"psbt":' | sed 's/.*"psbt": "\(.*\)".*/\1/')
+
+        if [ "$IS_COMPLETE" == "true" ]; then
+            FINAL_OUT=$($BTC_CLI -rpcwallet="$BTC_ADDRESS" finalizepsbt "$SIGNED_PSBT" 2>> "$LOG_FILE")
+            FINAL_HEX=$(echo "$FINAL_OUT" | grep '"hex":' | sed 's/.*"hex": "\(.*\)".*/\1/')
+            TXID=$($BTC_CLI decoderawtransaction "$FINAL_HEX" | grep '"txid":' | head -n 1 | sed 's/.*"txid": "\(.*\)".*/\1/')
+            
+            cat <<EOF > "$SIGNED_TX_FINAL"
+{
+  "hex": "$FINAL_HEX",
+  "address": "$BTC_ADDRESS",
+  "complete": true,
+  "txid": "$TXID"
+}
+EOF
+            rm -f "$TX_PATH"
+            log_msg "SUCCESS: $BTC_ADDRESS"
+        else
+            log_msg "ERROR: Failed to sign $BTC_ADDRESS"
+        fi
+
+        $BTC_CLI unloadwallet "$BTC_ADDRESS" >/dev/null 2>&1
+        CURRENT_COUNT=$((CURRENT_COUNT + 1))
+    done
+
+    # FINAL BAR PUSH
+    echo "XXX"
+    echo 100
+    echo "Bitcoin Signing complete!"
+    echo "XXX"
+    sleep 1
+
+} | whiptail --title " Signing Bitcoin Transactions " --gauge "Initializing..." 6 50 0
+
+log_msg "--- BTC Signing Session Complete ---"
+# Return to menu exactly like the ETH script
+# /usr/local/bin/os/main_menu

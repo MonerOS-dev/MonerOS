@@ -1,0 +1,121 @@
+#!/bin/bash
+
+# --- Configuration ---
+BASE_DIR="/mnt/sallyport/watch_ethereum"
+RPC_URL="https://eth.llamarpc.com"
+LOG_FILE="/tmp/logs/submit_eth.log"
+
+# --- Debug Mode ---
+# If true, shows full CURL responses and internal parsing
+DEBUG=true
+
+# Counters
+S_COUNT=0
+F_COUNT=0
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+echo "Submitting signed Ethereum Transactions"
+
+# 1. Find and sort all signed transactions
+# Sorting by the timestamp part of the filename (e.g., _1774538255_)
+TX_LIST=$(find "$BASE_DIR" -type f -name "signed_tx_*.json" | sort -t '_' -k3 -n)
+
+if [ -z "$TX_LIST" ]; then
+    echo "SUCCESS: No Ethereum transactions to process"
+    exit 0
+fi
+
+for TX_PATH in $TX_LIST; do
+    DIR=$(dirname "$TX_PATH")
+    SIGNED_FILE=$(basename "$TX_PATH")
+    # Derived from signed_tx_123_main.json -> unsigned_tx_123_main.json
+    UNSIGNED_FILE=$(echo "$SIGNED_FILE" | sed 's/signed_tx_/unsigned_tx_/')
+    ADDR_ID=$(basename "$DIR")
+
+    if [ "$DEBUG" = true ]; then
+        echo "------------------------------------------------"
+        echo "Processing: $SIGNED_FILE ($ADDR_ID)"
+    fi
+
+    # 2. Extract the 'raw' hex string from the JSON
+    RAW_HEX=$(python3 -c "import json; print(json.load(open('$TX_PATH'))['raw'])" 2>/dev/null)
+
+    if [ -z "$RAW_HEX" ]; then
+        echo "[FAILED] $SIGNED_FILE (JSON Parse Error)"
+        ((F_COUNT++))
+        continue
+    fi
+
+    # --- Retry Logic Variables ---
+    ATTEMPT=1
+    MAX_ATTEMPTS=5
+    RETRY_DELAY=20
+    SUCCESS_FLAG=false
+
+    while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+        if [ "$DEBUG" = true ] && [ $ATTEMPT -gt 1 ]; then
+            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
+        fi
+
+        # 3. Broadcast via JSON-RPC
+        # In Debug mode, we output the raw response to stdout
+        RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_sendRawTransaction\",\"params\":[\"$RAW_HEX\"],\"id\":1}" \
+            "$RPC_URL")
+
+        if [ "$DEBUG" = true ]; then
+            echo "RPC Response: $RESPONSE"
+        fi
+
+        # 4. Check for Success (Result should be a 0x transaction hash)
+        TX_HASH=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('result', ''))" 2>/dev/null)
+
+        if [[ "$TX_HASH" == 0x* ]]; then
+            echo "[OK] $SIGNED_FILE ($ADDR_ID)"
+            log_msg "SUCCESS: $SIGNED_FILE | Hash: $TX_HASH"
+            ((S_COUNT++))
+            
+            # Cleanup
+            rm -f "$TX_PATH"
+            if [ -f "$DIR/$UNSIGNED_FILE" ]; then
+                rm -f "$DIR/$UNSIGNED_FILE"
+            fi
+            
+            SUCCESS_FLAG=true
+            break # Exit the retry loop on success
+        else
+            # Extract Error Message
+            ERR=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); data_err=data.get('error', {}); print(data_err.get('message', 'Unknown RPC Error') if isinstance(data_err, dict) else data_err)" 2>/dev/null)
+            
+            echo "[FAILED ATTEMPT $ATTEMPT] $SIGNED_FILE ($ERR)"
+            
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+                echo "Waiting $RETRY_DELAY seconds before next attempt..."
+                sleep $RETRY_DELAY
+                ((ATTEMPT++))
+            else
+                # Final failure after all retries
+                echo "[FINAL FAILURE] $SIGNED_FILE ($ERR)"
+                log_msg "FAILED: $SIGNED_FILE | Error: $ERR after $MAX_ATTEMPTS attempts"
+                ((F_COUNT++))
+                break
+            fi
+        fi
+    done
+
+    # Small delay between different files to prevent immediate rate-limit hit for next TX
+    sleep 2
+done
+
+echo "------------------------------------------------"
+if [ "$F_COUNT" -eq 0 ]; then
+    echo "SUMMARY_SUCCESS: $S_COUNT processed"
+else
+    echo "SUMMARY_FAILURE: $S_COUNT ok, $F_COUNT failed"
+fi

@@ -1,0 +1,134 @@
+#!/bin/bash
+
+# --- VARIABLES ---
+LOG_FILE="/tmp/logs/cwos_import.log"
+TARGET_LABEL="HWOS_SALLY"
+EXT_MNT="/mnt/external"
+BACKUP_NAME="cwosvault.bin"
+SALLY_BIN="sallyport.bin"
+MAPPER_NAME="cwos_unlocked"
+MOUNT_POINT="/mnt/vault"
+FINAL_MOUNT="/mnt/sallyport"
+TOTAL_SIZE=1073741824 
+
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# Identify Internal Partition 3
+LIVE_DEV=$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null)
+PARENT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n 1)
+TARGET="/dev/${PARENT_DISK}3"
+[[ "$PARENT_DISK" == nvme* ]] && TARGET="/dev/${PARENT_DISK}p3"
+
+# --- 1. PREP & MOUNT EXTERNAL ---
+while ! mountpoint -q "$EXT_MNT"; do
+    DEVICE=$(sudo findfs LABEL="$TARGET_LABEL" 2>/dev/null)
+    if [ -n "$DEVICE" ]; then
+        sudo mkdir -p "$EXT_MNT"
+        sudo mount "$DEVICE" "$EXT_MNT" >/dev/null 2>&1
+    fi
+    
+    if ! mountpoint -q "$EXT_MNT"; then
+        if ! whiptail --title " Drive Not Found " --yesno "Drive '$TARGET_LABEL' not detected.\n\nPlease insert it and select Yes to retry." 10 50; then
+            exec /usr/local/bin/os/main_menu
+            exit 1
+        fi
+    fi
+done
+
+# Ensure the user understands that $TARGET will be wiped.
+# --defaultno makes "No/Cancel" the pre-selected option for safety.
+if ! whiptail --title " WARNING: OVERWRITE DATA " --fb --defaultno --yesno \
+"\nYOU ARE ABOUT TO IMPORT A VAULT.\n\n\
+This will COMPLETELY OVERWRITE the existing vault \n\n
+All internal data will be permanently lost.\n\n\
+Are you sure you want to proceed?" 15 50; then
+    exec /usr/local/bin/os/main_menu
+    exit 0
+fi
+
+# Clear internal locks before DD
+sudo umount "$TARGET" >/dev/null 2>&1
+sudo cryptsetup close "$MAPPER_NAME" >/dev/null 2>&1
+
+# --- 2. EXECUTE RESTORE (DD) ---
+if [ -f "$EXT_MNT/$BACKUP_NAME" ]; then
+    {
+        sudo stdbuf -i0 -o0 -e0 dd if="$EXT_MNT/$BACKUP_NAME" of="$TARGET" bs=4M status=progress 2>&1 | \
+        stdbuf -i0 -o0 -e0 awk -v total=$TOTAL_SIZE '{
+            if ($1 ~ /^[0-9]+$/) { print int(($1 / total) * 100) }
+        }' | whiptail --title " Cold Wallet Import " --gauge "\nRestoring encrypted vault from external storage..." 8 50 0
+        sudo sync
+    } 2>>"$LOG_FILE"
+else
+    whiptail --title " Error " --msgbox "Backup file $BACKUP_NAME not found on external drive." 10 50
+    exec /usr/local/bin/os/main_menu
+    exit 1
+fi
+
+# --- 3. VERIFY & AUTO-UNLOCK ---
+while true; do
+    VAULT_PASS=$(whiptail --title " Verify New Vault " --fb --nocancel --passwordbox \
+        "\nEnter Password for the imported Vault:" 11 50 3>&1 1>&2 2>&3)
+
+    # Attempt to open the newly written partition
+    if printf "%s" "$VAULT_PASS" | sudo cryptsetup open "$TARGET" "$MAPPER_NAME" -d -; then
+        sudo mkdir -p "$MOUNT_POINT"
+        sudo mount "/dev/mapper/$MAPPER_NAME" "$MOUNT_POINT"
+        
+        # Pull saved pass for sallyport (if it exists)
+        SAVED_PASS=$(cat "$MOUNT_POINT/config/password.cfg" 2>/dev/null)
+        
+        # Check for Sallyport file on the same external drive
+        if [ -f "$EXT_MNT/$SALLY_BIN" ]; then
+            sudo mkdir -p "$FINAL_MOUNT"
+            printf '%s' "$SAVED_PASS" | sudo veracrypt --text --non-interactive --stdin \
+                --mount "$EXT_MNT/$SALLY_BIN" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+        fi
+        
+        whiptail --title " Success " --msgbox "Vault restored and Sallyport mapped." 8 45
+        break
+    else
+        if ! whiptail --title " Error " --fb --yesno "Decryption failed. Header might be corrupt or password wrong. Try again?" 10 50; then
+            exec /usr/local/bin/os/main_menu
+            exit 1
+        fi
+    fi
+done
+
+# --- 4. SECURITY CLEANUP ---
+if whiptail --title " Security Cleanup " --fb --yesno \
+    "\nImport successful. Delete the source backup file ($BACKUP_NAME) from the external drive?" 12 50; then
+    sudo rm -f "$EXT_MNT/$BACKUP_NAME"
+    sudo sync
+    whiptail --title " Cleaned " --msgbox "Source backup file deleted." 8 40
+fi
+
+exec /usr/local/bin/os/main_menu

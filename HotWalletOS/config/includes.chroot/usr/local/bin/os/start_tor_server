@@ -1,0 +1,77 @@
+#!/bin/bash
+#################################### Tor Server #############################################
+
+EXT_DIR="/mnt/sallyport/tor/hidden_service"
+DEF_DIR="/var/lib/tor/hidden_service"
+
+# 1. Clean up and set base permissions
+sudo systemctl stop tor
+sudo rm -rf "$DEF_DIR"
+sudo mkdir -p "$DEF_DIR"
+sudo mkdir -p "$EXT_DIR"
+
+# 2. Load persistent keys if they exist
+if [ -f "$EXT_DIR/hs_ed25519_secret_key" ]; then
+    echo "Loading keys from persistence..."
+    sudo cp "$EXT_DIR"/hostname "$DEF_DIR"/ 2>/dev/null
+    sudo cp "$EXT_DIR"/hs_ed25519_secret_key "$DEF_DIR"/
+    sudo cp "$EXT_DIR"/hs_ed25519_public_key "$DEF_DIR"/
+fi
+
+# 3. SET STRICT PERMISSIONS (Crucial for Tor to start)
+sudo chown -R debian-tor:debian-tor /var/lib/tor
+sudo chmod 700 "$DEF_DIR"
+sudo chmod 600 "$DEF_DIR"/* 2>/dev/null
+
+# 4. Start Tor
+sudo systemctl start tor
+
+# 5. Wait for hostname with a 30-second timeout (Prevents infinite hang)
+MAX_RETRIES=30
+COUNT=0
+echo -n "Waiting for Tor to generate hostname..."
+while [ ! -f "$DEF_DIR/hostname" ] && [ $COUNT -lt $MAX_RETRIES ]; do
+    sleep 1
+    ((COUNT++))
+    echo -n "."
+done
+echo ""
+
+if [ ! -f "$DEF_DIR/hostname" ]; then
+    echo "FAILURE: Tor failed to generate a hostname. Check 'journalctl -ex -u tor'"
+    exit 1
+fi
+
+# 6. Get the address and Sync BACK to external drive
+ONION=$(sudo cat "$DEF_DIR/hostname")
+echo "Onion Address: $ONION"
+
+sudo cp "$DEF_DIR"/hostname "$EXT_DIR"/
+sudo cp "$DEF_DIR"/hs_ed25519_secret_key "$EXT_DIR"/
+sudo cp "$DEF_DIR"/hs_ed25519_public_key "$EXT_DIR"/
+
+# 7. Generate PNG QR code
+# Version 3 is fine for V3 onions, but -v 3 might be tight. 
+# Removing -v lets qrencode pick the smallest viable size automatically.
+qrencode -s 12 -o /var/www/html/onion_address.png "$ONION"
+
+echo -n "$ONION" | sudo tee /var/www/html/onion_address.txt > /dev/null
+sudo chown www-data:www-data /var/www/html/onion_address.txt
+sudo chmod 644 /var/www/html/onion_address.txt
+
+echo "Success: QR code generated at /var/www/html/onion_address.png"
+
+
+# remove the default webpage for apache and setup (No need for a hook in the build in our case)
+sudo rm -f /var/www/html/index.html
+
+# Enable PHP module for Apache
+a2enmod php* || true
+
+# Ensure Apache loads PHP before HTML
+if [ -f /etc/apache2/mods-enabled/dir.conf ]; then
+    sed -i 's/index.html/index.php index.html/' /etc/apache2/mods-enabled/dir.conf
+fi
+
+# Start or restart Apache manually
+systemctl restart apache2 || true

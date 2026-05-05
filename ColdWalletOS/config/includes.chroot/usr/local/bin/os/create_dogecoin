@@ -1,0 +1,179 @@
+#!/bin/bash
+
+# ---------------------------------------------------------
+#  UI THEME (Stealth)
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+BASE_DIR="/mnt/vault/dogecoin"
+CONF_FILE="$BASE_DIR/dogecoin.conf"
+TEMP_NAME="doge_temp"
+
+mkdir -p "$BASE_DIR" >/dev/null 2>&1
+mkdir -p "$BASE_DIR/wallets" >/dev/null 2>&1
+
+ADDR_FILE="/tmp/doge_addr.$$"
+
+# ---------------------------------------------------------
+#  SHOW GAUGE IMMEDIATELY — ALL WORK HAPPENS BEHIND IT
+# ---------------------------------------------------------
+(
+echo 5
+sleep 0.1
+
+# Kill any running dogecoind
+pkill -9 -f dogecoind 2>/dev/null
+sleep 1
+
+echo 20
+sleep 0.1
+
+# Create config
+cat > "$CONF_FILE" <<EOF
+server=1
+disablewallet=0
+
+onlynet=ipv4
+
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
+
+connect=0
+listen=0
+dnsseed=0
+EOF
+
+echo 35
+sleep 0.1
+
+# Start dogecoind
+dogecoind -datadir="$BASE_DIR" -conf="$CONF_FILE" -daemon >/dev/null 2>&1
+
+echo 50
+sleep 0.1
+
+# Wait for RPC cookie
+for i in {1..20}; do
+    if [ -f "$BASE_DIR/.cookie" ]; then
+        break
+    fi
+    sleep 1
+done
+
+echo 65
+sleep 0.1
+
+# Wait for wallet subsystem (fixes error -28)
+for i in {1..30}; do
+    dogecoin-cli -datadir="$BASE_DIR" -conf="$CONF_FILE" getwalletinfo >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        break
+    fi
+    sleep 1
+done
+
+echo 75
+sleep 0.1
+
+# Create wallet
+dogecoin-cli -datadir="$BASE_DIR" -conf="$CONF_FILE" createwallet "$TEMP_NAME" >/dev/null 2>&1
+
+# Get address
+ADDR=$(dogecoin-cli -datadir="$BASE_DIR" -conf="$CONF_FILE" getnewaddress 2>/dev/null)
+
+# Pass address back to parent
+echo "$ADDR" > "$ADDR_FILE"
+
+echo 85
+sleep 0.1
+
+# Shut down dogecoind
+dogecoin-cli -datadir="$BASE_DIR" -conf="$CONF_FILE" stop >/dev/null 2>&1
+sleep 3
+pkill -9 -f dogecoind 2>/dev/null
+
+echo 90
+sleep 0.1
+
+# Move wallet to folder named after address
+if [ -d "$BASE_DIR/wallets/$TEMP_NAME" ]; then
+    mv "$BASE_DIR/wallets/$TEMP_NAME" "$BASE_DIR/$ADDR"
+
+elif [ -f "$BASE_DIR/wallet.dat" ]; then
+    mkdir -p "$BASE_DIR/$ADDR"
+    mv "$BASE_DIR/wallet.dat" "$BASE_DIR/$ADDR/wallet.dat"
+
+elif [ -d "$BASE_DIR/$TEMP_NAME" ]; then
+    mv "$BASE_DIR/$TEMP_NAME" "$BASE_DIR/$ADDR"
+fi
+sync
+
+echo 95
+sleep 0.1
+
+# Cleanup
+rm -rf "$BASE_DIR/blocks" "$BASE_DIR/chainstate" "$BASE_DIR/backups" "$BASE_DIR/database" "$BASE_DIR/wallets"
+rm -f "$BASE_DIR/.cookie" "$BASE_DIR/peers.dat" "$BASE_DIR/mempool.dat" "$BASE_DIR/fee_estimates.dat" "$BASE_DIR/banlist.dat" "$BASE_DIR/db.log" "$BASE_DIR/debug.log" "$CONF_FILE"
+sync
+
+echo 100
+sleep 0.1
+) |
+whiptail --gauge "Creating Dogecoin wallet...\nPlease wait." 8 50 0
+
+# ---------------------------------------------------------
+#  READ ADDRESS BACK FROM TEMP FILE
+# ---------------------------------------------------------
+ADDR=$(cat "$ADDR_FILE" 2>/dev/null)
+rm -f "$ADDR_FILE"
+
+# ---------------------------------------------------------
+#  CREATE WATCH-ONLY WALLET VERSION
+# ---------------------------------------------------------
+WATCH_BASE="/mnt/sallyport/watch_dogecoin"
+WATCH_PATH="$WATCH_BASE/$ADDR"
+
+mkdir -p "$WATCH_PATH" >/dev/null 2>&1
+
+{
+    echo "ADDRESS: $ADDR"
+    echo "TYPE: watch-only"
+} > "$WATCH_PATH/watch_info.txt"
+sync
+
+# ---------------------------------------------------------
+#  FINAL POPUP
+# ---------------------------------------------------------
+whiptail --title "Dogecoin Wallet Created" \
+         --msgbox "\nYour Dogecoin wallet has been generated.\n\nAddress:\n$ADDR" \
+         0 0
+
+/usr/local/bin/os/main_menu

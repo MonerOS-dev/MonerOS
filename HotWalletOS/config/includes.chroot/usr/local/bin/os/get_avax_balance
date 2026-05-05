@@ -1,0 +1,84 @@
+#!/bin/bash
+export PATH=/usr/bin:/bin:/usr/local/bin
+
+# --- Configuration ---
+BASE_DIR="/mnt/sallyport/watch_avalanche"
+
+echo "Getting AVAX Balance"
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet does not exist. Exiting."
+    exit 0
+fi
+
+BACKEND_DIR="/var/www/backend/Avalanche"
+RPC_URL="https://api.avax.network/ext/bc/C/rpc"
+
+# Retry settings
+MAX_RETRIES=3
+RETRY_DELAY=2
+
+mkdir -p "$BACKEND_DIR"
+
+fetch_balance_with_retry() {
+    local addr=$1
+    local attempt=1
+    local result=""
+
+    while [ $attempt -le $MAX_RETRIES ]; do
+        echo "  Attempt $attempt/$MAX_RETRIES..." >&2
+
+        # Capture output and filter for the numeric line (ignoring Promise noise)
+        result=$(ethers --rpc "$RPC_URL" eval "(async () => {
+            const bal = await provider.getBalance('$addr');
+            console.log(utils.formatEther(bal));
+        })()" 2>/dev/null | grep -E '^[0-9.]+$' | head -n 1)
+
+        if [ -n "$result" ]; then
+            echo "$result"
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        sleep $RETRY_DELAY
+    done
+
+    echo ""
+    return 1
+}
+
+check_balance() {
+    local dir=$1
+    INFO_FILE="${dir}watch_info.txt"
+
+    if [ -f "$INFO_FILE" ]; then
+        # Use flexible extraction to catch the address regardless of labels
+        ADDR=$(grep "ADDRESS" "$INFO_FILE" | grep -oE '0x[a-fA-F0-9]{40}' | head -n 1)
+
+        if [ -n "$ADDR" ]; then
+            echo "Checking balance for: $ADDR"
+            NEW_BAL=$(fetch_balance_with_retry "$ADDR")
+
+            # --- THE CHANGE IS HERE ---
+            # Instead of checking if NEW_BAL > 0, we only check if NEW_BAL is NOT empty.
+            # If the RPC returned "0.0", it is not empty, so it will update.
+            if [ -n "$NEW_BAL" ]; then
+                printf "%s" "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_balance.txt" > /dev/null
+                printf "%s" "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_unlocked.txt" > /dev/null
+                echo "SUCCESS: Updated $ADDR to $NEW_BAL AVAX"
+            else
+                echo "SKIPPED: RPC failed. Preserving old data."
+            fi
+        fi
+    fi
+}
+
+# --- MAIN LOOP ---
+for dir in "$BASE_DIR"/*/; do
+    [ -d "$dir" ] || continue
+    check_balance "$dir"
+done
+
+echo "--- Avalanche balance refresh cycle complete ---"
+
+# Clean up leftover Node.js processes
+sudo pkill -9 node || true

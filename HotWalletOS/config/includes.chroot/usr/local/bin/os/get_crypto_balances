@@ -1,0 +1,8 @@
+#!/bin/bash
+
+sudo bash /usr/local/bin/os/get_monero_balance
+sudo bash /usr/local/bin/os/get_ethereum_balance
+sudo bash /usr/local/bin/os/get_avax_balance
+sudo bash /usr/local/bin/os/get_bitcoin_balance
+sudo bash /usr/local/bin/os/get_litecoin_balance
+sudo bash /usr/local/bin/os/get_dogecoin_balance

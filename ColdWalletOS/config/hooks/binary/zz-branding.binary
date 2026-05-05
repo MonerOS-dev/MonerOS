@@ -1,0 +1,4 @@
+#!/bin/bash
+# Force Branding on the boot loader files
+find binary/ -name "*.cfg" -type f | xargs sed -i 's/Live system (amd64)/ColdWalletOS/g' || true
+find binary/ -name "*.cfg" -type f | xargs sed -i 's/menu label ^Live/menu label ^Cold/g' || true

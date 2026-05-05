@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# 16 50 6 is max menu size
+
+CW_VERSION=$(cat "/usr/local/bin/cwversion" | tr -d '\n' | xargs)
+
+# Ensure we can find cryptsetup/mount/etc ---
+export PATH=$PATH:/usr/sbin:/sbin
+
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+while true; do
+    # Arrow keys only - Tag and Description are merged
+    OPTION=$(whiptail --title " $CW_VERSION " \
+                      --fb \
+                      --nocancel \
+                      --ok-button "Select" \
+                      --menu "\nSetup Menu" \
+                      16 50 4 \
+                      " Create Vault" "" \
+                      " Import Vault" "" \
+                      " Safe Shutdown" "" \
+                      " Terminal" "" \
+                      3>&1 1>&2 2>&3)
+
+    case "$OPTION" in
+        " Create Vault") /usr/local/bin/os/setup ;;
+        " Import Vault") /usr/local/bin/os/import ;;
+        " Safe Shutdown")
+            if whiptail --title " CONFIRM SHUTDOWN " --fb --defaultno --yesno \
+            "\nAre you sure you want to shut down?\n\nThis will lock all vaults and power off." 10 50; then
+                /usr/local/bin/os/safe_shutdown
+            else
+                continue
+            fi
+            ;;
+        " Terminal")
+            clear
+            /bin/bash
+            ;;
+    esac
+done

@@ -1,0 +1,6 @@
+#!/bin/sh
+
+set -e
+
+# Enable the zramswap service
+systemctl enable zramswap.service

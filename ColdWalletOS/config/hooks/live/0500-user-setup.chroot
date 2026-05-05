@@ -1,0 +1,11 @@
+#!/bin/bash
+set -e
+mkdir -p /home/user
+# Set up your custom binaries
+dos2unix /usr/local/bin/cwinit
+find /usr/local/bin/os -type f -exec dos2unix {} +
+chmod 755 /usr/local/bin/os
+# Apply ownership to UID 1000 (the 'user' account)
+chown -R 1000:1000 /home/user
+chown -R 1000:1000 /usr/local/bin/os
+chmod -R +x /usr/local/bin/os

@@ -1,0 +1,12 @@
+exfatprogs
+parted
+dosfstools
+e2fsprogs
+cryptsetup
+libfuse2
+libpcsclite1
+bsdextrautils
+dos2unix
+nodejs
+whiptail
+expect

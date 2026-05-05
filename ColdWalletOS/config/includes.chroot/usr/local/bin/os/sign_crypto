@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Ensure we can find binaries
+export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+msg() {
+    whiptail --title " System Message " --fb --msgbox "\n$1" 10 50
+}
+
+# Sign Monero
+sudo /usr/local/bin/os/sign_monero
+
+# Sign Ethereum
+sudo /usr/local/bin/os/sign_ethers
+
+# Sign Avalanche
+sudo /usr/local/bin/os/sign_avax
+
+# Sign Avalanche
+sudo /usr/local/bin/os/sign_bitcoin
+
+# Sign litecoin
+sudo /usr/local/bin/os/sign_litecoin
+
+# Sign dogecoin
+sudo /usr/local/bin/os/sign_dogecoin
+
+msg "Signing complete. Return to menu."
+exec /usr/local/bin/os/main_menu

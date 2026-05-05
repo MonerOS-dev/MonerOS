@@ -1,0 +1,6 @@
+#!/bin/sh
+# Reset UFW and set strict production policies
+ufw --force reset
+ufw default deny incoming
+ufw default allow outgoing
+ufw --force enable
