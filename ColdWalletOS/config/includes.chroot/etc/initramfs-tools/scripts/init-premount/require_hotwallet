@@ -1,0 +1,12 @@
+#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+# The loop exits only when the drive is detected
+while [ -z "$(blkid -t LABEL='HWOS_SALLY')" ]; do
+    echo "======================================================"
+    echo "                INSERT HotWalletOS                    "
+    echo "======================================================"
+    sleep 5
+done

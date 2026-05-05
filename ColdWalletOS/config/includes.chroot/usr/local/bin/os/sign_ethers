@@ -1,0 +1,181 @@
+#!/bin/bash
+
+# Ensure we can find binaries
+export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# Configuration
+WATCH_DIR="/mnt/sallyport/watch_ethereum"
+VAULT_DIR="/mnt/vault/ethers"
+PASS_FILE="/mnt/vault/config/password.cfg"
+LOG_FILE="/tmp/logs/sign_eth.log"
+ETHERS_PATH="/usr/local/lib/ethers/node_modules/ethers"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+msg() {
+    whiptail --title " System Message " --fb --msgbox "\n$1" 10 50
+}
+
+# 1. Load the Password
+if [ -f "$PASS_FILE" ]; then
+    PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+else
+    log_msg "ERROR: Password file not found."
+    msg "Error: Password file not found."
+    exit 1
+fi
+
+# 2. Find all unsigned transactions
+UNSIGNED_LIST=$(find "$WATCH_DIR" -type f -name "unsigned_tx_*.json")
+
+if [ -z "$UNSIGNED_LIST" ]; then
+    log_msg "No unsigned ETH transactions found."
+    #msg "No unsigned ETH transactions found."
+    exit 0
+fi
+
+TOTAL_FILES=$(echo "$UNSIGNED_LIST" | wc -l)
+CURRENT_COUNT=0
+
+{
+    for TX_PATH in $UNSIGNED_LIST; do
+        ETH_ADDRESS=$(basename "$(dirname "$TX_PATH")")
+        UNSIGNED_FILE=$(basename "$TX_PATH")
+        ID_PART=$(echo "$UNSIGNED_FILE" | sed 's/unsigned_tx_//')
+        
+        OUTDIR="$(dirname "$TX_PATH")"
+        # Path to the keys.txt inside the address subfolder
+        KEY_FILE_PATH="$VAULT_DIR/$ETH_ADDRESS/keys.txt"
+        SIGNED_TX_FINAL="$OUTDIR/signed_tx_$ID_PART"
+
+        log_msg "Processing ETH: $UNSIGNED_FILE for Address: $ETH_ADDRESS"
+
+        echo "XXX"
+        echo $(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
+        echo ""
+        echo "XXX"
+
+        if [ ! -f "$KEY_FILE_PATH" ]; then
+            log_msg "SKIPPING: Key file not found at $KEY_FILE_PATH"
+            CURRENT_COUNT=$((CURRENT_COUNT + 1))
+            continue
+        fi
+
+        # Extract the Private Key hex string from the keys.txt file
+        RAW_KEY=$(grep "PRIVATE_KEY:" "$KEY_FILE_PATH" | awk '{print $2}' | tr -d '\n\r ')
+
+        if [ -z "$RAW_KEY" ]; then
+            log_msg "ERROR: Could not parse PRIVATE_KEY from $KEY_FILE_PATH"
+            CURRENT_COUNT=$((CURRENT_COUNT + 1))
+            continue
+        fi
+
+        # 3. Create a temporary Node.js signing script
+        JS_SIGNER=$(mktemp)
+        cat <<EOF > "$JS_SIGNER"
+const ethers = require("$ETHERS_PATH");
+const fs = require("fs");
+
+async function sign() {
+    try {
+        const rawData = JSON.parse(fs.readFileSync("$TX_PATH", "utf8"));
+        
+        // Construct clean EIP-1559 Transaction Object
+        // type: 2 is mandatory in Ethers v5 when using maxFeePerGas
+        const txData = {
+            to: rawData.to,
+            value: ethers.BigNumber.from(rawData.value || "0"),
+            gasLimit: ethers.BigNumber.from(rawData.gasLimit || "21000"),
+            nonce: Number(rawData.nonce),
+            chainId: Number(rawData.chainId || 1),
+            data: rawData.data || "0x",
+            type: 2 
+        };
+
+        if (rawData.maxFeePerGas) {
+            txData.maxFeePerGas = ethers.BigNumber.from(rawData.maxFeePerGas);
+        }
+        if (rawData.maxPriorityFeePerGas) {
+            txData.maxPriorityFeePerGas = ethers.BigNumber.from(rawData.maxPriorityFeePerGas);
+        }
+
+        const pk = "$RAW_KEY".startsWith("0x") ? "$RAW_KEY" : "0x$RAW_KEY";
+        const wallet = new ethers.Wallet(pk);
+        
+        // Sign the transaction
+        const signedRaw = await wallet.signTransaction(txData);
+        
+        const output = {
+            raw: signedRaw,
+            hash: ethers.utils ? ethers.utils.keccak256(signedRaw) : ethers.keccak256(signedRaw),
+            address: wallet.address
+        };
+        
+        process.stdout.write(JSON.stringify(output, null, 2));
+    } catch (err) {
+        process.stderr.write(err.message);
+        process.exit(1);
+    }
+}
+sign();
+EOF
+
+        # 4. Execute Node and capture output
+        node "$JS_SIGNER" > "$SIGNED_TX_FINAL" 2>> "$LOG_FILE"
+        SIGN_STATUS=$?
+        rm -f "$JS_SIGNER"
+
+        if [ $SIGN_STATUS -eq 0 ] && [ -s "$SIGNED_TX_FINAL" ]; then
+            rm -f "$TX_PATH"
+            log_msg "SUCCESS: Signed $SIGNED_TX_FINAL"
+        else
+            log_msg "ERROR: Failed to sign $UNSIGNED_FILE"
+            [ -f "$SIGNED_TX_FINAL" ] && rm -f "$SIGNED_TX_FINAL"
+        fi
+
+        CURRENT_COUNT=$((CURRENT_COUNT + 1))
+    done
+
+    echo "XXX"
+    echo 100
+    echo "Ethereum Signing complete!"
+    echo "XXX"
+    sleep 1
+
+} | whiptail --title " Signing Ethereum Transactions " --gauge "Initializing..." 6 50 0
+
+log_msg "--- ETH Signing Session Complete ---"
+#msg "ETH Signing complete. Returning to menu."
+#exec /usr/local/bin/os/main_menu

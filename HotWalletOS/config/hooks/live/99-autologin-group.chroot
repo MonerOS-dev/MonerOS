@@ -1,0 +1,4 @@
+#!/bin/sh
+# Add the live user to the autologin group
+groupadd -r autologin || true
+usermod -a -G autologin user

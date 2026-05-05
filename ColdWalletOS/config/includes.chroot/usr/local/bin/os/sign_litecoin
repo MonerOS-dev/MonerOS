@@ -1,0 +1,148 @@
+#!/bin/bash
+
+# --- UI THEME (Stealth) ---
+export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# Configuration
+WATCH_DIR="/mnt/sallyport/watch_litecoin"
+VAULT_DIR="/mnt/vault/litecoin"
+LOG_FILE="/tmp/logs/sign_ltc.log"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# 1. Start an isolated litecoind instance
+TEMP_DATA="/tmp/ltc_sign_data"
+rm -rf "$TEMP_DATA" && mkdir -p "$TEMP_DATA"
+
+log_msg "Starting temporary litecoind..."
+litecoind -datadir="$TEMP_DATA" -daemon -connect=0 -listen=0 -dnsseed=0 >/dev/null 2>&1
+
+# Wait for RPC
+for i in {1..15}; do
+    if litecoin-cli -datadir="$TEMP_DATA" getblockchaininfo >/dev/null 2>&1; then break; fi
+    sleep 1
+done
+
+# 2. Find unsigned transactions
+UNSIGNED_LIST=$(find "$WATCH_DIR" -type f -name "unsigned_ltc_*.json")
+
+if [ -z "$UNSIGNED_LIST" ]; then
+    log_msg "No unsigned LTC transactions found."
+    litecoin-cli -datadir="$TEMP_DATA" stop >/dev/null 2>&1
+    exit 0
+fi
+
+TOTAL_FILES=$(echo "$UNSIGNED_LIST" | wc -l)
+CURRENT_COUNT=0
+
+# --- THE SIGNING LOOP ---
+{
+    # Re-export colors inside the subshell to ensure whiptail picks them up
+    export NEWT_COLORS
+
+    for TX_PATH in $UNSIGNED_LIST; do
+        LTC_ADDRESS=$(basename "$(dirname "$TX_PATH")")
+        UNSIGNED_FILE=$(basename "$TX_PATH")
+        ID_PART=$(echo "$UNSIGNED_FILE" | sed 's/unsigned_ltc_//')
+        OUTDIR="$(dirname "$TX_PATH")"
+        SIGNED_TX_FINAL="$OUTDIR/signed_ltc_$ID_PART"
+
+        SOURCE_WALLET="$VAULT_DIR/$LTC_ADDRESS/wallet.dat"
+
+        echo "XXX"
+        echo $(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
+        echo ""
+        echo "XXX"
+
+        if [ ! -f "$SOURCE_WALLET" ]; then
+            log_msg "ERROR: Wallet not found for $LTC_ADDRESS"
+            continue
+        fi
+
+        # Load Wallet
+        mkdir -p "$TEMP_DATA/wallets/work"
+        cp "$SOURCE_WALLET" "$TEMP_DATA/wallets/work/wallet.dat"
+        litecoin-cli -datadir="$TEMP_DATA" loadwallet "work" >/dev/null 2>&1
+
+        # 3. Parse Manifest
+        PARSED_DATA=$(python3 -c "
+import json
+try:
+    with open('$TX_PATH', 'r') as f:
+        data = json.load(f)
+        ins = [{'txid': i['txid'], 'vout': i['vout']} for i in data['inputs']]
+        outs = {o['address']: round(float(o['value'])/100000000, 8) for o in data['outputs']}
+        scripts = [{'txid': i['txid'], 'vout': i['vout'], 'scriptPubKey': i['script']} for i in data['inputs']]
+        print(json.dumps(ins) + '|' + json.dumps(outs) + '|' + json.dumps(scripts))
+except Exception as e:
+    print('PY_ERR:' + str(e))
+")
+
+        RAW_INPUTS=$(echo "$PARSED_DATA" | cut -d'|' -f1)
+        RAW_OUTPUTS=$(echo "$PARSED_DATA" | cut -d'|' -f2)
+        PREV_SCRIPTS=$(echo "$PARSED_DATA" | cut -d'|' -f3)
+
+        # 4. Sign
+        RAW_HEX=$(litecoin-cli -datadir="$TEMP_DATA" createrawtransaction "$RAW_INPUTS" "$RAW_OUTPUTS")
+        SIGNED_JSON=$(litecoin-cli -datadir="$TEMP_DATA" -rpcwallet="work" signrawtransactionwithwallet "$RAW_HEX" "$PREV_SCRIPTS")
+        
+        IS_COMPLETE=$(echo "$SIGNED_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin).get('complete', False))")
+        SIGNED_HEX=$(echo "$SIGNED_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin).get('hex', ''))")
+
+        if [ "$IS_COMPLETE" == "True" ]; then
+            echo "{ \"hex\": \"$SIGNED_HEX\", \"address\": \"$LTC_ADDRESS\" }" > "$SIGNED_TX_FINAL"
+            rm -f "$TX_PATH"
+            log_msg "SUCCESS: Signed $LTC_ADDRESS"
+        else
+            log_msg "ERROR: Signing failed for $LTC_ADDRESS"
+        fi
+
+        litecoin-cli -datadir="$TEMP_DATA" -rpcwallet="work" unloadwallet >/dev/null 2>&1
+        rm -rf "$TEMP_DATA/wallets/work"
+        CURRENT_COUNT=$((CURRENT_COUNT + 1))
+    done
+
+    echo "XXX"
+    echo 100
+    echo "LTC Signing Complete."
+    echo "XXX"
+
+    litecoin-cli -datadir="$TEMP_DATA" stop >/dev/null 2>&1
+    sleep 2
+    rm -rf "$TEMP_DATA"
+
+} | whiptail --title " Signing Litecoin Transactions " --gauge "Initializing..." 6 50 0
+
+log_msg "--- LTC Signing Session Complete ---"

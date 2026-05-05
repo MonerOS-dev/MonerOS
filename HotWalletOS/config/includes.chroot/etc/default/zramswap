@@ -1,0 +1,8 @@
+# Compression algorithm (zstd is usually best for modern CPUs)
+ALGO=zstd
+
+# Size of the zram device (e.g., 60% of total RAM)
+PERCENT=50
+
+# Priority should be higher than any disk-based swap
+PRIORITY=100

@@ -1,0 +1,3 @@
+#!/bin/sh
+apt install npm -y
+npm install -g js-sha3

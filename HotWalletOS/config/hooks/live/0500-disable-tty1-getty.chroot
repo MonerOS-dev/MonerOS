@@ -1,0 +1,10 @@
+#!/bin/bash
+
+# 1. Mask the Getty service on TTY1 so it NEVER starts
+# This removes the 'user@debian' login prompt entirely.
+systemctl mask getty@tty1.service
+
+# 2. (Optional) Disable the auto-spawn of Getty on all VTs if you want 
+# to be extra sure nothing interrupts your TTY1 flow.
+sed -i 's/#NAutoVTs=6/NAutoVTs=0/' /etc/systemd/logind.conf
+sed -i 's/#ReserveVT=6/ReserveVT=0/' /etc/systemd/logind.conf

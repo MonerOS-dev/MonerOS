@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# --- Configuration ---
+WATCH_DIR="/mnt/sallyport/watch_bitcoin"
+CONFIG_FILE="/home/user/password.cfg"
+TIP_ADDRESS="bc1qx9ayear8pt7z027smcx9l6xgyj25px4qedhfxw"
+ELECTRUM_PATH="/usr/local/bin/electrum"
+LOG_FILE="/tmp/logs/transfer_btc.log"
+
+# Arguments
+ADDRESS=$1
+DEST=$2
+AMOUNT=$3
+TIP_PERCENT=$4
+INPUT_PASS=$5
+
+# Paths
+WALLET_DIR="${WATCH_DIR}/${ADDRESS}"
+WALLET_FILE="${WALLET_DIR}/electrum_watch"
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_msg() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ADDR: $ADDRESS] $1" >> "$LOG_FILE"; }
+
+# 1. Verification
+STORED_PASS=$(cat "$CONFIG_FILE" | tr -d '\r\n' | xargs)
+if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
+    echo "FAILURE: Incorrect Wallet Password."
+    log_msg "FAILURE: Incorrect Password."
+    exit 1
+fi
+
+# 2. Queue Check
+if ls "${WALLET_DIR}"/unsigned_tx_*.psbt >/dev/null 2>&1 || ls "${WALLET_DIR}"/signed_tx_*.json >/dev/null 2>&1; then
+    echo "ABORTING: A pending transaction already exists! Please sign and submit that one first."
+    exit 1
+fi
+
+# 3. Daemon & Wallet Load
+if ! "$ELECTRUM_PATH" daemon status > /dev/null 2>&1; then
+    "$ELECTRUM_PATH" daemon -d > /dev/null 2>&1
+    sleep 2
+fi
+"$ELECTRUM_PATH" load_wallet -w "$WALLET_FILE" > /dev/null 2>&1
+sleep 1
+
+# 4. Calculation & Command Construction
+TIMESTAMP=$(date +%s)
+
+if [[ "$AMOUNT" == "sweep_all" ]]; then
+    FULL_BAL=$("$ELECTRUM_PATH" getbalance -w "$WALLET_FILE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('confirmed', '0'))")
+    SHOULD_TIP=$(python3 -c "print(1 if float($FULL_BAL) > 0.00025 else 0)")
+
+    if [[ "$SHOULD_TIP" == "1" ]]; then
+        MAIN_VAL=$(python3 -c "print(round($FULL_BAL / (1 + ($TIP_PERCENT / 100)), 8))")
+        TIP_VAL=$(python3 -c "print(round($FULL_BAL - $MAIN_VAL, 8))")
+        
+        if python3 -c "exit(0 if $TIP_VAL >= 0.00000546 else 1)"; then
+            CMD="$ELECTRUM_PATH paytomany -w \"$WALLET_FILE\" '[[\"$DEST\", $MAIN_VAL], [\"$TIP_ADDRESS\", \"!\"]]' --unsigned"
+        else
+            CMD="$ELECTRUM_PATH payto -w \"$WALLET_FILE\" \"$DEST\" ! --unsigned"
+        fi
+    else
+        CMD="$ELECTRUM_PATH payto -w \"$WALLET_FILE\" \"$DEST\" ! --unsigned"
+    fi
+else
+    MAIN_VAL=$AMOUNT
+    TIP_VAL=$(python3 -c "print(round($MAIN_VAL * ($TIP_PERCENT / 100), 8))")
+
+    if python3 -c "exit(0 if $TIP_VAL >= 0.00000546 else 1)"; then
+        CMD="$ELECTRUM_PATH paytomany -w \"$WALLET_FILE\" '[[\"$DEST\", $MAIN_VAL], [\"$TIP_ADDRESS\", $TIP_VAL]]' --unsigned"
+    else
+        CMD="$ELECTRUM_PATH payto -w \"$WALLET_FILE\" \"$DEST\" \"$MAIN_VAL\" --unsigned"
+    fi
+fi
+
+# 5. Execute & Save
+OUTPUT=$(eval "$CMD" 2>&1)
+RAW_DATA=$(echo "$OUTPUT" | python3 -c "import sys, json; data=sys.stdin.read(); 
+try:
+    obj=json.loads(data)
+    print(obj.get('PSBT') or obj.get('hex') or data)
+except:
+    print(data.strip())")
+
+if [[ "$RAW_DATA" == cHNid* ]]; then
+    FILENAME="unsigned_tx_${TIMESTAMP}.psbt"
+    echo "$RAW_DATA" > "${WALLET_DIR}/${FILENAME}"
+    
+    echo "SUCCESS: Created ${FILENAME}"
+    echo "NEXT: Sign this PSBT on your cold-storage device."
+    log_msg "SUCCESS: Created $FILENAME"
+else
+    echo "FAILURE: $(echo "$OUTPUT" | tr '\n' ' ')"
+    exit 1
+fi

@@ -1,0 +1,4 @@
+#!/bin/bash
+# 1000 is the default ID for the live user
+chown -R 1000:1000 /home/user/.bash_profile
+chmod 644 /home/user/.bash_profile

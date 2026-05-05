@@ -1,0 +1,151 @@
+#!/bin/bash
+
+# --- Configuration ---
+WATCH_DIR="/mnt/sallyport/watch_ethereum"
+BACKEND_DIR="/var/www/backend/Ethereum"
+CONFIG_FILE="/home/user/password.cfg"
+TIP_ADDRESS="0x4c24baa7834fb260e68dedbc4e541e1318c9f0db"
+ETHERS_LIB="/usr/local/lib/ethers/node_modules/ethers"
+LOG_FILE="/tmp/logs/transfer_eth.log"
+
+# Arguments
+ADDRESS=$1
+DEST=$2
+AMOUNT=$3
+TIP_PERCENT=$4
+INPUT_PASS=$5
+
+# Paths
+WALLET_DIR="${WATCH_DIR}/${ADDRESS}"
+mkdir -p "$WALLET_DIR"
+TIMESTAMP=$(date +%s)
+
+# --- Logging ---
+mkdir -p "$(dirname "$LOG_FILE")"
+log_msg() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ETH-ADDR: $ADDRESS] $1" >> "$LOG_FILE"; }
+
+# 1. Verification
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "FAILURE: Reference password file not found."
+    exit 1
+fi
+
+STORED_PASS=$(cat "$CONFIG_FILE" | tr -d '\r\n' | xargs)
+if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
+    echo "FAILURE: Incorrect Wallet Password."
+    log_msg "Auth Failure"
+    exit 1
+fi
+
+# 2. Balance Fetch & Sweep Calculation
+BALANCE_FILE="${BACKEND_DIR}/${ADDRESS}_unlocked.txt"
+CURRENT_BALANCE=$(tr -d '\n\r ' < "$BALANCE_FILE" 2>/dev/null || echo "0")
+
+if [[ "$AMOUNT" == "sweep_all" ]]; then
+    if (( $(echo "$CURRENT_BALANCE >= 0.0045" | bc -l) )); then
+        USE_TIP=true
+        TIP_VAL=$(python3 -c "print('{:.18f}'.format($CURRENT_BALANCE * ($TIP_PERCENT / 100)))")
+    else
+        USE_TIP=false
+        TIP_VAL="0"
+    fi
+    CALC_SWEEP=true
+else
+    USE_TIP=true
+    TIP_VAL=$(python3 -c "print('{:.18f}'.format($AMOUNT * ($TIP_PERCENT / 100)))")
+    CALC_SWEEP=false
+fi
+
+# 3. Node.js Generation Logic
+export CURRENT_BALANCE TIP_VAL USE_TIP CALC_SWEEP AMOUNT
+JS_CODE=$(cat <<EOF
+const ethers = require("$ETHERS_LIB");
+
+async function run() {
+    const provider = new (ethers.providers ? ethers.providers.JsonRpcProvider : ethers.JsonRpcProvider)('https://eth.llamarpc.com');
+    const parse = (ethers.utils ? ethers.utils.parseEther : ethers.parseEther);
+
+    // Retry wrapper to handle 429 Rate Limits
+    async function retryRequest(fn, name) {
+        for (let i = 0; i < 3; i++) {
+            try {
+                return await fn();
+            } catch (err) {
+                if (err.message.includes("429") && i < 2) {
+                    await new Promise(res => setTimeout(res, 1500));
+                    continue;
+                }
+                throw err;
+            }
+        }
+    }
+
+    try {
+        const feeData = await retryRequest(() => provider.getFeeData(), "getFeeData");
+        const startNonce = await retryRequest(() => provider.getTransactionCount('$ADDRESS', 'latest'), "getTransactionCount");
+
+        const gasLimit = 21000n; 
+        const maxFee = BigInt(feeData.maxFeePerGas.toString());
+        const maxPriority = BigInt(feeData.maxPriorityFeePerGas.toString());
+        const gasCostPerTx = gasLimit * maxFee;
+
+        // FIXED: Defined tipValueBigInt here before it is used in the IF blocks
+        let tipValueBigInt = BigInt(parse('${TIP_VAL}').toString());
+        let mainValueBigInt;
+
+        if ('${CALC_SWEEP}' === 'true') {
+            const totalBalanceBigInt = BigInt(parse('${CURRENT_BALANCE}').toString());
+            if ('${USE_TIP}' === 'true') {
+                mainValueBigInt = totalBalanceBigInt - tipValueBigInt - (gasCostPerTx * 2n);
+            } else {
+                mainValueBigInt = totalBalanceBigInt - gasCostPerTx;
+                tipValueBigInt = 0n;
+            }
+        } else {
+            mainValueBigInt = BigInt(parse('${AMOUNT}').toString());
+        }
+
+        if (mainValueBigInt <= 0n) throw new Error("Insufficient balance for gas/tip.");
+
+        const tx1 = { to: '$DEST', value: mainValueBigInt.toString(), gasLimit: Number(gasLimit), maxFeePerGas: maxFee.toString(), maxPriorityFeePerGas: maxPriority.toString(), nonce: Number(startNonce), chainId: 1 };
+        let tx2 = null;
+        if (tipValueBigInt > 0n) {
+            tx2 = { to: '$TIP_ADDRESS', value: tipValueBigInt.toString(), gasLimit: Number(gasLimit), maxFeePerGas: maxFee.toString(), maxPriorityFeePerGas: maxPriority.toString(), nonce: Number(startNonce) + 1, chainId: 1 };
+        }
+        process.stdout.write(JSON.stringify({main: tx1, tip: tx2}));
+    } catch (err) {
+        process.stderr.write(err.message);
+        process.exit(1);
+    }
+}
+run();
+EOF
+)
+
+# Brief pause to prevent immediate burst rate limits
+sleep 0.5
+
+RAW_OUTPUT=$(node -e "$JS_CODE" 2>/tmp/node_eth_error.log)
+
+if [[ $? -ne 0 ]]; then
+    ERR=$(cat /tmp/node_eth_error.log)
+    echo "FAILURE: $ERR"
+    log_msg "Node Error: $ERR"
+    exit 1
+fi
+
+# 4. Final Output and Instructions
+MAIN_JSON=$(echo "$RAW_OUTPUT" | python3 -c "import sys, json; data=json.load(sys.stdin); print(json.dumps(data['main']))")
+TIP_JSON=$(echo "$RAW_OUTPUT" | python3 -c "import sys, json; data=json.load(sys.stdin)['tip']; print(json.dumps(data)) if data else print('')")
+
+if [[ -n "$MAIN_JSON" ]]; then
+    echo "$MAIN_JSON" > "${WALLET_DIR}/unsigned_tx_${TIMESTAMP}_main.json"
+    [ -n "$TIP_JSON" ] && echo "$TIP_JSON" > "${WALLET_DIR}/unsigned_tx_${TIMESTAMP}_tip.json"
+    
+    echo "SUCCESS: Created ETH manifest(s) at ${TIMESTAMP}"
+    echo "NEXT: Sign these files on your cold-storage device."
+    log_msg "SUCCESS: Generated ETH TX at $TIMESTAMP"
+else
+    echo "FAILURE: Resulting JSON was empty."
+    exit 1
+fi

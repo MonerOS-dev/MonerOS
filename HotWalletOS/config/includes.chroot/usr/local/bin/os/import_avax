@@ -1,0 +1,10 @@
+BASE_DIR="/mnt/sallyport/watch_avalanche"
+
+echo "Importing Avalanche"
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet does not exist. Exiting."
+    exit 0
+fi
+
+bash /usr/local/bin/os/generate_avax_tx_pages
+bash /usr/local/bin/os/submit_avax

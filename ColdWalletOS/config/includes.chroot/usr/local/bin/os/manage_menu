@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Ensure we can find cryptsetup/mount/etc ---
+export PATH=$PATH:/usr/sbin:/sbin
+
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+while true; do
+    # Arrow keys only - Tag and Description are merged
+    OPTION=$(whiptail --title " Manage Menu " \
+                      --fb \
+                      --nocancel \
+                      --ok-button "Select" \
+                      --menu "\nChoose a selection..." \
+                      16 50 4 \
+                      " Main Menu" "" \
+                      " Create Wallet" "" \
+                      " Delete Wallet" "" \
+                      " Sign Transactions" "" \
+                      3>&1 1>&2 2>&3)
+
+    case "$OPTION" in
+        " Main Menu") /usr/local/bin/os/main_menu ;;
+        " Create Wallet") /usr/local/bin/os/create_menu ;;
+        " Delete Wallet") /usr/local/bin/os/delete_menu ;;
+        " Sign Transactions") sudo /usr/local/bin/os/sign_crypto ;;
+    esac
+done

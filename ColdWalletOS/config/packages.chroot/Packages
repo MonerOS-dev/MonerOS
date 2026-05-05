@@ -1,0 +1,18 @@
+Package: veracrypt-console
+Architecture: amd64
+Version: 1.26.7-1
+Priority: optional
+Section: libs
+Maintainer: VeraCrypt Team <veracrypt@idrix.fr>
+Installed-Size: 24692
+Depends: libfuse2, dmsetup, sudo, libpcsclite1, pcscd
+Conflicts: veracrypt
+Filename: ./veracrypt-console-1.26.7-Debian-11-amd64.deb
+Size: 8857490
+MD5sum: 3ac36e0444f4ed5da71f39a9b98fb734
+SHA1: 0a091b3341d0c0103de6b11b3051b8df3db254f4
+SHA256: f6e6f2a174abe69bbfc3661df83898ae088afdfea413f152d28edd9da53821a6
+SHA512: a4b0a8a2001803aad622bf78f6ca152133b17a0fe52b6802693dbf7514debf61d47a8ea2ff0e24935cc7cc8c2326314c36f9562302e9a237c83a0b40994c33f9
+Description: Disk encryption with strong security based on TrueCrypt.
+ Disk encryption with strong security based on TrueCrypt.
+

@@ -1,0 +1,154 @@
+#!/bin/bash
+
+# ---------------------------------------------------------
+#  UI THEME (Stealth)
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+BASE_DIR="/mnt/vault/litecoin"
+TEMP_NAME="ltc_temp"
+
+mkdir -p "$BASE_DIR" >/dev/null 2>&1
+mkdir -p "$BASE_DIR/wallets" >/dev/null 2>&1
+
+ADDR_FILE="/tmp/ltc_addr.$$"
+
+# ---------------------------------------------------------
+#  SHOW GAUGE IMMEDIATELY — ALL WORK HAPPENS BEHIND IT
+# ---------------------------------------------------------
+(
+echo 5
+sleep 0.1
+
+# Kill any running litecoind
+pkill -9 -f litecoind 2>/dev/null
+sleep 1
+
+echo 20
+sleep 0.1
+
+# Start litecoind offline
+litecoind -datadir="$BASE_DIR" \
+          -daemon \
+          -connect=0 \
+          -listen=0 \
+          -dnsseed=0 >/dev/null 2>&1
+
+echo 35
+sleep 0.1
+
+# Wait for RPC cookie
+for i in {1..20}; do
+    if [ -f "$BASE_DIR/.cookie" ]; then
+        break
+    fi
+    sleep 1
+done
+
+echo 50
+sleep 0.1
+
+# Create wallet
+litecoin-cli -datadir="$BASE_DIR" -named createwallet wallet_name="$TEMP_NAME" >/dev/null 2>&1
+
+echo 70
+sleep 0.1
+
+# Get legacy address
+ADDR=$(litecoin-cli -datadir="$BASE_DIR" -rpcwallet="$TEMP_NAME" getnewaddress "" "legacy" 2>/dev/null)
+
+# Pass address back to parent
+echo "$ADDR" > "$ADDR_FILE"
+
+echo 85
+sleep 0.1
+
+# Shut down litecoind
+litecoin-cli -datadir="$BASE_DIR" stop >/dev/null 2>&1
+sleep 3
+pkill -9 -f litecoind 2>/dev/null
+
+echo 90
+sleep 0.1
+
+# Move wallet to folder named after address
+if [ -d "$BASE_DIR/wallets/$TEMP_NAME" ]; then
+    mv "$BASE_DIR/wallets/$TEMP_NAME" "$BASE_DIR/$ADDR"
+elif [ -d "$BASE_DIR/$TEMP_NAME" ]; then
+    mv "$BASE_DIR/$TEMP_NAME" "$BASE_DIR/$ADDR"
+elif [ -f "$BASE_DIR/$TEMP_NAME" ]; then
+    mkdir -p "$BASE_DIR/$ADDR"
+    mv "$BASE_DIR/$TEMP_NAME" "$BASE_DIR/$ADDR/wallet.dat"
+fi
+sync
+
+echo 95
+sleep 0.1
+
+# Cleanup blockchain data
+rm -rf "$BASE_DIR/blocks" "$BASE_DIR/chainstate" "$BASE_DIR/backups" "$BASE_DIR/database" "$BASE_DIR/indexes" "$BASE_DIR/wallets"
+rm -f "$BASE_DIR/.cookie" "$BASE_DIR/peers.dat" "$BASE_DIR/mempool.dat" "$BASE_DIR/fee_estimates.dat" "$BASE_DIR/banlist.dat" "$BASE_DIR/settings.json" "$BASE_DIR/leaf000000.dat" "$BASE_DIR/O000000.dat"
+
+sync
+
+echo 100
+sleep 0.1
+) |
+whiptail --gauge "Creating Litecoin wallet...\nPlease wait." 8 50 0
+
+# ---------------------------------------------------------
+#  READ ADDRESS BACK FROM TEMP FILE
+# ---------------------------------------------------------
+ADDR=$(cat "$ADDR_FILE" 2>/dev/null)
+rm -f "$ADDR_FILE"
+
+# ---------------------------------------------------------
+#  CREATE WATCH-ONLY WALLET VERSION
+# ---------------------------------------------------------
+WATCH_BASE="/mnt/sallyport/watch_litecoin"
+WATCH_PATH="$WATCH_BASE/$ADDR"
+
+mkdir -p "$WATCH_PATH" >/dev/null 2>&1
+
+{
+    echo "ADDRESS: $ADDR"
+    echo "TYPE: watch-only"
+} > "$WATCH_PATH/watch_info.txt"
+sync
+
+# ---------------------------------------------------------
+#  FINAL POPUP
+# ---------------------------------------------------------
+whiptail --title "Litecoin Wallet Created" \
+         --msgbox "\nYour Litecoin wallet has been generated.\n\nAddress:\n$ADDR" \
+         0 0
+
+/usr/local/bin/os/main_menu

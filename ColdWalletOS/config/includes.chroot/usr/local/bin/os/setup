@@ -1,0 +1,186 @@
+#!/bin/bash
+
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# --- LOGGING SETUP ---
+LOG_FILE="/tmp/logs/cwos_setup.log"
+sudo mkdir -p /tmp/logs
+sudo chown 1000:1000 /tmp/logs
+
+# Stop kernel messages from interrupting the UI
+sudo dmesg -n 3
+
+echo "--- ColdWalletOS Log Started: $(date) ---" > "$LOG_FILE"
+
+# Prevent interruption
+trap '' SIGINT SIGTERM SIGTSTP
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# --- VARIABLES ---
+LIVE_DEV=$(findmnt -n -o SOURCE /run/live/medium | tee -a "$LOG_FILE")
+PARENT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n 1 | tee -a "$LOG_FILE")
+TARGET="/dev/${PARENT_DISK}3"
+[[ "$PARENT_DISK" == nvme* ]] && TARGET="/dev/${PARENT_DISK}p3"
+MAPPER_NAME="cwos_unlocked"
+MOUNT_POINT="/mnt/vault"
+MNT_PATH="/mnt/external"
+TARGET_LABEL="HWOS_SALLY"
+CONTAINER_PATH="$MNT_PATH/sallyport.bin"
+FINAL_MOUNT="/mnt/sallyport"
+
+# SIZE: 250MB in Kilobytes
+SALLY_SIZE_KB=256000
+
+# Cleanup environment
+sudo umount "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
+sudo umount "$MNT_PATH" >> "$LOG_FILE" 2>&1
+sudo umount "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+sudo cryptsetup close "$MAPPER_NAME" >> "$LOG_FILE" 2>&1
+
+# --- START UI ---
+
+# 1. Internal Vault Setup Loop
+while true; do
+    PASS1=$(whiptail --title " Vault Setup " --fb --nocancel --passwordbox "\n   Enter a password for your internal vault:\n " 11 50 3>&1 1>&2 2>&3)
+      
+    if [ -z "$PASS1" ]; then
+        whiptail --title " Error " --fb --msgbox "\n   Password cannot be empty! " 10 45
+        continue
+    fi
+
+    PASS2=$(whiptail --title " Verification " --fb --nocancel --passwordbox "\n   Please confirm your password:\n " 11 50 3>&1 1>&2 2>&3)
+
+    if [ "$PASS1" == "$PASS2" ]; then
+        (
+            echo 10; printf "%s" "$PASS1" | sudo cryptsetup luksFormat --type luks2 "$TARGET" -d - >> "$LOG_FILE" 2>&1
+            echo 30; printf "%s" "$PASS1" | sudo cryptsetup open "$TARGET" "$MAPPER_NAME" -d - >> "$LOG_FILE" 2>&1
+            echo 60; sudo mkfs.ext4 -q -F -L cwos_vault "/dev/mapper/$MAPPER_NAME" >> "$LOG_FILE" 2>&1
+            echo 80; sudo mkdir -p "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
+                     sudo mount "/dev/mapper/$MAPPER_NAME" "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
+                     sudo chown 1000:1000 "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
+            echo 90; mkdir -p "$MOUNT_POINT/config" >> "$LOG_FILE" 2>&1
+                     printf "%s" "$PASS1" > "$MOUNT_POINT/config/password.cfg"
+                     chmod 600 "$MOUNT_POINT/config/password.cfg"
+            echo 100; sleep 1
+        ) | whiptail --title " Initializing Vault " --gauge "\n   Creating encrypted internal container... " 9 50 0
+        break
+    else
+        whiptail --title " Error " --fb --msgbox "\n   Passwords do not match. Try again. " 10 45
+    fi
+done
+
+# 2. External Hardware Search Loop
+while true; do
+    sudo umount "$MNT_PATH" 2>/dev/null >> "$LOG_FILE" 2>&1
+    
+    # Ensure udev has registered the labels
+    sudo udevadm trigger
+    sudo udevadm settle --timeout=2
+
+    {
+        FOUND_PATH=""
+        echo 10
+        while [ -z "$FOUND_PATH" ]; do
+            # findfs is much more reliable than parsing lsblk output
+            # It returns the full path (e.g., /dev/sdb3) directly
+            FOUND_PATH=$(sudo findfs LABEL="$TARGET_LABEL" 2>/dev/null)
+            
+            if [ -n "$FOUND_PATH" ]; then
+                echo 70
+                sudo mkdir -p "$MNT_PATH"
+                if sudo mount "$FOUND_PATH" "$MNT_PATH" >> "$LOG_FILE" 2>&1; then
+                    echo 100; sleep 1; exit 0
+                else
+                    # If mount fails, clear FOUND_PATH to keep searching
+                    FOUND_PATH=""
+                fi
+            fi
+            
+            # The bounce animation
+            echo 20; sleep 0.5; echo 25; sleep 0.5
+        done
+    } | whiptail --title " Sallyport Hardware Search " --gauge "\nSearching for drive: $TARGET_LABEL\n\nPlease insert the hardware now..." 8 50 0
+
+    if mountpoint -q "$MNT_PATH"; then
+        break
+    else
+        if ! whiptail --title " Drive Not Found " --fb --yesno "The drive '$TARGET_LABEL' was not found or failed to mount. Retry?" 10 50; then
+            exit 1
+        fi
+    fi
+done
+
+# 3. Encrypted Sallyport Creation
+VAULT_PASS=$(cat "$MOUNT_POINT/config/password.cfg" | xargs)
+
+if [ -f "$CONTAINER_PATH" ]; then
+    sudo rm "$CONTAINER_PATH"
+fi
+
+printf '%s' "$VAULT_PASS" | sudo veracrypt --text --non-interactive --stdin \
+    --create "$CONTAINER_PATH" \
+    --size="${SALLY_SIZE_KB}K" \
+    --volume-type=normal \
+    --encryption=AES \
+    --hash=SHA-512 \
+    --filesystem=FAT \
+    --pim=0 \
+    --keyfiles="" >> "$LOG_FILE" 2>&1 &
+VC_PID=$!
+
+{
+    while kill -0 $VC_PID 2>/dev/null; do
+        if [ -f "$CONTAINER_PATH" ]; then
+            CUR_B=$(stat -c%s "$CONTAINER_PATH" 2>/dev/null || echo 0)
+            CUR_KB=$((CUR_B / 1024))
+            # Fixed progress calculation:
+            PERCENT=$(( 100 * CUR_KB / SALLY_SIZE_KB ))
+            [ "$PERCENT" -gt 98 ] && PERCENT=98
+            echo "$PERCENT"
+        fi
+        sleep 1
+    done
+
+    echo XXX; echo 99; echo "\nFinalizing: Mounting Sallyport..."; echo XXX
+    sudo mkdir -p "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+    printf '%s' "$VAULT_PASS" | sudo veracrypt --text --non-interactive --stdin \
+        --mount "$CONTAINER_PATH" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+    (sudo sync &)
+    echo 100
+} | whiptail --title " Finalizing " --fb --gauge "\nWriting: sallyport.bin" 8 50 0
+
+# Final check
+if mountpoint -q "$FINAL_MOUNT"; then
+    clear
+    exec /usr/local/bin/os/main_menu
+else
+    whiptail --title " CRITICAL ERROR " --fb --msgbox "Sallyport failed to mount. Check $LOG_FILE for details." 10 50
+    exit 1
+fi

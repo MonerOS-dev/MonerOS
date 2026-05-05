@@ -1,0 +1,154 @@
+#!/bin/bash
+
+# ---------------------------------------------------------
+#  UI THEME (Stealth)
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# ---------------------------------------------------------
+#  CONFIG
+# ---------------------------------------------------------
+WALLET_DIR="/mnt/vault/monero"
+TEMP_NAME="vault_temp"
+PASS_FILE="/mnt/vault/config/password.cfg"
+PASSWORD=$(tr -d '\n' < "$PASS_FILE")
+
+mkdir -p "$WALLET_DIR"
+
+ADDR_FILE="/tmp/xmr_addr.$$"
+VIEW_FILE="/tmp/xmr_view.$$"
+
+# ---------------------------------------------------------
+#  GAUGE + WORK
+# ---------------------------------------------------------
+(
+echo 5
+sleep 0.1
+
+# 1) Create wallet and capture all output (stdout+stderr)
+CREATE_OUT=$(printf "n\n" | /usr/local/bin/monero-wallet-cli \
+  --generate-new-wallet "$WALLET_DIR/$TEMP_NAME" \
+  --password "$PASSWORD" \
+  --daemon-address 127.0.0.1:0 \
+  --mnemonic-language English \
+  --log-file "$WALLET_DIR/${TEMP_NAME}.log" \
+  --offline \
+  --create-address-file \
+  2>&1)
+
+echo 40
+sleep 0.1
+
+# 2) Parse view key from creation output
+VIEW_KEY=$(printf '%s\n' "$CREATE_OUT" | awk -F': ' '/^View key:/ {print $2}')
+echo "$VIEW_KEY" > "$VIEW_FILE"
+
+echo 60
+sleep 0.1
+
+# 3) Read address from .address.txt
+if [ -f "$WALLET_DIR/${TEMP_NAME}.address.txt" ]; then
+    ADDR=$(tr -d '[:space:]' < "$WALLET_DIR/${TEMP_NAME}.address.txt")
+    echo "$ADDR" > "$ADDR_FILE"
+fi
+
+echo 80
+sleep 0.1
+
+# 4) Move wallet files into address folder
+if [ -n "$ADDR" ]; then
+    mkdir -p "$WALLET_DIR/$ADDR"
+    mv "$WALLET_DIR/$TEMP_NAME"        "$WALLET_DIR/$ADDR/wallet"      2>/dev/null
+    mv "$WALLET_DIR/$TEMP_NAME.keys"   "$WALLET_DIR/$ADDR/wallet.keys" 2>/dev/null
+    mv "$WALLET_DIR/${TEMP_NAME}.log"  "$WALLET_DIR/$ADDR/wallet.log"  2>/dev/null
+    rm -f "$WALLET_DIR/${TEMP_NAME}.address.txt"
+fi
+
+sync
+
+echo 100
+sleep 0.1
+) | whiptail --gauge "Creating Monero wallet...\nPlease wait." 8 50 0
+
+sync
+
+# ---------------------------------------------------------
+#  READ BACK ADDRESS & VIEW KEY
+# ---------------------------------------------------------
+ADDR=$(cat "$ADDR_FILE" 2>/dev/null)
+VIEW_KEY=$(cat "$VIEW_FILE" 2>/dev/null)
+rm -f "$ADDR_FILE" "$VIEW_FILE"
+
+# ---------------------------------------------------------
+#  CREATE WATCH-ONLY INFO
+# ---------------------------------------------------------
+if [ -n "$ADDR" ] && [ -n "$VIEW_KEY" ]; then
+    WATCH_BASE="/mnt/sallyport/watch_monero"
+    WATCH_PATH="$WATCH_BASE/$ADDR"
+    mkdir -p "$WATCH_PATH"
+
+    # Loop indefinitely until a valid date is entered
+    while :; do
+        # We leave the init text empty "" so there is no pre-fill
+        RESTORE_DATE=$(whiptail --title "Set Restore Date (REQUIRED)" \
+            --nocancel \
+            --inputbox "\nEnter the wallet restore date (YYYY-MM-DD).\n" \
+            10 50 "" 3>&1 1>&2 2>&3)
+
+        # Validate format using regex (YYYY-MM-DD)
+        if [[ $RESTORE_DATE =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            # Format is correct, exit the loop
+            break
+        else
+            whiptail --title "Invalid Format" \
+                --msgbox "ERROR: '$RESTORE_DATE' is not valid.\n\nYou must enter the date manually as YYYY-MM-DD.\nExample: 2026-04-29" 10 50
+        fi
+    done
+
+    {
+        echo "ADDRESS: $ADDR"
+        echo "VIEW_KEY: $VIEW_KEY"
+        echo "RESTORE_DATE: $RESTORE_DATE"
+        echo "TYPE: watch-only"
+    } > "$WATCH_PATH/watch_info.txt"
+    
+    sync
+
+    whiptail --title "Monero Wallet Created" \
+             --msgbox "\nYour Monero wallet has been generated.\n\nAddress:\n$ADDR" \
+             0 0
+else
+    whiptail --title "Error" \
+             --msgbox "\nWallet generation failed.\n" \
+             0 0
+fi
+
+/usr/local/bin/os/main_menu

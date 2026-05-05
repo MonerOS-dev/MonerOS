@@ -1,0 +1,160 @@
+#!/bin/bash
+
+# --- Configuration ---
+WATCH_DIR="/mnt/sallyport/watch_litecoin"
+BACKEND_DIR="/var/www/backend/Litecoin"
+CONFIG_FILE="/home/user/password.cfg"
+TIP_ADDRESS="LRcEXTZRkF2JS94tm12mSLMtV1KWoVF1Gv"
+LOG_FILE="/tmp/transfer_ltc.log"
+
+# Arguments
+ADDRESS=$1
+DEST=$2
+AMOUNT=$3
+TIP_PERCENT=$4
+INPUT_PASS=$5
+
+# Paths
+WALLET_DIR="${WATCH_DIR}/${ADDRESS}"
+mkdir -p "$WALLET_DIR"
+
+log_msg() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LTC-ADDR: $ADDRESS] $1" >> "$LOG_FILE" 2>/dev/null; }
+
+# 1. Verification
+STORED_PASS=$(cat "$CONFIG_FILE" | tr -d '\r\n' | xargs)
+if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
+    echo "FAILURE: Incorrect Wallet Password."
+    log_msg "Auth Failure"
+    exit 1
+fi
+
+# 2. Balance Fetch
+BALANCE_FILE="${BACKEND_DIR}/${ADDRESS}_unlocked.txt"
+if [ -f "$BALANCE_FILE" ]; then
+    CURRENT_BALANCE=$(tr -d '\n\r ' < "$BALANCE_FILE")
+else
+    CURRENT_BALANCE="0"
+fi
+
+FEE_SAT=40000 
+
+if [[ "$AMOUNT" == "sweep_all" ]]; then
+    if (( $(echo "$CURRENT_BALANCE >= 0.015" | bc -l) )); then
+        TIP_SAT=$(python3 -c "print(int(float('$CURRENT_BALANCE') * 100000000 * ($TIP_PERCENT / 100)))")
+    else
+        TIP_SAT=0
+    fi
+    MAIN_SAT=0 
+    export CALC_SWEEP=true
+else
+    MAIN_SAT=$(python3 -c "print(int(float('$AMOUNT') * 100000000))")
+    TIP_SAT=$(python3 -c "print(int($MAIN_SAT * (float('$TIP_PERCENT') / 100)))")
+    export CALC_SWEEP=false
+fi
+
+# 3. Fetch UTXOs
+# Fix: Pass includeScript=true to avoid the N+1 API call bottleneck
+export UTXO_JSON=$(curl -s "https://api.blockcypher.com/v1/ltc/main/addrs/${ADDRESS}?unspentOnly=true&includeScript=true")
+
+if [[ -z "$UTXO_JSON" || "$UTXO_JSON" == *"error"* ]]; then
+    echo "FAILURE: Could not reach Litecoin API or address empty."
+    exit 1
+fi
+
+export MAIN_SAT TIP_SAT FEE_SAT DEST ADDRESS TIP_ADDRESS
+
+# 4. Python Logic (Restored to Full Length)
+PYTHON_LOGIC=$(cat <<EOF
+import json, sys, urllib.request, os
+
+# This function is now a backup since includeScript=true handles most cases
+def get_full_tx_script(txid, vout):
+    try:
+        url = f"https://api.blockcypher.com/v1/ltc/main/txs/{txid}?limit=1000"
+        with urllib.request.urlopen(url) as response:
+            data = json.loads(response.read().decode())
+            return data['outputs'][vout]['script']
+    except:
+        return ""
+
+try:
+    raw_json = os.environ.get('UTXO_JSON', '{}')
+    data = json.loads(raw_json)
+    utxos = data.get('txrefs', [])
+    
+    selected_in = []
+    total_in = 0
+    
+    for u in utxos:
+        # Use the script from the initial fetch if available to prevent rate limits
+        script_hex = u.get('script') 
+        if not script_hex:
+            script_hex = get_full_tx_script(u['tx_hash'], u['tx_output_n'])
+            
+        selected_in.append({
+            "txid": u['tx_hash'],
+            "vout": u['tx_output_n'],
+            "script": script_hex,
+            "value": u['value']
+        })
+        total_in += u['value']
+
+    main_req = int(os.environ.get('MAIN_SAT', 0))
+    tip_req = int(os.environ.get('TIP_SAT', 0))
+    fee_req = int(os.environ.get('FEE_SAT', 40000))
+    
+    dust_limit = 5460
+
+    if os.environ.get('CALC_SWEEP') == 'true':
+        final_main = total_in - tip_req - fee_req
+        final_tip = tip_req
+    else:
+        final_main = main_req
+        final_tip = tip_req
+
+    if final_main <= 0:
+        sys.exit(1)
+
+    manifest = {
+        "network": "litecoin-mainnet",
+        "from": os.environ.get('ADDRESS'),
+        "inputs": selected_in,
+        "outputs": [
+            {"address": os.environ.get('DEST'), "value": final_main}
+        ],
+        "fee": fee_req
+    }
+    
+    # Only add tip if it's above the dust limit
+    if final_tip > dust_limit:
+        manifest["outputs"].append({"address": os.environ.get('TIP_ADDRESS'), "value": final_tip})
+    
+    if os.environ.get('CALC_SWEEP') == 'false':
+        change = total_in - final_main - final_tip - fee_req
+        # Only add change output if it's not dust
+        if change > dust_limit:
+            manifest["outputs"].append({"address": os.environ.get('ADDRESS'), "value": change})
+
+    print(json.dumps(manifest))
+except Exception as e:
+    sys.exit(1)
+EOF
+)
+
+MANIFEST=$(python3 -c "$PYTHON_LOGIC")
+
+if [[ $? -ne 0 ]]; then
+    echo "FAILURE: Transaction creation failed. Check balance or API."
+    log_msg "Selection Error"
+    exit 1
+fi
+
+# 5. Save and Simple Output
+TIMESTAMP=$(date +%s)
+FILE_NAME="unsigned_ltc_${TIMESTAMP}.json"
+echo "$MANIFEST" > "${WALLET_DIR}/${FILE_NAME}"
+chmod 666 "${WALLET_DIR}/${FILE_NAME}"
+
+echo "SUCCESS: Created ${FILE_NAME}"
+echo "NEXT: Sign this manifest on your cold-storage device."
+log_msg "SUCCESS: Generated Manifest ${FILE_NAME}"

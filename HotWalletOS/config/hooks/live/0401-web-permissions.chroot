@@ -1,0 +1,21 @@
+#!/bin/bash
+# 1. Give web group 'execute' permissions to traverse the home folder
+chgrp www-data /home/user
+chmod 710 /home/user
+
+# 2. Add www-data to the 'user' group
+usermod -a -G user www-data
+
+# 3. Ensure .electrum exists in skel and has correct permissions 
+mkdir -p /etc/skel/.electrum
+chmod -R 775 /etc/skel/.electrum
+
+# 4. Specifically allow the group to write to the EXISTING Electrum directory
+if [ -d "/home/user/.electrum" ]; then
+    chown -R user:user /home/user/.electrum
+    chmod -R 775 /home/user/.electrum
+fi
+
+# 5. Sudoers logic
+echo "www-data ALL=(ALL) NOPASSWD: /usr/bin/bash /usr/local/bin/os/*, /usr/sbin/shutdown, /usr/bin/pkill" > /etc/sudoers.d/99_cwos_web
+chmod 440 /etc/sudoers.d/99_cwos_web

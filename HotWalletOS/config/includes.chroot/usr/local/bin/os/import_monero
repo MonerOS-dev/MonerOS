@@ -1,0 +1,138 @@
+#!/bin/bash
+
+# Check for root privileges
+if [[ $EUID -ne 0 ]]; then
+   echo "FAILURE: This script must be run as root (use sudo)"
+   exit 1
+fi
+
+BASE_DIR="/mnt/sallyport/watch_monero"
+
+echo "Importing Monero"
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet does not exist. Exiting."
+    exit 0
+fi
+
+PASS_FILE="/home/user/password.cfg"
+BACKEND_DIR="/var/www/backend/Monero"
+REMOTE_NODE="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
+PROXY="127.0.0.1:9050"
+
+# Ensure backend directory exists
+sudo mkdir -p "$BACKEND_DIR"
+
+# Read password
+if [ -f "$PASS_FILE" ]; then
+    PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+else
+    echo "Error: Password file not found at $PASS_FILE"
+    exit 1
+fi
+
+# Connection Check Configuration
+MAX_RETRIES=3
+RETRY_COUNT=0
+CONNECTED=false
+
+echo "Checking connection to Monero Node ($REMOTE_NODE) via Tor..."
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    # curl -s: silent, -f: fail on error, --socks5-hostname: use Tor proxy
+    # We check the /get_info endpoint which is a lightweight way to verify the node is responsive
+    if curl -s -f --socks5-hostname "$PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
+        echo "Successfully connected to the node."
+        CONNECTED=true
+        break
+    else
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        echo "Connection attempt $RETRY_COUNT failed. Retrying in 30 seconds..."
+        sleep 30
+    fi
+done
+
+if [ "$CONNECTED" = false ]; then
+    echo "FAILURE: Could not establish a connection to the node after $MAX_RETRIES attempts. Exiting."
+    exit 1
+fi
+
+for dir in "$BASE_DIR"/*/; do
+    if [ -f "${dir}watch_info.txt" ]; then
+        echo "--------------------------------------------------"
+        echo "Processing Folder: $(basename "$dir")"
+        cd "$dir"
+
+        ADDR=$(grep "ADDRESS:" watch_info.txt | awk '{print $2}' | tr -d '\r')
+        VIEW=$(grep "VIEW_KEY:" watch_info.txt | awk '{print $2}' | tr -d '\r')
+        R_DATE=$(grep "RESTORE_DATE:" watch_info.txt | awk '{print $2}' | tr -d '\r')
+
+        echo "Restoring/Updating wallet: $ADDR"
+
+        if [ ! -f "watchonly.keys" ]; then
+            echo "Wallet keys not found. Importing now via Tor..."
+            
+            export REMOTE_NODE PROXY 
+
+            /usr/bin/expect <<EOF
+set timeout -1
+set NODE \$env(REMOTE_NODE)
+set PRX  \$env(PROXY)
+
+# CRITICAL: Use the TEMP name here
+spawn monero-wallet-cli --generate-from-view-key watchonly_TEMP --daemon-address \$NODE --proxy \$PRX --trusted-daemon
+
+expect "Standard address:"
+send "$ADDR\r"
+
+expect "Secret view key:"
+send "$VIEW\r"
+
+expect "Enter a new password for the wallet:"
+send "$PASSWORD\r"
+
+expect "Confirm password:"
+send "$PASSWORD\r"
+
+expect "*alternatively from specific date (YYYY-MM-DD):"
+send "$R_DATE\r"
+
+expect "*Is this okay?*"
+send "y\r"
+
+expect "*Do you want to do it now?*"
+send "n\r"
+
+expect "Background refresh thread started"
+sleep 2
+send "exit\r"
+expect eof
+EOF
+
+            # This part runs AFTER the expect script finishes
+            if [ -f "watchonly_TEMP.keys" ]; then
+                echo "Success! Finalizing wallet files..."
+                mv "watchonly_TEMP.keys" "watchonly.keys"
+                [ -f "watchonly_TEMP" ] && mv "watchonly_TEMP" "watchonly"
+            else
+                echo "FAILURE: The keys were not generated correctly. Check Tor/Node connection."
+                exit 1
+            fi
+
+        else
+            echo "Wallet files already exist. Skipping import step."
+        fi
+        
+        echo "Creating transfer page..."
+        sudo bash /usr/local/bin/os/generate_monero_tx_page "$ADDR"
+    fi
+done
+
+pkill -f monero-wallet-cli 2>/dev/null || true
+
+# --- IMPORTANT ---
+# Make sure these scripts below also use the .onion address and --proxy flag!
+echo "Importing key_images (if any)..."
+sudo bash /usr/local/bin/os/refresh_monero
+
+echo "Submitting any pending transactions..."
+sudo bash /usr/local/bin/os/submit_monero

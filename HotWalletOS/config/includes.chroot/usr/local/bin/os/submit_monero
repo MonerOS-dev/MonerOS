@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# --- Configuration ---
+BASE_DIR="/mnt/sallyport/watch_monero"
+PASS_FILE="/home/user/password.cfg"
+DAEMON="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
+PROXY="127.0.0.1:9050"
+KEY_IMAGES="key_images.bin"
+
+# --- Debug Mode ---
+DEBUG=true
+
+# Counters
+S_COUNT=0
+F_COUNT=0
+
+# 1. Load the password
+if [ -f "$PASS_FILE" ]; then
+    PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+    export PASSWORD
+    export DAEMON
+    export PROXY
+    export KEY_IMAGES
+else
+    echo "FAILURE: Password file not found"
+    exit 1
+fi
+
+# 2. Find and sort all signed transactions
+TX_LIST=$(find "$BASE_DIR" -type f -name "signed_tx_*" | sort -t '_' -k3 -n)
+
+if [ -z "$TX_LIST" ]; then
+    echo "SUCCESS: No transactions to process"
+    exit 0
+fi
+
+for TX_PATH in $TX_LIST; do
+    DIR=$(dirname "$TX_PATH")
+    SIGNED_FILE=$(basename "$TX_PATH")
+    UNSIGNED_FILE=$(echo "$SIGNED_FILE" | sed 's/signed_tx_/unsigned_tx_/')
+    TIMESTAMP=$(echo "$SIGNED_FILE" | awk -F'_' '{print $3}')
+    ADDR_ID=$(basename "$DIR")
+    
+    cd "$DIR" || { echo "[FAILED] $SIGNED_FILE (Directory error)"; ((F_COUNT++)); continue; }
+    cp "$SIGNED_FILE" "signed_monero_tx"
+
+    SUCCESS_FLAG="/tmp/tx_success_$TIMESTAMP"
+    export SUCCESS_FLAG
+    rm -f "$SUCCESS_FLAG"
+
+    # 3. Launch Expect
+    /usr/bin/expect <<'EOF' > $( [ "$DEBUG" = true ] && echo "/dev/stdout" || echo "/dev/null" ) 2>&1
+# Increased timeout to 600 because broadcasting over Tor can be slow
+set timeout 600
+set password   $env(PASSWORD)
+set daemon     $env(DAEMON)
+set proxy_addr $env(PROXY)
+set key_images $env(KEY_IMAGES)
+set s_flag     $env(SUCCESS_FLAG)
+
+# Added the --proxy flag here
+spawn monero-wallet-cli --wallet-file "watchonly" --daemon-address $daemon --proxy $proxy_addr --trusted-daemon
+
+# 1. Handle Password
+expect "Wallet password:"
+send "$password\r"
+
+# Wait for the prompt
+expect -re ".*\\\]:"
+
+# 2. Import Key Images
+send "import_key_images $key_images\r"
+sleep 3
+send "y\r"
+expect -re ".*\\\]:"
+
+# 3. Submit Transfer
+send "submit_transfer\r"
+
+# Wait for the wallet to load the file
+sleep 5
+send "y\r"
+
+# Final check for success
+expect {
+    "Transaction successfully submitted" {
+        exec touch $s_flag
+    }
+    timeout {
+        # Do nothing
+    }
+}
+
+# Export outputs
+send "export_outputs all outputs.bin\r"
+sleep 5
+send "$password\r"
+
+sleep 2
+send "exit\r"
+expect eof
+EOF
+
+    # 4. Result Handling & Cleanup
+    if [ -f "$SUCCESS_FLAG" ]; then
+        echo "[OK] $SIGNED_FILE ($ADDR_ID)"
+        ((S_COUNT++))
+        
+        rm -f "$SIGNED_FILE"
+        [ -f "$UNSIGNED_FILE" ] && rm -f "$UNSIGNED_FILE"
+        [ -f "key_images.bin" ] && rm -f "key_images.bin"
+        rm -f "$SUCCESS_FLAG"
+    else
+        echo "[FAILED] $SIGNED_FILE ($ADDR_ID)"
+        ((F_COUNT++))
+    fi
+    rm -f "signed_monero_tx"
+done
+
+echo "------------------------------------------------"
+if [ "$F_COUNT" -eq 0 ]; then
+    echo "SUMMARY_SUCCESS: $S_COUNT processed"
+else
+    echo "SUMMARY_FAILURE: $S_COUNT ok, $F_COUNT failed"
+fi

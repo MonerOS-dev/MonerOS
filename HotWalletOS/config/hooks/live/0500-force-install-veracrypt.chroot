@@ -1,0 +1,8 @@
+#!/bin/sh
+echo "FORCE INSTALLING VERACRYPT FROM /opt/..."
+# Install from the new location
+dpkg -i /opt/veracrypt.deb || true
+apt-get update
+apt-get install -f -y
+# Clean up
+rm /opt/veracrypt.deb

@@ -1,0 +1,13 @@
+#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+# The blocking loop
+while [ -n "$(blkid -t LABEL='CWOS_BOOT')" ]; do
+    echo "======================================================"
+    echo "  CRITICAL SECURITY ERROR: COLD WALLET DETECTED!      "
+    echo "  PLEASE DISCONNECT THE COLD WALLET TO CONTINUE.      "
+    echo "======================================================"
+    sleep 5
+done

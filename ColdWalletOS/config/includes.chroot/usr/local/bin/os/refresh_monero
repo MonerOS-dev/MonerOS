@@ -1,0 +1,93 @@
+#!/bin/bash
+# Silently process all cold wallets in the background
+WATCH_DIR="/mnt/sallyport/watch_monero"
+VAULT_DIR="/mnt/vault/monero"
+PASS_FILE="/mnt/vault/config/password.cfg"
+LOG_FILE="/tmp/logs/monero_background_sync.log"
+
+# Ensure we can find cryptsetup/mount/etc ---
+export PATH=$PATH:/usr/sbin:/sbin
+
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# Read password exactly
+PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+
+# Create log directory if missing
+mkdir -p "$(dirname "$LOG_FILE")"
+
+echo "--- Starting Automated Refresh: $(date) ---" > "$LOG_FILE"
+
+for dir in "$WATCH_DIR"/*/; do
+    SUB_DIR=$(basename "$dir")
+    REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
+    OUTPUTS_IN="${dir}outputs.bin"
+    KEY_IMAGES_OUT="${dir}key_images.bin"
+
+    # Only process if both the wallet and the exported outputs exist
+    if [[ -f "$REAL_WALLET" && -f "$OUTPUTS_IN" ]]; then
+        echo "Processing: $SUB_DIR" >> "$LOG_FILE"
+        cd "$dir" || continue
+
+        # Clean up old key images before starting
+        rm -f "$KEY_IMAGES_OUT"
+
+        /usr/bin/expect <<EOF >> "$LOG_FILE" 2>&1
+set timeout 300
+spawn monero-wallet-cli --wallet-file "$REAL_WALLET" --offline
+
+expect "Wallet password:"
+send "$PASSWORD\r"
+
+expect -re ".*\]:"
+send "import_outputs outputs.bin\r"
+expect "Wallet password:"
+send "$PASSWORD\r"
+
+expect -re ".*\]:"
+sleep 1
+
+send "export_key_images key_images.bin\r"
+expect "Wallet password:"
+send "$PASSWORD\r"
+
+expect -re ".*\]:"
+send "exit\r"
+expect eof
+EOF
+
+        # Verification and cleanup
+        if [ -f "$KEY_IMAGES_OUT" ]; then
+            echo "SUCCESS: $SUB_DIR updated." >> "$LOG_FILE"
+        else
+            echo "FAILURE: $SUB_DIR image export failed." >> "$LOG_FILE"
+        fi
+    fi
+done

@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# ---------------------------------------------------------
+#  UI THEME
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+VAULT_BASE="/mnt/vault"
+SALLY_BASE="/mnt/sallyport"
+
+# ---------------------------------------------------------
+#  SCAN FOR WALLETS
+# ---------------------------------------------------------
+MENU_OPTIONS=()
+
+for coin in bitcoin litecoin dogecoin ethers monero; do
+    if [ -d "$VAULT_BASE/$coin" ]; then
+        while IFS= read -r dir; do
+            FULL_ADDR=$(basename "$dir")
+            
+            # --- FILTER OUT SYSTEM FOLDERS ---
+            case "$FULL_ADDR" in
+                "blocks"|"chainstate"|"database"|"wallets"|"indexes"|"backups") continue ;;
+            esac
+            
+            # Shortening logic
+            if [ ${#FULL_ADDR} -gt 15 ]; then
+                SHORT_ADDR="${FULL_ADDR:0:6}...${FULL_ADDR: -6}"
+            else
+                SHORT_ADDR="$FULL_ADDR"
+            fi
+            
+            # Tag (Hidden) | Item (Visible)
+            MENU_OPTIONS+=("$coin/$FULL_ADDR" "[$coin] $SHORT_ADDR")
+            
+        done < <(find "$VAULT_BASE/$coin" -mindepth 1 -maxdepth 1 -type d)
+    fi
+done
+
+# ---------------------------------------------------------
+#  DISPLAY MENU
+# ---------------------------------------------------------
+if [ ${#MENU_OPTIONS[@]} -eq 0 ]; then
+    whiptail --title " Delete Wallets " --fb --msgbox "\nNo wallets found in Vault." 10 50
+    /usr/local/bin/os/main_menu
+    exit 0
+fi
+
+# ADDED --notags TO HIDE THE LEFT COLUMN
+CHOICE=$(whiptail --title " Delete Wallet " \
+                  --fb \
+                  --notags \
+                  --ok-button "Delete" \
+                  --cancel-button "Cancel" \
+                  --menu "\nSELECT A WALLET TO PERMANENTLY REMOVE:" \
+                  16 50 6 \
+                  "${MENU_OPTIONS[@]}" \
+                  3>&1 1>&2 2>&3)
+
+if [ $? -ne 0 ]; then
+    /usr/local/bin/os/main_menu
+    exit 0
+fi
+
+# ---------------------------------------------------------
+#  EXECUTE DELETION
+# ---------------------------------------------------------
+COIN_TYPE=$(echo "$CHOICE" | cut -d'/' -f1)
+WALLET_ADDR=$(echo "$CHOICE" | cut -d'/' -f2)
+DISPLAY_ADDR="${WALLET_ADDR:0:6}...${WALLET_ADDR: -6}"
+
+if whiptail --title " CONFIRM DELETION " --fb --yesno "Are you sure you want to delete:\n\n$DISPLAY_ADDR ($COIN_TYPE)\n\nThis will nuke keys AND watch-only info." 12 50; then
+    
+    rm -rf "$VAULT_BASE/$COIN_TYPE/$WALLET_ADDR"
+    
+    SALLY_COIN="$COIN_TYPE"
+    [ "$COIN_TYPE" == "ethers" ] && SALLY_COIN="ethereum"
+    rm -rf "$SALLY_BASE/watch_$SALLY_COIN/$WALLET_ADDR"
+    
+    sync
+    whiptail --title " Success " --fb --msgbox "Wallet wiped and synced." 10 50
+fi
+
+/usr/local/bin/os/main_menu

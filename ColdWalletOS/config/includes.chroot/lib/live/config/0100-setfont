@@ -1,0 +1,3 @@
+#!/bin/sh
+
+setfont /usr/share/consolefonts/Lat2-TerminusBold32x16.psf.gz

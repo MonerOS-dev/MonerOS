@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# Ensure we can find cryptsetup/mount/etc
+export PATH=$PATH:/usr/sbin:/sbin
+
+# Stop kernel messages from interrupting the UI
+sudo dmesg -n 3
+
+# --- SECURITY LOCKDOWN ---
+# This ignores Ctrl+C (SIGINT) and Termination (SIGTERM)
+# The empty quotes tell the script to do absolutely nothing when these are pressed.
+trap "" SIGINT SIGTERM
+
+# Disables the interrupt key at the terminal level (extra layer)
+stty intr undef
+# -------------------------
+
+# UI Styling
+export TERM=linux
+stty sane
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# 1. Customized Unmount Sequence for CWOS
+{
+    # A. Close the Sallyport (VeraCrypt)
+    echo 20; sudo veracrypt -d 2>/dev/null
+    
+    # B. Unmount the Vault (LUKS)
+    echo 40; sudo umount /mnt/vault 2>/dev/null
+    
+    # C. Close the LUKS Mapper (cwos_unlocked)
+    echo 60; sudo cryptsetup close cwos_unlocked 2>/dev/null
+    
+    # D. Unmount the external physical drive
+    echo 80; sudo umount /mnt/external 2>/dev/null
+    
+    # E. Final Sync
+    echo 100; sleep 1; sync
+} | whiptail --title " Locking ColdWalletOS " --fb --nocancel --gauge "\nSafely closing Vaults, Sallyports, and External Drives..." 8 50 0
+
+# Re-enable interrupt key just before power down (good practice)
+stty intr ^C
+
+sudo shutdown -h now
