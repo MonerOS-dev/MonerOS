@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-BASE_DIR="$HOME/GithubRepos/ColdWalletOS_Project/ColdWalletOS"
+BASE_DIR="$HOME/MonerOS_Project/ColdWalletOS/"
 cd $BASE_DIR
 
 echo "[INFO] Starting ColdWalletOS build..."
@@ -10,10 +10,10 @@ echo "[INFO] Starting ColdWalletOS build..."
 convert $HOME/hwos_mods/cwos_splash.png \
         -flip \
         -colors 14 \
-        $HOME/GithubRepos/ColdWalletOS_Project/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
+        $HOME/MonerOS_Project/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
-FILE="$HOME/GithubRepos/ColdWalletOS_Project/ColdWalletOS/config/includes.chroot/usr/local/bin/cwversion"
+FILE="$HOME/MonerOS_Project/ColdWalletOS/config/includes.chroot/usr/local/bin/cwversion"
 FULL_STRING=$(cat "$FILE" | tr -d '\r\n' | xargs)
 PREFIX=$(echo "$FULL_STRING" | sed -E 's/[0-9]+$//')
 VERSION_PART=$(echo "$FULL_STRING" | grep -oE '[0-9]+$')
