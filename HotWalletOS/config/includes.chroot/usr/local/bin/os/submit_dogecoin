@@ -2,7 +2,8 @@
 
 # --- Configuration ---
 BASE_DIR="/mnt/sallyport/watch_dogecoin"
-RPC_URL="https://api.blockcypher.com/v1/doge/main/txs/push"
+# UPDATED: Using SoChain broadcast endpoint for DOGE
+RPC_URL="https://chain.so/api/v2/send_tx/DOGE"
 LOG_FILE="/tmp/logs/submit_doge.log"
 
 # --- Debug Mode ---
@@ -18,7 +19,7 @@ log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-echo "Submitting signed Dogecoin Transactions via Public API"
+echo "Submitting signed Dogecoin Transactions via SoChain API"
 
 # 1. Search for .json files with the doge prefix
 TX_LIST=$(find "$BASE_DIR" -type f -name "signed_doge_*.json" | sort -t '_' -k3 -n)
@@ -61,33 +62,36 @@ for TX_PATH in $TX_LIST; do
             echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
         fi
 
-        # 3. Broadcast via CURL to Dogecoin endpoint
+        # 3. Broadcast via CURL
+        # NOTE: SoChain expects a JSON object with the key "tx_hex"
         RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
-            --data "{\"tx\":\"$RAW_HEX\"}" \
+            --data "{\"tx_hex\":\"$RAW_HEX\"}" \
             "$RPC_URL")
 
         if [ "$DEBUG" = true ]; then
             echo "API Response: $RESPONSE"
         fi
 
-        # 4. Check for Success (BlockCypher returns the hash in the 'tx' object)
-        TX_HASH=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('tx', {}).get('hash', ''))" 2>/dev/null)
+        # 4. Check for Success
+        # SoChain returns {"status":"success", "data":{"txid":"..."}}
+        STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', ''))" 2>/dev/null)
+        TX_HASH=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('data', {}).get('txid', ''))" 2>/dev/null)
 
-        if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "" ] && [ "$TX_HASH" != "None" ]; then
+        if [ "$STATUS" = "success" ] && [ -n "$TX_HASH" ] && [ "$TX_HASH" != "None" ]; then
             echo "[OK] $SIGNED_FILE ($ADDR_ID)"
             log_msg "SUCCESS: $SIGNED_FILE | Hash: $TX_HASH"
             ((S_COUNT++))
             
-            # Cleanup: Delete the signed file and its unsigned manifest parent
+            # Cleanup
             rm -f "$TX_PATH"
             find "$DIR" -name "$UNSIGNED_PATTERN" -delete
             
             SUCCESS_FLAG=true
             break 
         else
-            # Extract Error Message
-            ERR=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('error', 'Unknown API Error'))" 2>/dev/null)
+            # Extract Error Message from SoChain (usually in data -> message or data -> error_message)
+            ERR=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin).get('data', {}); print(data.get('error_message', data.get('message', 'Unknown API Error')))" 2>/dev/null)
             
             echo "[FAILED ATTEMPT $ATTEMPT] $SIGNED_FILE ($ERR)"
             
@@ -104,7 +108,6 @@ for TX_PATH in $TX_LIST; do
         fi
     done
 
-    # Small pause between separate transactions to respect API rate limits
     sleep 2
 done
 

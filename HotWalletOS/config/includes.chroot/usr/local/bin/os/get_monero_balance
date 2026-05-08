@@ -22,7 +22,7 @@ else
     exit 1
 fi
 
-# --- CONNECTION CHECK START ---
+# --- CONNECTION & CONDITIONAL RECOVERY START ---
 MAX_RETRIES=3
 RETRY_COUNT=0
 CONNECTED=false
@@ -30,24 +30,58 @@ CONNECTED=false
 echo "Checking connection to Monero Node ($REMOTE_NODE) via Tor..."
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    # -m 15: 15 second timeout per attempt
-    # -s: silent, -f: fail on error, --socks5-hostname: use Tor proxy
+    # 1. Attempt Connection
     if curl -m 15 -s -f --socks5-hostname "$TOR_PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
         echo "Successfully connected to the node."
         CONNECTED=true
         break
     else
         RETRY_COUNT=$((RETRY_COUNT + 1))
-        echo "Connection attempt $RETRY_COUNT failed. Retrying in 30 seconds..."
-        sleep 30
+        echo "Attempt $RETRY_COUNT failed."
+
+        # 2. Sequential "Soft" Fixes
+        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "Refreshing Tor circuits (SIGHUP) and retrying in 15s..."
+            sudo killall -HUP tor
+            sleep 15
+        fi
     fi
 done
 
+# 3. CRITICAL FAILURE RECOVERY (The "Last Resort")
+# Only runs if the above loop failed completely.
 if [ "$CONNECTED" = false ]; then
-    echo "FAILURE: Node unreachable via Tor after $MAX_RETRIES attempts. Exiting script."
+    echo "Connection failed. Initiating deep recovery..."
+
+    # Re-sync time ONLY now, because if Tor is failing, 
+    # certificate expiration due to clock skew is a likely culprit.
+    echo "Emergency time sync..."
+    TIME=$(curl -sI --connect-timeout 5 http://deb.debian.org | grep -i '^Date:' | cut -d' ' -f2-)
+    if [ -n "$TIME" ]; then
+        sudo date -s "$TIME" > /dev/null
+        sudo hwclock --systohc
+        echo "Clock re-verified."
+    fi
+
+    # Full service reset
+    echo "Restarting Tor service..."
+    sudo systemctl restart tor
+    
+    echo "Waiting 25s for circuit establishment..."
+    sleep 25
+    
+    # Final "Hail Mary" attempt
+    if curl -m 30 -s -f --socks5-hostname "$TOR_PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
+        echo "Deep recovery successful! Connection established."
+        CONNECTED=true
+    fi
+fi
+
+if [ "$CONNECTED" = false ]; then
+    echo "FAILURE: Connection unreachable after time-sync and service reset."
     exit 1
 fi
-# --- CONNECTION CHECK END ---
+# --- CONNECTION & CONDITIONAL RECOVERY END ---
 
 for dir in "$BASE_DIR"/*/; do
     # 'watchonly' is the filename inside each folder

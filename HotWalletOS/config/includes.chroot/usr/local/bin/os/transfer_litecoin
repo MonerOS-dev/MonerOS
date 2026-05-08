@@ -4,7 +4,7 @@
 WATCH_DIR="/mnt/sallyport/watch_litecoin"
 BACKEND_DIR="/var/www/backend/Litecoin"
 CONFIG_FILE="/home/user/password.cfg"
-TIP_ADDRESS="LRcEXTZRkF2JS94tm12mSLMtV1KWoVF1Gv"
+TIP_ADDRESS="LfxcYRpa754ChaSKBe4fKWqwYCoqNi9nGt"
 LOG_FILE="/tmp/transfer_ltc.log"
 
 # Arguments
@@ -29,7 +29,7 @@ if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
 fi
 
 # 2. Balance Fetch
-BALANCE_FILE="${BACKEND_DIR}/${ADDRESS}_unlocked.txt"
+BALANCE_FILE="${BACKEND_DIR}/ltc_${ADDRESS}_unlocked.txt"
 if [ -f "$BALANCE_FILE" ]; then
     CURRENT_BALANCE=$(tr -d '\n\r ' < "$BALANCE_FILE")
 else
@@ -52,48 +52,38 @@ else
     export CALC_SWEEP=false
 fi
 
-# 3. Fetch UTXOs
-# Fix: Pass includeScript=true to avoid the N+1 API call bottleneck
-export UTXO_JSON=$(curl -s "https://api.blockcypher.com/v1/ltc/main/addrs/${ADDRESS}?unspentOnly=true&includeScript=true")
+# 3. Fetch UTXOs (UPDATED: Using LitecoinSpace API)
+# This endpoint returns all unspent outputs with scriptpubkey included
+export UTXO_JSON=$(curl -s "https://litecoinspace.org/api/address/${ADDRESS}/utxo")
 
-if [[ -z "$UTXO_JSON" || "$UTXO_JSON" == *"error"* ]]; then
+if [[ -z "$UTXO_JSON" || "$UTXO_JSON" == "[]" || "$UTXO_JSON" == *"error"* ]]; then
     echo "FAILURE: Could not reach Litecoin API or address empty."
     exit 1
 fi
 
 export MAIN_SAT TIP_SAT FEE_SAT DEST ADDRESS TIP_ADDRESS
 
-# 4. Python Logic (Restored to Full Length)
+# 4. Python Logic (Cleaned up for LitecoinSpace/Esplora format)
 PYTHON_LOGIC=$(cat <<EOF
-import json, sys, urllib.request, os
-
-# This function is now a backup since includeScript=true handles most cases
-def get_full_tx_script(txid, vout):
-    try:
-        url = f"https://api.blockcypher.com/v1/ltc/main/txs/{txid}?limit=1000"
-        with urllib.request.urlopen(url) as response:
-            data = json.loads(response.read().decode())
-            return data['outputs'][vout]['script']
-    except:
-        return ""
+import json, sys, os
 
 try:
-    raw_json = os.environ.get('UTXO_JSON', '{}')
-    data = json.loads(raw_json)
-    utxos = data.get('txrefs', [])
+    data = json.loads(os.environ.get('UTXO_JSON', '[]'))
     
     selected_in = []
     total_in = 0
     
-    for u in utxos:
-        # Use the script from the initial fetch if available to prevent rate limits
-        script_hex = u.get('script') 
+    for u in data:
+        # LitecoinSpace/Esplora fields: txid, vout, status, value, scriptpubkey
+        script_hex = u.get('status', {}).get('scriptpubkey') or u.get('scriptpubkey')
+        
+        # Ensure we have the scriptpubkey (required for signing)
         if not script_hex:
-            script_hex = get_full_tx_script(u['tx_hash'], u['tx_output_n'])
+            continue
             
         selected_in.append({
-            "txid": u['tx_hash'],
-            "vout": u['tx_output_n'],
+            "txid": u['txid'],
+            "vout": u['vout'],
             "script": script_hex,
             "value": u['value']
         })
@@ -125,13 +115,11 @@ try:
         "fee": fee_req
     }
     
-    # Only add tip if it's above the dust limit
     if final_tip > dust_limit:
         manifest["outputs"].append({"address": os.environ.get('TIP_ADDRESS'), "value": final_tip})
     
     if os.environ.get('CALC_SWEEP') == 'false':
         change = total_in - final_main - final_tip - fee_req
-        # Only add change output if it's not dust
         if change > dust_limit:
             manifest["outputs"].append({"address": os.environ.get('ADDRESS'), "value": change})
 

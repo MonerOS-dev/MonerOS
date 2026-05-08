@@ -42,6 +42,7 @@ for TX_PATH in $TX_LIST; do
     ADDR_ID=$(basename "$DIR")
     
     cd "$DIR" || { echo "[FAILED] $SIGNED_FILE (Directory error)"; ((F_COUNT++)); continue; }
+    rm -f "outputs.bin"
     cp "$SIGNED_FILE" "signed_monero_tx"
 
     SUCCESS_FLAG="/tmp/tx_success_$TIMESTAMP"

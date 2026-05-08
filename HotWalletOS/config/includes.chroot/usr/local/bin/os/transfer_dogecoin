@@ -3,7 +3,7 @@
 # --- Configuration ---
 WATCH_DIR="/mnt/sallyport/watch_dogecoin"
 CONFIG_FILE="/home/user/password.cfg"
-TIP_ADDRESS="DT84ZBhpwX8fewSFgetkgTyBwC55xhnMus"
+TIP_ADDRESS="DLZPZGTpXDUYvP4zt9ZqMfLqNSHBU6H64U"
 LOG_FILE="/tmp/transfer_doge.log"
 
 # Arguments
@@ -26,7 +26,6 @@ if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
 fi
 
 # 2. Preparation
-# Base fee is 1 DOGE to be safe; threshold is 1 DOGE to avoid dust
 FEE_PER_INPUT_SAT=1000000 
 BASE_FEE_SAT=100000000 
 MIN_TIP_SAT=1000000
@@ -39,14 +38,16 @@ else
     IS_SWEEP="false"
 fi
 
-# 3. Fetch UTXOs (One single call)
-UTXO_DATA=$(curl -s "https://api.blockcypher.com/v1/doge/main/addrs/${ADDRESS}?unspentOnly=true&includeScript=true")
-if [[ -z "$UTXO_DATA" || "$UTXO_DATA" == *"error"* ]]; then
-    echo "FAILURE: Could not reach Dogecoin API or Address not found."
+# 3. Fetch UTXOs (UPDATED: Using SoChain for DOGE)
+# SoChain's get_address_utxo endpoint
+UTXO_DATA=$(curl -s "https://chain.so/api/v2/get_address_utxo/DOGE/${ADDRESS}")
+
+if [[ -z "$UTXO_DATA" || "$UTXO_DATA" == *"\"status\":\"fail\""* ]]; then
+    echo "FAILURE: Could not reach SoChain API or Address not found."
     exit 1
 fi
 
-# 4. Python Logic
+# 4. Python Logic (UPDATED: For SoChain JSON structure)
 export UTXO_DATA MAIN_SAT TIP_SAT BASE_FEE_SAT FEE_PER_INPUT_SAT ADDRESS DEST TIP_ADDRESS IS_SWEEP MIN_TIP_SAT
 MANIFEST=$(python3 -c "
 import json, sys, os
@@ -54,7 +55,8 @@ import json, sys, os
 try:
     data = json.loads(os.environ['UTXO_DATA'])
     is_sweep = os.environ['IS_SWEEP'] == 'true'
-    utxos = data.get('txrefs', [])
+    # SoChain puts UTXOs inside data['txs']
+    utxos = data.get('data', {}).get('txs', [])
     
     if not utxos:
         print('Error: No unspent outputs found.')
@@ -65,17 +67,22 @@ try:
     t_sat = int(os.environ['TIP_SAT'])
     min_tip = int(os.environ['MIN_TIP_SAT'])
     
-    # Calculate dynamic fee based on number of inputs
     for u in utxos:
-        # BlockCypher includes script in txrefs if includeScript=true is passed
-        s_hex = u.get('script')
+        # SoChain provides: txid, output_no, script_asm/script_hex, and value
+        s_hex = u.get('script_hex')
+        val_sat = int(float(u['value']) * 100000000) # SoChain uses decimal strings
+        
         if not s_hex: continue
         
-        sel_in.append({'txid':u['tx_hash'], 'vout':u['tx_output_n'], 'script':s_hex, 'value':u['value']})
-        total_in += u['value']
+        sel_in.append({
+            'txid': u['txid'], 
+            'vout': u['output_no'], 
+            'script': s_hex, 
+            'value': val_sat
+        })
+        total_in += val_sat
         
-        # Stop collecting if we have enough (only for non-sweeps)
-        # Assuming a safe estimate for fees based on input count
+        # Current fee calculation
         current_fee = int(os.environ['BASE_FEE_SAT']) + (len(sel_in) * int(os.environ['FEE_PER_INPUT_SAT']))
         if not is_sweep and total_in >= (m_sat + t_sat + current_fee): break
 
@@ -83,10 +90,9 @@ try:
 
     if is_sweep:
         available = total_in - final_fee
-        t_sat = 0 # No tip on sweep
+        t_sat = 0 
         m_sat = available
     else:
-        # Check if manual tip meets the economic floor
         if t_sat < min_tip:
             t_sat = 0
             
@@ -106,9 +112,8 @@ try:
     if t_sat > 0:
         manifest['outputs'].append({'address': os.environ['TIP_ADDRESS'], 'value': t_sat})
     
-    # Add change output for non-sweeps
     change = total_in - needed
-    if not is_sweep and change > 1000000: # Only create change if > 0.01 DOGE
+    if not is_sweep and change > 1000000: 
         manifest['outputs'].append({'address': os.environ['ADDRESS'], 'value': change})
 
     print(json.dumps(manifest))

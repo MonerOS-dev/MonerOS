@@ -13,30 +13,42 @@ BACKEND_DIR="/var/www/backend/Litecoin"
 
 # --- Configuration ---
 MAX_RETRIES=3
-RETRY_DELAY=20  # 20 seconds apart as requested
+RETRY_DELAY=20  # 20 seconds apart
 mkdir -p "$BACKEND_DIR"
 
 fetch_balance_online() {
     local addr=$1
     local attempt=1
-    local result=""
 
     while [ $attempt -le $MAX_RETRIES ]; do
-        # Fetching from BlockCypher API
-        # final_balance is returned in Satoshis
-        result=$(curl -s "https://api.blockcypher.com/v1/ltc/main/addrs/${addr}/balance")
-        
-        # Extract balance using grep and perl regex (stays light on dependencies)
-        local balance_sat=$(echo "$result" | grep -oP '"final_balance":\s*\K\d+')
+        local result=$(curl -s "https://litecoinspace.org/api/address/${addr}")
 
-        if [ -n "$balance_sat" ]; then
-            # Convert Satoshis to LTC (8 decimal places)
-            local balance_ltc=$(awk "BEGIN {printf \"%.8f\", $balance_sat / 100000000}")
+        # Extract values using sed to ensure we get clean integers
+        local funded=$(echo "$result" | sed -n 's/.*"funded_txo_sum":\([0-9]*\).*/\1/p')
+        local spent=$(echo "$result" | sed -n 's/.*"spent_txo_sum":\([0-9]*\).*/\1/p')
+        
+        # Pull mempool stats (unconfirmed)
+        local m_funded=$(echo "$result" | sed -n 's/.*"mempool_stats":{[^}]*"funded_txo_sum":\([0-9]*\).*/\1/p')
+        local m_spent=$(echo "$result" | sed -n 's/.*"mempool_stats":{[^}]*"spent_txo_sum":\([0-9]*\).*/\1/p')
+
+        # Fallback to 0 if variables are empty to prevent syntax errors
+        funded=${funded:-0}
+        spent=${spent:-0}
+        m_funded=${m_funded:-0}
+        m_spent=${m_spent:-0}
+
+        # Validate that we actually got a response from the API
+        if [ "$result" != "" ] && [[ "$funded" =~ ^[0-9]+$ ]]; then
+            # Calculate total satoshis
+            local total_sat=$(( funded + m_funded - spent - m_spent ))
+            
+            # Convert Satoshis to LTC using awk
+            local balance_ltc=$(awk -v sat="$total_sat" 'BEGIN {printf "%.8f", sat / 100000000}')
             echo "$balance_ltc"
             return 0
         fi
 
-        echo "Attempt $attempt failed for $addr. Retrying in ${RETRY_DELAY}s..." >&2
+        echo "Attempt $attempt failed for $addr. Retrying..." >&2
         attempt=$((attempt + 1))
         [ $attempt -le $MAX_RETRIES ] && sleep $RETRY_DELAY
     done

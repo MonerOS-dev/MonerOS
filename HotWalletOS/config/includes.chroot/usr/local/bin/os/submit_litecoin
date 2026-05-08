@@ -2,7 +2,8 @@
 
 # --- Configuration ---
 BASE_DIR="/mnt/sallyport/watch_litecoin"
-RPC_URL="https://api.blockcypher.com/v1/ltc/main/txs/push"
+# UPDATED: Using LitecoinSpace (Mempool) broadcast endpoint
+RPC_URL="https://litecoinspace.org/api/tx"
 LOG_FILE="/tmp/logs/submit_ltc.log"
 
 # --- Debug Mode ---
@@ -18,9 +19,9 @@ log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-echo "Submitting signed Litecoin Transactions via Public API"
+echo "Submitting signed Litecoin Transactions via LitecoinSpace API"
 
-# 1. UPDATED: Search for .json files with the ltc prefix
+# 1. Search for .json files with the ltc prefix
 TX_LIST=$(find "$BASE_DIR" -type f -name "signed_ltc_*.json" | sort -t '_' -k3 -n)
 
 if [ -z "$TX_LIST" ]; then
@@ -31,7 +32,6 @@ fi
 for TX_PATH in $TX_LIST; do
     DIR=$(dirname "$TX_PATH")
     SIGNED_FILE=$(basename "$TX_PATH")
-    # UPDATED: Match the pattern replacement for cleanup
     UNSIGNED_PATTERN=$(echo "$SIGNED_FILE" | sed 's/signed_ltc_/unsigned_ltc_/')
     ADDR_ID=$(basename "$DIR")
 
@@ -40,7 +40,7 @@ for TX_PATH in $TX_LIST; do
         echo "Processing: $SIGNED_FILE ($ADDR_ID)"
     fi
 
-    # 2. Extract the raw hex string from the JSON structure
+    # 2. Extract the raw hex string
     RAW_HEX=$(python3 -c "import sys, json; print(json.load(open('$TX_PATH')).get('hex', ''))" 2>/dev/null)
 
     if [ -z "$RAW_HEX" ]; then
@@ -61,20 +61,20 @@ for TX_PATH in $TX_LIST; do
         fi
 
         # 3. Broadcast via CURL
-        RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            --data "{\"tx\":\"$RAW_HEX\"}" \
-            "$RPC_URL")
+        # NOTE: Mempool/LitecoinSpace expects raw text (the hex) as the POST body, not JSON
+        RESPONSE=$(curl -s -X POST --data "$RAW_HEX" "$RPC_URL")
 
         if [ "$DEBUG" = true ]; then
             echo "API Response: $RESPONSE"
         fi
 
         # 4. Check for Success
-        TX_HASH=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('tx', {}).get('hash', ''))" 2>/dev/null)
-
-        if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "" ] && [ "$TX_HASH" != "None" ]; then
+        # LitecoinSpace returns the TXID as a plain string on success.
+        # A valid TXID is a 64-character hex string.
+        if [[ "$RESPONSE" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            TX_HASH=$RESPONSE
             echo "[OK] $SIGNED_FILE ($ADDR_ID)"
+            echo "TXID: $TX_HASH"
             log_msg "SUCCESS: $SIGNED_FILE | Hash: $TX_HASH"
             ((S_COUNT++))
             
@@ -85,9 +85,8 @@ for TX_PATH in $TX_LIST; do
             SUCCESS_FLAG=true
             break 
         else
-            # Extract Error Message
-            ERR=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('error', 'Unknown API Error'))" 2>/dev/null)
-            
+            # If it's not a 64-char hex string, the response is the error message
+            ERR=$RESPONSE
             echo "[FAILED ATTEMPT $ATTEMPT] $SIGNED_FILE ($ERR)"
             
             if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
