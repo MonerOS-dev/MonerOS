@@ -1,6 +1,18 @@
 #!/bin/sh
-# Reset UFW and set strict production policies
+set -e
+
+# 1. Reset and set policies (writes to /etc/ufw/ default files)
+# Using --force to avoid interactive prompts
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
-ufw --force enable
+
+# 2. DO NOT RUN 'ufw enable'. Instead, manually flip the master switch 
+# in the configuration file so it starts on the user's first boot.
+sed -i 's/ENABLED=no/ENABLED=yes/' /etc/ufw/ufw.conf
+
+# 3. Ensure the systemd service is enabled
+# This ensures that when the ISO boots, the service starts and reads the config
+if [ -d /run/systemd/system ]; then
+    systemctl enable ufw
+fi

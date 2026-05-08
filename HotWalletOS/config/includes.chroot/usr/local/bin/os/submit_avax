@@ -2,11 +2,17 @@
 
 # --- Configuration ---
 BASE_DIR="/mnt/sallyport/watch_avalanche"
-RPC_URL="https://api.avax.network/ext/bc/C/rpc"
 LOG_FILE="/tmp/logs/submit_avax.log"
 
+# Avalanche C-Chain RPC Pool
+RPC_URLS=(
+    "https://api.avax.network/ext/bc/C/rpc"
+    "https://avalanche.drpc.org"
+    "https://1rpc.io/avax/c"
+    "https://rpc.ankr.com/avalanche"
+)
+
 # --- Debug Mode ---
-# If true, shows full CURL responses and internal parsing
 DEBUG=true
 
 # Counters
@@ -19,10 +25,9 @@ log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-echo "Submitting signed Avalanche Transactions"
+echo "Submitting signed Avalanche Transactions via RPC Pool"
 
 # 1. Find and sort all signed transactions
-# Sorting by the timestamp part of the filename (e.g., _1774538255_)
 TX_LIST=$(find "$BASE_DIR" -type f -name "signed_tx_*.json" | sort -t '_' -k3 -n)
 
 if [ -z "$TX_LIST" ]; then
@@ -33,7 +38,6 @@ fi
 for TX_PATH in $TX_LIST; do
     DIR=$(dirname "$TX_PATH")
     SIGNED_FILE=$(basename "$TX_PATH")
-    # Derived from signed_tx_123_main.json -> unsigned_tx_123_main.json
     UNSIGNED_FILE=$(echo "$SIGNED_FILE" | sed 's/signed_tx_/unsigned_tx_/')
     ADDR_ID=$(basename "$DIR")
 
@@ -42,7 +46,7 @@ for TX_PATH in $TX_LIST; do
         echo "Processing: $SIGNED_FILE ($ADDR_ID)"
     fi
 
-    # 2. Extract the 'raw' hex string from the JSON
+    # 2. Extract the 'raw' hex string
     RAW_HEX=$(python3 -c "import json; print(json.load(open('$TX_PATH'))['raw'])" 2>/dev/null)
 
     if [ -z "$RAW_HEX" ]; then
@@ -51,71 +55,80 @@ for TX_PATH in $TX_LIST; do
         continue
     fi
 
-    # --- Retry Logic Variables ---
-    ATTEMPT=1
-    MAX_ATTEMPTS=5
-    RETRY_DELAY=20
+    # --- Retry Logic with RPC Failover ---
     SUCCESS_FLAG=false
-
-    while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-        if [ "$DEBUG" = true ] && [ $ATTEMPT -gt 1 ]; then
-            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
-        fi
-
-        # 3. Broadcast via JSON-RPC
-        # Avalanche C-Chain uses the same eth_sendRawTransaction method
-        RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_sendRawTransaction\",\"params\":[\"$RAW_HEX\"],\"id\":1}" \
-            "$RPC_URL")
-
-        if [ "$DEBUG" = true ]; then
-            echo "RPC Response: $RESPONSE"
-        fi
-
-        # 4. Check for Success (Result should be a 0x transaction hash)
-        TX_HASH=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('result', ''))" 2>/dev/null)
-
-        if [[ "$TX_HASH" == 0x* ]]; then
-            echo "[OK] $SIGNED_FILE ($ADDR_ID)"
-            log_msg "SUCCESS: $SIGNED_FILE | Hash: $TX_HASH"
-            ((S_COUNT++))
-            
-            # Cleanup
-            rm -f "$TX_PATH"
-            if [ -f "$DIR/$UNSIGNED_FILE" ]; then
-                rm -f "$DIR/$UNSIGNED_FILE"
+    
+    for CURRENT_RPC in "${RPC_URLS[@]}"; do
+        ATTEMPT=1
+        MAX_ATTEMPTS=2
+        
+        while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            if [ "$DEBUG" = true ]; then
+                echo "Trying RPC: $CURRENT_RPC (Attempt $ATTEMPT)"
             fi
-            
-            SUCCESS_FLAG=true
-            break # Exit the retry loop on success
-        else
-            # Extract Error Message
-            ERR=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); data_err=data.get('error', {}); print(data_err.get('message', 'Unknown RPC Error') if isinstance(data_err, dict) else data_err)" 2>/dev/null)
-            
-            echo "[FAILED ATTEMPT $ATTEMPT] $SIGNED_FILE ($ERR)"
-            
-            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-                echo "Waiting $RETRY_DELAY seconds before next attempt..."
-                sleep $RETRY_DELAY
-                ((ATTEMPT++))
+
+            # 3. Broadcast via JSON-RPC
+            # Added --connect-timeout to avoid hanging on a dead node
+            RESPONSE=$(curl -s -X POST \
+                -H "Content-Type: application/json" \
+                -A "Mozilla/5.0" \
+                --connect-timeout 10 \
+                --max-time 20 \
+                --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_sendRawTransaction\",\"params\":[\"$RAW_HEX\"],\"id\":1}" \
+                "$CURRENT_RPC")
+
+            # Check for Proxy/Network errors
+            if [ -z "$RESPONSE" ] || [[ "$RESPONSE" == *"upstream"* ]] || [[ "$RESPONSE" == *"Connection refused"* ]]; then
+                echo "[NETWORK ERROR] RPC $CURRENT_RPC failed to respond."
+                break # Move to next RPC in the for loop
+            fi
+
+            TX_HASH=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('result', ''))" 2>/dev/null)
+
+            # 4. Success Check
+            if [[ "$TX_HASH" == 0x* ]]; then
+                echo "[OK] $SIGNED_FILE | Hash: $TX_HASH"
+                log_msg "SUCCESS: $SIGNED_FILE | Hash: $TX_HASH | RPC: $CURRENT_RPC"
+                ((S_COUNT++))
+                
+                rm -f "$TX_PATH"
+                [ -f "$DIR/$UNSIGNED_FILE" ] && rm -f "$DIR/$UNSIGNED_FILE"
+                
+                SUCCESS_FLAG=true
+                break 2 # Success! Exit both loops
             else
-                # Final failure after all retries
-                echo "[FINAL FAILURE] $SIGNED_FILE ($ERR)"
-                log_msg "FAILED: $SIGNED_FILE | Error: $ERR after $MAX_ATTEMPTS attempts"
-                ((F_COUNT++))
-                break
+                # Extract Error Message
+                ERR=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); data_err=data.get('error', {}); print(data_err.get('message', 'Unknown RPC Error') if isinstance(data_err, dict) else data_err)" 2>/dev/null)
+                
+                # Handle "Already Known" or "Nonce too low" (common on retries)
+                if [[ "$ERR" == *"already known"* ]] || [[ "$ERR" == *"nonce too low"* ]] || [[ "$ERR" == *"already indexed"* ]]; then
+                    echo "[ALREADY SUBMITTED] $SIGNED_FILE"
+                    log_msg "ALREADY KNOWN: $SIGNED_FILE (RPC: $CURRENT_RPC)"
+                    ((S_COUNT++))
+                    rm -f "$TX_PATH"
+                    [ -f "$DIR/$UNSIGNED_FILE" ] && rm -f "$DIR/$UNSIGNED_FILE"
+                    SUCCESS_FLAG=true
+                    break 2
+                fi
+
+                echo "[FAILED ATTEMPT] RPC: $CURRENT_RPC | Error: $ERR"
+                sleep 2
+                ((ATTEMPT++))
             fi
-        fi
+        done
+        
+        [ "$SUCCESS_FLAG" = true ] && break
     done
 
-    # Small delay between different files
-    sleep 2
+    if [ "$SUCCESS_FLAG" = false ]; then
+        echo "[FINAL FAILURE] $SIGNED_FILE could not be submitted."
+        log_msg "FAILED: $SIGNED_FILE after trying all RPCs"
+        ((F_COUNT++))
+    fi
+
+    # Avalanche is fast; 1s is usually enough between TXs
+    sleep 1
 done
 
 echo "------------------------------------------------"
-if [ "$F_COUNT" -eq 0 ]; then
-    echo "SUMMARY_SUCCESS: $S_COUNT processed"
-else
-    echo "SUMMARY_FAILURE: $S_COUNT ok, $F_COUNT failed"
-fi
+[ "$F_COUNT" -eq 0 ] && echo "SUMMARY_SUCCESS: $S_COUNT processed" || echo "SUMMARY_FAILURE: $S_COUNT ok, $F_COUNT failed"

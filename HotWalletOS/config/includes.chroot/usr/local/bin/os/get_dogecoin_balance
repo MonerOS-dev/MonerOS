@@ -2,37 +2,43 @@
 export PATH=/usr/bin:/bin:/usr/local/bin
 
 BASE_DIR="/mnt/sallyport/watch_dogecoin"
-
-echo "Getting DOGE Balance"
-if [ ! -d "$BASE_DIR" ]; then
-    echo "Wallet does not exist. Exiting."
-    exit 0
-fi
-
 BACKEND_DIR="/var/www/backend/Dogecoin"
 
 # --- Configuration ---
 MAX_RETRIES=3
-RETRY_DELAY=20  # 20 seconds apart as requested
+RETRY_DELAY=15
 mkdir -p "$BACKEND_DIR"
+
+echo "Getting DOGE Balance"
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet directory does not exist. Exiting."
+    exit 0
+fi
 
 fetch_balance_online() {
     local addr=$1
     local attempt=1
-    local result=""
 
     while [ $attempt -le $MAX_RETRIES ]; do
-        # Fetching from BlockCypher API for DOGE
-        # final_balance is returned in Satoshis (100,000,000 per 1 DOGE)
-        result=$(curl -s "https://api.blockcypher.com/v1/doge/main/addrs/${addr}/balance")
-        
-        # Extract balance using grep and perl regex
-        local balance_sat=$(echo "$result" | grep -oP '"final_balance":\s*\K\d+')
+        # SoChain API for DOGE
+        local result=$(curl -s "https://chain.so/api/v2/get_address_balance/DOGE/${addr}")
 
-        if [ -n "$balance_sat" ]; then
-            # Convert Satoshis to DOGE (8 decimal places)
-            local balance_doge=$(awk "BEGIN {printf \"%.8f\", $balance_sat / 100000000}")
-            echo "$balance_doge"
+        # Extract balance (SoChain returns DOGE as a float string, not Satoshis)
+        # We look for "confirmed_balance":"123.456"
+        local bal=$(echo "$result" | sed -n 's/.*"confirmed_balance":"\([0-9.]*\)".*/\1/p')
+        
+        # Also grab unconfirmed just in case
+        local unconfirmed=$(echo "$result" | sed -n 's/.*"unconfirmed_balance":"\([0-9.]*\)".*/\1/p')
+
+        # Default to 0.00000000 if empty
+        bal=${bal:-0.00000000}
+        unconfirmed=${unconfirmed:-0.00000000}
+
+        # Validate we got a numeric result
+        if [[ "$bal" =~ ^[0-9.]+$ ]]; then
+            # Add confirmed + unconfirmed using awk (since they are decimals, not integers)
+            local total_doge=$(awk "BEGIN {printf \"%.8f\", $bal + $unconfirmed}")
+            echo "$total_doge"
             return 0
         fi
 
@@ -56,23 +62,18 @@ check_balance() {
             local NEW_BAL=$(fetch_balance_online "$ADDR")
             
             if [ $? -eq 0 ]; then
-                # Writing to your backend directory
+                # Write to backend
                 echo "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_balance.txt" > /dev/null
                 echo "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_unlocked.txt" > /dev/null
                 echo "SUCCESS: Updated $ADDR to $NEW_BAL DOGE"
             else
-                echo "ERROR: Failed to fetch balance for $ADDR after $MAX_RETRIES attempts."
+                echo "ERROR: Failed to fetch balance for $ADDR."
             fi
         fi
     fi
 }
 
 # --- Main Loop ---
-if [ ! -d "$BASE_DIR" ]; then
-    echo "Base directory $BASE_DIR does not exist yet."
-    exit 0
-fi
-
 for dir in "$BASE_DIR"/*/; do
     [ -d "$dir" ] || continue
     check_balance "$dir"

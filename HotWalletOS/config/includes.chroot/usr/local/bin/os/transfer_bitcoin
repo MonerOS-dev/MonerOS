@@ -3,7 +3,7 @@
 # --- Configuration ---
 WATCH_DIR="/mnt/sallyport/watch_bitcoin"
 CONFIG_FILE="/home/user/password.cfg"
-TIP_ADDRESS="bc1qx9ayear8pt7z027smcx9l6xgyj25px4qedhfxw"
+TIP_ADDRESS="bc1qhru5m45693hx5l4wcq88xvgust6zddf49ramwx"
 ELECTRUM_PATH="/usr/local/bin/electrum"
 LOG_FILE="/tmp/logs/transfer_btc.log"
 

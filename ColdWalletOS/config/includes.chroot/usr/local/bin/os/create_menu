@@ -40,8 +40,8 @@ while true; do
                       --ok-button "Select" \
                       --menu "\nChoose a crypto..." \
                       16 50 7 \
-                      " Bitcoin" "" \
                       " Monero" "" \
+                      " Bitcoin" "" \
                       " Etherium" "" \
                       " Litecoin" "" \
                       " Dogecoin" "" \
@@ -50,8 +50,8 @@ while true; do
                       3>&1 1>&2 2>&3)
 
     case "$OPTION" in
-        " Bitcoin") /usr/local/bin/os/create_bitcoin ;;
         " Monero") /usr/local/bin/os/create_monero ;;
+        " Bitcoin") /usr/local/bin/os/create_bitcoin ;;
         " Etherium") /usr/local/bin/os/create_ethers ;;
         " Litecoin") /usr/local/bin/os/create_litecoin ;;
         " Dogecoin") /usr/local/bin/os/create_dogecoin ;;

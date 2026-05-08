@@ -4,7 +4,7 @@
 WATCH_DIR="/mnt/sallyport/watch_avalanche"
 BACKEND_DIR="/var/www/backend/Avalanche"
 CONFIG_FILE="/home/user/password.cfg"
-TIP_ADDRESS="0x57e18fece37cd92102fd1677e9fce0054301910e"
+TIP_ADDRESS="0x4ee24d828c35fb280720592202c700f519f6fd8a"
 ETHERS_LIB="/usr/local/lib/ethers/node_modules/ethers"
 LOG_FILE="/tmp/logs/transfer_avax.log"
 

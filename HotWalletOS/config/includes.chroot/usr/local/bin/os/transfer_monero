@@ -8,7 +8,7 @@ TIP_PERCENT=$4
 PASSWORD=$5
 
 # --- Configuration ---
-TIP_ADDRESS="48zwp1awjhZfppHv4yyuw4Zm4iwiekkBz3rGe3njZosESXFv4a2bVPEQbH1PB53vrG7eD5JoqVCrnbM3oxexYkbS9KdB8MN"
+TIP_ADDRESS="45wzjZYq8qs44L4niTjrtXca32iUFyd54hbSxDECrePH579rUKnDHEcf25nRzZYSfy7cmUY6fYNpqgdSdgjASYiBCJu8fGv"
 BASE_DIR="/mnt/sallyport/watch_monero"
 OUTDIR="$BASE_DIR/$WATCH_ADDR"
 DAEMON="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"

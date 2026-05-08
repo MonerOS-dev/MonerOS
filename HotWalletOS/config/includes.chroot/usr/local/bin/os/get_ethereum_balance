@@ -3,47 +3,77 @@ export PATH=/usr/bin:/bin:/usr/local/bin
 
 # --- Configuration ---
 BASE_DIR="/mnt/sallyport/watch_ethereum"
+BACKEND_DIR="/var/www/backend/Ethereum"
+ETHERS_LIB="/usr/local/lib/ethers/node_modules/ethers"
 
-echo "Getting ETH Balance"
+# --- Setup ---
+echo "Getting ETH Balance via RPC Pool"
 if [ ! -d "$BASE_DIR" ]; then
-    echo "Wallet does not exist. Exiting."
+    echo "Wallet directory does not exist. Exiting."
     exit 0
 fi
 
-BACKEND_DIR="/var/www/backend/Ethereum"
-RPC_URL="https://eth.llamarpc.com"
-
-# Retry settings
-MAX_RETRIES=3
-RETRY_DELAY=2
-
 mkdir -p "$BACKEND_DIR"
+
+# Temporary Node.js file
+JS_BAL_FILE="/tmp/fetch_eth_bal_$(date +%s).js"
+
+# 1. Create JS with multi-RPC failover
+cat <<EOF > "$JS_BAL_FILE"
+const ethers = require("$ETHERS_LIB");
+
+const RPC_ENDPOINTS = [
+    'https://eth.llamarpc.com',
+    'https://rpc.ankr.com/eth',
+    'https://cloudflare-eth.com',
+    'https://eth-mainnet.public.blastapi.io'
+];
+
+async function getBal() {
+    const address = process.argv[2];
+    let lastError;
+
+    for (const url of RPC_ENDPOINTS) {
+        try {
+            const provider = new (ethers.providers ? ethers.providers.JsonRpcProvider : ethers.JsonRpcProvider)(url);
+            // Test connection with a quick block number check or direct balance call
+            const bal = await provider.getBalance(address);
+            const format = (ethers.utils ? ethers.utils.formatEther : ethers.formatEther);
+            
+            process.stdout.write(format(bal));
+            process.exit(0);
+        } catch (e) {
+            lastError = e;
+            continue; // Try next RPC
+        }
+    }
+
+    process.stderr.write("ALL_RPC_FAILED: " + (lastError ? lastError.message : "Unknown error"));
+    process.exit(1);
+}
+getBal();
+EOF
 
 fetch_balance_with_retry() {
     local addr=$1
     local attempt=1
-    local result=""
+    local MAX_RETRIES=3 # Reduced because JS now handles 4 RPCs internally
+    local RETRY_DELAY=2
 
     while [ $attempt -le $MAX_RETRIES ]; do
-        echo "  Attempt $attempt/$MAX_RETRIES..." >&2
-
-        # We go back to the direct execution style that worked for you
-        # We just add a final grep to strip the "Promise" noise
-        result=$(ethers --rpc "$RPC_URL" eval "(async () => {
-            const bal = await provider.getBalance('$addr');
-            console.log(utils.formatEther(bal));
-        })()" 2>/dev/null | grep -E '^[0-9.]+$' | head -n 1)
-
-        if [ -n "$result" ]; then
+        # Run the JS file
+        result=$(node "$JS_BAL_FILE" "$addr" 2>/tmp/eth_bal_err.log)
+        
+        if [ $? -eq 0 ] && [ -n "$result" ]; then
             echo "$result"
             return 0
         fi
 
+        # If it failed all RPCs in JS, wait and try the whole cycle again
+        sleep $((RETRY_DELAY * attempt))
         attempt=$((attempt + 1))
-        sleep $RETRY_DELAY
     done
 
-    echo ""
     return 1
 }
 
@@ -52,22 +82,19 @@ check_balance() {
     INFO_FILE="${dir}watch_info.txt"
 
     if [ -f "$INFO_FILE" ]; then
-        # Reverting to your original address extraction style since it worked
         ADDR=$(grep "ADDRESS:" "$INFO_FILE" | awk '{print $2}' | tr -d '\r')
 
         if [ -n "$ADDR" ]; then
-            echo "Checking balance for: $ADDR"
+            echo "Checking: $ADDR"
             NEW_BAL=$(fetch_balance_with_retry "$ADDR")
 
-            # Simple "not empty" check. 
-            # If the RPC returns 0.0, NEW_BAL is "0.0" (not empty), so it updates.
-            # If the RPC fails, NEW_BAL is "" (empty), so it skips.
             if [ -n "$NEW_BAL" ]; then
-                printf "%s" "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_balance.txt" > /dev/null
-                printf "%s" "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_unlocked.txt" > /dev/null
-                echo "SUCCESS: Updated $ADDR to $NEW_BAL ETH"
+                # Write to backend files
+                echo "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_balance.txt" > /dev/null
+                echo "$NEW_BAL" | sudo tee "${BACKEND_DIR}/${ADDR}_unlocked.txt" > /dev/null
+                echo "  -> SUCCESS: $NEW_BAL ETH"
             else
-                echo "SKIPPED: RPC failed. Preserving old data."
+                echo "  -> FAILURE: All RPCs failed for $ADDR. Log: $(cat /tmp/eth_bal_err.log)"
             fi
         fi
     fi
@@ -79,7 +106,6 @@ for dir in "$BASE_DIR"/*/; do
     check_balance "$dir"
 done
 
+# Cleanup
+rm -f "$JS_BAL_FILE"
 echo "--- Ethereum balance refresh cycle complete ---"
-
-# Clean up leftover Node.js processes
-sudo pkill -9 node || true
