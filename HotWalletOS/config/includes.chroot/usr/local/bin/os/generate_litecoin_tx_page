@@ -188,14 +188,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         select {
-            color: #008f11 !important;
-            border-color: #222;
-            background: rgba(0, 0, 0, 0.8);
+            appearance: none;
+            -webkit-appearance: none; /* Required for Surf/WebKit */
+            -moz-appearance: none;
+            
+            /* Match the Read-Only Address exactly */
+            color: #008f11 !important; 
+            background: rgba(0, 0, 0, 0.8) !important;
+            
+            /* Silver border to match other inputs */
+            border: 2px solid #333 !important;
+            border-radius: 2px;
+            
+            padding: 12px;
+            width: 100%;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 0.95rem;
+
+            /* Silver Arrow Icon */
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e8e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 1rem center;
+            background-size: 1em;
         }
         
+        /* This forces the dropdown menu in Surf/GTK to stay dark */
         select option {
-            background: #0a0a0a;
-            color: #ffffff;
+            background-color: #0a0a0a !important;
+            color: #008f11 !important;
+        }
+
+        /* Prevents the bright green "glow" on click, keeps it silver */
+        select:focus {
+            outline: none;
+            border-color: #444 !important;
+            box-shadow: none !important;
+        }
+
+        /* Essential for Surf/WebKitGTK to prevent white-out during interaction */
+        select:active, select:hover {
+            background-color: #050505 !important;
         }
     
         .response { margin-top: 15px; padding: 15px; border: 2px solid; border-radius: 4px; }

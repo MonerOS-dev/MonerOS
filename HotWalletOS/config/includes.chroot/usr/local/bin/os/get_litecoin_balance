@@ -21,28 +21,28 @@ fetch_balance_online() {
     local attempt=1
 
     while [ $attempt -le $MAX_RETRIES ]; do
-        local result=$(curl -s "https://litecoinspace.org/api/address/${addr}")
+        # Use -f to fail on server errors
+        local result=$(curl -sf "https://litecoinspace.org/api/address/${addr}")
 
-        # Extract values using sed to ensure we get clean integers
-        local funded=$(echo "$result" | sed -n 's/.*"funded_txo_sum":\([0-9]*\).*/\1/p')
-        local spent=$(echo "$result" | sed -n 's/.*"spent_txo_sum":\([0-9]*\).*/\1/p')
-        
-        # Pull mempool stats (unconfirmed)
-        local m_funded=$(echo "$result" | sed -n 's/.*"mempool_stats":{[^}]*"funded_txo_sum":\([0-9]*\).*/\1/p')
-        local m_spent=$(echo "$result" | sed -n 's/.*"mempool_stats":{[^}]*"spent_txo_sum":\([0-9]*\).*/\1/p')
+        if [ -n "$result" ]; then
+            # Extract numbers by looking for the key and grabbing the following digits
+            # This is safer than the previous regex
+            local funded=$(echo "$result" | sed 's/.*"chain_stats":{[^}]*"funded_txo_sum":\([0-9]*\).*/\1/')
+            local spent=$(echo "$result" | sed 's/.*"chain_stats":{[^}]*"spent_txo_sum":\([0-9]*\).*/\1/')
+            local m_funded=$(echo "$result" | sed 's/.*"mempool_stats":{[^}]*"funded_txo_sum":\([0-9]*\).*/\1/')
+            local m_spent=$(echo "$result" | sed 's/.*"mempool_stats":{[^}]*"spent_txo_sum":\([0-9]*\).*/\1/')
 
-        # Fallback to 0 if variables are empty to prevent syntax errors
-        funded=${funded:-0}
-        spent=${spent:-0}
-        m_funded=${m_funded:-0}
-        m_spent=${m_spent:-0}
+            # Validate extraction: if sed fails to find a match, it returns the whole string. 
+            # We reset to 0 if the result isn't a pure number.
+            [[ ! "$funded" =~ ^[0-9]+$ ]] && funded=0
+            [[ ! "$spent" =~ ^[0-9]+$ ]] && spent=0
+            [[ ! "$m_funded" =~ ^[0-9]+$ ]] && m_funded=0
+            [[ ! "$m_spent" =~ ^[0-9]+$ ]] && m_spent=0
 
-        # Validate that we actually got a response from the API
-        if [ "$result" != "" ] && [[ "$funded" =~ ^[0-9]+$ ]]; then
-            # Calculate total satoshis
+            # Calculate total satoshis (Litoshi)
             local total_sat=$(( funded + m_funded - spent - m_spent ))
             
-            # Convert Satoshis to LTC using awk
+            # Convert to LTC
             local balance_ltc=$(awk -v sat="$total_sat" 'BEGIN {printf "%.8f", sat / 100000000}')
             echo "$balance_ltc"
             return 0

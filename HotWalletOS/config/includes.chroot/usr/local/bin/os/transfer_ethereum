@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# sweep_all will not send tip. spends all the gas to send main and try to clear it
+
 # --- Configuration ---
 WATCH_DIR="/mnt/sallyport/watch_ethereum"
 BACKEND_DIR="/var/www/backend/Ethereum"

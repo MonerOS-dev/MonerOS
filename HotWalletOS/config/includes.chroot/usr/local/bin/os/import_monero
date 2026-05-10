@@ -30,39 +30,37 @@ else
     exit 1
 fi
 
-# --- FIXED CONNECTION & RECOVERY START ---
-MAX_RETRIES=3
-RETRY_COUNT=0
+# --- RESILIENT CONNECTION & RECOVERY START ---
 CONNECTED=false
+ATTEMPT=0
 
-# CRITICAL FIX: The variable name was wrong in the previous version
-# We will use PROXY to match your top definition
 echo "Checking connection to Monero Node ($REMOTE_NODE) via Tor..."
 
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    # Attempt Connection using the CORRECT variable name
-    # We use 'socks5h' to ensure Tor handles the DNS resolution
-    if curl -m 30 -s -f --proxy "socks5h://$PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
-        echo "Successfully connected to the node."
-        CONNECTED=true
-        break
-    else
-        RETRY_COUNT=$((RETRY_COUNT + 1))
-        echo "Attempt $RETRY_COUNT failed."
+while [ "$CONNECTED" = false ]; do
+    ATTEMPT=$((ATTEMPT + 1))
 
-        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-            echo "Restarting Tor service and waiting 60s for circuit establishment..."
+    # Attempt Connection using socks5h (Tor handles DNS)
+    if curl -m 45 -s -f --proxy "socks5h://$PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
+        echo "Successfully connected to the node on attempt $ATTEMPT."
+        CONNECTED=true
+    else
+        echo "Attempt $ATTEMPT failed. Node unreachable."
+
+        # Alternating Recovery Logic
+        if (( ATTEMPT % 2 != 0 )); then
+            # Odd attempts: Soft Reset (Refresh Circuits)
+            echo "Refreshing Tor circuits (SIGHUP) and retrying in 15s..."
+            sudo killall -HUP tor 2>/dev/null || sudo systemctl reload tor
+            sleep 15
+        else
+            # Even attempts: Hard Reset (Restart Service)
+            echo "Restarting Tor service and waiting 60s for full bootstrap..."
             sudo systemctl restart tor
             sleep 60
         fi
     fi
 done
-
-if [ "$CONNECTED" = false ]; then
-    echo "FAILURE: Connection unreachable after service restarts."
-    exit 1
-fi
-# --- FIXED CONNECTION & RECOVERY END ---
+# --- RESILIENT CONNECTION & RECOVERY END ---
 
 for dir in "$BASE_DIR"/*/; do
     if [ -f "${dir}watch_info.txt" ]; then

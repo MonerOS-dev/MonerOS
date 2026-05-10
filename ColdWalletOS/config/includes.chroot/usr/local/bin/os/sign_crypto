@@ -39,19 +39,19 @@ msg() {
 sudo /usr/local/bin/os/sign_monero
 
 # Sign Ethereum
-sudo /usr/local/bin/os/sign_ethers
+#sudo /usr/local/bin/os/sign_ethers
 
 # Sign Avalanche
-sudo /usr/local/bin/os/sign_avax
+#sudo /usr/local/bin/os/sign_avax
 
 # Sign Avalanche
-sudo /usr/local/bin/os/sign_bitcoin
+#sudo /usr/local/bin/os/sign_bitcoin
 
 # Sign litecoin
-sudo /usr/local/bin/os/sign_litecoin
+#sudo /usr/local/bin/os/sign_litecoin
 
 # Sign dogecoin
-sudo /usr/local/bin/os/sign_dogecoin
+#sudo /usr/local/bin/os/sign_dogecoin
 
 msg "Signing complete. Return to menu."
 exec /usr/local/bin/os/main_menu
