@@ -3,7 +3,8 @@
 # --- Configuration ---
 BASE_DIR="/mnt/sallyport/watch_monero"
 PASS_FILE="/home/user/password.cfg"
-DAEMON="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
+NODE_CACHE_FILE="/home/user/monero_node.txt"
+DAEMON=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
 PROXY="127.0.0.1:9050"
 KEY_IMAGES="key_images.bin"
 
