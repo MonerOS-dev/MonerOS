@@ -197,11 +197,11 @@ fi
     
     
 sudo bash /usr/local/bin/os/import_monero || true
-sudo bash /usr/local/bin/os/import_ethereum || true
-sudo bash /usr/local/bin/os/import_avax || true
-sudo bash /usr/local/bin/os/import_bitcoin || true
-sudo bash /usr/local/bin/os/import_litecoin || true
-sudo bash /usr/local/bin/os/import_dogecoin || true
+#sudo bash /usr/local/bin/os/import_ethereum || true
+#sudo bash /usr/local/bin/os/import_avax || true
+#sudo bash /usr/local/bin/os/import_bitcoin || true
+#sudo bash /usr/local/bin/os/import_litecoin || true
+#sudo bash /usr/local/bin/os/import_dogecoin || true
 
 
 echo "Getting Balances..."

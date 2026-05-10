@@ -16,7 +16,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
 <html lang="en">
 <head>
     <?php if ($shutdown_triggered): ?>
-    <meta http-equiv="refresh" content="1;url=index.php">
+    <meta http-equiv="refresh" content="5;url=index.php">
     <?php endif; ?>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">

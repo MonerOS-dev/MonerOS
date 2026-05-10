@@ -25,10 +25,9 @@ if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
     exit 1
 fi
 
-# 2. Preparation
-FEE_PER_INPUT_SAT=1000000 
-BASE_FEE_SAT=100000000 
-MIN_TIP_SAT=1000000
+# 2. Preparation & Sweep Logic
+FEE_SAT=10000000 
+THRESHOLD_SAT=1000000000
 
 if [[ "$AMOUNT" == "sweep_all" ]]; then
     MAIN_SAT=0; TIP_SAT=0; IS_SWEEP="true"
@@ -38,98 +37,65 @@ else
     IS_SWEEP="false"
 fi
 
-# 3. Fetch UTXOs (UPDATED: Using SoChain for DOGE)
-# SoChain's get_address_utxo endpoint
-UTXO_DATA=$(curl -s "https://chain.so/api/v2/get_address_utxo/DOGE/${ADDRESS}")
-
-if [[ -z "$UTXO_DATA" || "$UTXO_DATA" == *"\"status\":\"fail\""* ]]; then
-    echo "FAILURE: Could not reach SoChain API or Address not found."
+# 3. Fetch UTXOs
+UTXO_DATA=$(curl -s "https://api.blockcypher.com/v1/doge/main/addrs/${ADDRESS}?unspentOnly=true")
+if [[ -z "$UTXO_DATA" || "$UTXO_DATA" == *"error"* ]]; then
+    echo "FAILURE: Could not reach Dogecoin API."
     exit 1
 fi
 
-# 4. Python Logic (UPDATED: For SoChain JSON structure)
-export UTXO_DATA MAIN_SAT TIP_SAT BASE_FEE_SAT FEE_PER_INPUT_SAT ADDRESS DEST TIP_ADDRESS IS_SWEEP MIN_TIP_SAT
+# 4. Python Logic
+export UTXO_DATA MAIN_SAT TIP_SAT FEE_SAT ADDRESS DEST TIP_ADDRESS IS_SWEEP TIP_PERCENT THRESHOLD_SAT
 MANIFEST=$(python3 -c "
-import json, sys, os
-
+import json, sys, urllib.request, os
+def get_script(txid, vout):
+    try:
+        url = f'https://api.blockcypher.com/v1/doge/main/txs/{txid}?limit=1000'
+        with urllib.request.urlopen(url) as r:
+            return json.loads(r.read().decode())['outputs'][vout]['script']
+    except: return ''
 try:
     data = json.loads(os.environ['UTXO_DATA'])
+    f_sat, threshold, tip_pct = int(os.environ['FEE_SAT']), int(os.environ['THRESHOLD_SAT']), float(os.environ['TIP_PERCENT'])
     is_sweep = os.environ['IS_SWEEP'] == 'true'
-    # SoChain puts UTXOs inside data['txs']
-    utxos = data.get('data', {}).get('txs', [])
-    
-    if not utxos:
-        print('Error: No unspent outputs found.')
-        sys.exit(1)
-
+    utxos = data.get('txrefs', [])
     sel_in, total_in = [], 0
-    m_sat = int(os.environ['MAIN_SAT'])
-    t_sat = int(os.environ['TIP_SAT'])
-    min_tip = int(os.environ['MIN_TIP_SAT'])
-    
     for u in utxos:
-        # SoChain provides: txid, output_no, script_asm/script_hex, and value
-        s_hex = u.get('script_hex')
-        val_sat = int(float(u['value']) * 100000000) # SoChain uses decimal strings
-        
+        s_hex = get_script(u['tx_hash'], u['tx_output_n'])
         if not s_hex: continue
-        
-        sel_in.append({
-            'txid': u['txid'], 
-            'vout': u['output_no'], 
-            'script': s_hex, 
-            'value': val_sat
-        })
-        total_in += val_sat
-        
-        # Current fee calculation
-        current_fee = int(os.environ['BASE_FEE_SAT']) + (len(sel_in) * int(os.environ['FEE_PER_INPUT_SAT']))
-        if not is_sweep and total_in >= (m_sat + t_sat + current_fee): break
-
-    final_fee = int(os.environ['BASE_FEE_SAT']) + (len(sel_in) * int(os.environ['FEE_PER_INPUT_SAT']))
-
+        sel_in.append({'txid':u['tx_hash'], 'vout':u['tx_output_n'], 'script':s_hex, 'value':u['value']})
+        total_in += u['value']
+        if not is_sweep and total_in >= (int(os.environ['MAIN_SAT']) + int(os.environ['TIP_SAT']) + f_sat): break
     if is_sweep:
-        available = total_in - final_fee
-        t_sat = 0 
-        m_sat = available
-    else:
-        if t_sat < min_tip:
-            t_sat = 0
+        # Step 1: Remove fee from total immediately
+        available = total_in - f_sat
+        
+        # Step 2: FORCE TIP TO ZERO FOR SWEEPS
+        t_sat = 0
             
-    needed = m_sat + t_sat + final_fee
-    
-    if total_in < needed or m_sat <= 0:
-        sys.exit(1)
-
-    manifest = {
-        'network': 'dogecoin-mainnet',
-        'from': os.environ['ADDRESS'],
-        'inputs': sel_in,
-        'outputs': [{'address': os.environ['DEST'], 'value': m_sat}],
-        'fee': final_fee
-    }
-    
-    if t_sat > 0:
-        manifest['outputs'].append({'address': os.environ['TIP_ADDRESS'], 'value': t_sat})
-    
-    change = total_in - needed
-    if not is_sweep and change > 1000000: 
-        manifest['outputs'].append({'address': os.environ['ADDRESS'], 'value': change})
-
+        # Step 3: Main gets EVERY REMAINING SATOSHI
+        m_sat = available - t_sat
+    else:
+        m_sat, t_sat = int(os.environ['MAIN_SAT']), int(os.environ['TIP_SAT'])
+    needed = m_sat + t_sat + f_sat
+    if total_in < needed or m_sat <= 0: sys.exit(1)
+    manifest = {'network': 'dogecoin-mainnet', 'from': os.environ['ADDRESS'], 'inputs': sel_in, 'outputs': [{'address': os.environ['DEST'], 'value': m_sat}], 'fee': f_sat}
+    if t_sat > 1000000: manifest['outputs'].append({'address': os.environ['TIP_ADDRESS'], 'value': t_sat})
+    if not is_sweep and (total_in - needed) > 0: manifest['outputs'].append({'address': os.environ['ADDRESS'], 'value': (total_in - needed)})
     print(json.dumps(manifest))
-except Exception as e:
-    sys.exit(1)
+except: sys.exit(1)
 ")
 
 # 5. Final Output
-if [[ $? -eq 0 && -n "$MANIFEST" ]]; then
+if [[ $? -eq 0 ]]; then
     FILE_NAME="unsigned_doge_${TIMESTAMP}.json"
     echo "$MANIFEST" > "${WALLET_DIR}/${FILE_NAME}"
+    chmod 666 "${WALLET_DIR}/${FILE_NAME}"
     
     echo "SUCCESS: Created ${FILE_NAME}"
     echo "NEXT: Sign this manifest on your cold-storage device."
     echo "[$(date)] SUCCESS: $ADDRESS (Sweep: $IS_SWEEP)" >> "$LOG_FILE" 2>/dev/null
 else
-    echo "FAILURE: Transaction creation failed. Likely insufficient funds for amount + fee."
+    echo "FAILURE: Transaction creation failed. Check balance or API."
     exit 1
 fi

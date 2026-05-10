@@ -113,24 +113,6 @@ lb config \
   --debian-installer none \
   --apt-recommends true \
   --bootappend-live "boot=live components locales=en_US.UTF-8 live-media-label=HotWalletOS live-media-path=/hw_sys"
-  
-# --- 3.5. FETCH EXTERNAL BINARIES (AVALANCHE) since GitHub limits files to 100MB ---
-BIN_DEST="${BASE_DIR}/config/includes.chroot/usr/local/bin"
-mkdir -p "$BIN_DEST"
-
-if [ ! -f "$BIN_DEST/avalanche" ]; then
-    echo "[INFO] Avalanche binary not found. Attempting download..."
-    if ! curl -sSfL https://raw.githubusercontent.com/ava-labs/avalanche-cli/main/scripts/install.sh | sh -s -- -b "$BIN_DEST"; then
-        echo "[CRITICAL] Failed to download Avalanche binary! Aborting build."
-        exit 1
-    fi
-fi
-
-# DOUBLE CHECK: Fail if it's still not there after the attempt
-if [ ! -f "$BIN_DEST/avalanche" ]; then
-    echo "[CRITICAL] Avalanche binary is missing and could not be retrieved. Build stopped."
-    exit 1
-fi
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build

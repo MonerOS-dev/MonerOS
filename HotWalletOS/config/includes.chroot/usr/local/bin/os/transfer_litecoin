@@ -20,18 +20,17 @@ mkdir -p "$WALLET_DIR"
 
 log_msg() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LTC-ADDR: $ADDRESS] $1" >> "$LOG_FILE" 2>/dev/null; }
 
-# 1. Verification
+# 1. Password Verification
 STORED_PASS=$(cat "$CONFIG_FILE" | tr -d '\r\n' | xargs)
 if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
     echo "FAILURE: Incorrect Wallet Password."
-    log_msg "Auth Failure"
     exit 1
 fi
 
-# 2. Balance Fetch
-BALANCE_FILE="${BACKEND_DIR}/ltc_${ADDRESS}_unlocked.txt"
+# 2. Balance / Math Preparation
+BALANCE_FILE="${BACKEND_DIR}/${ADDRESS}_unlocked.txt"
 if [ -f "$BALANCE_FILE" ]; then
-    CURRENT_BALANCE=$(tr -d '\n\r ' < "$BALANCE_FILE")
+    CURRENT_BALANCE=$(cat "$BALANCE_FILE" | tr -d '\n\r ' | sed 's/[^0-9.]//g')
 else
     CURRENT_BALANCE="0"
 fi
@@ -39,8 +38,9 @@ fi
 FEE_SAT=40000 
 
 if [[ "$AMOUNT" == "sweep_all" ]]; then
+    # Using bc for comparison
     if (( $(echo "$CURRENT_BALANCE >= 0.015" | bc -l) )); then
-        TIP_SAT=$(python3 -c "print(int(float('$CURRENT_BALANCE') * 100000000 * ($TIP_PERCENT / 100)))")
+        TIP_SAT=$(python3 -c "print(int(float('$CURRENT_BALANCE') * 100000000 * (float('$TIP_PERCENT') / 100)))")
     else
         TIP_SAT=0
     fi
@@ -52,97 +52,97 @@ else
     export CALC_SWEEP=false
 fi
 
-# 3. Fetch UTXOs (UPDATED: Using LitecoinSpace API)
-# This endpoint returns all unspent outputs with scriptpubkey included
-export UTXO_JSON=$(curl -s "https://litecoinspace.org/api/address/${ADDRESS}/utxo")
+# 3. Fetch UTXOs from LitecoinSpace (No rate limits like BlockCypher)
+export UTXO_JSON=$(curl -s -f --connect-timeout 10 "https://litecoinspace.org/api/address/${ADDRESS}/utxo")
 
-if [[ -z "$UTXO_JSON" || "$UTXO_JSON" == "[]" || "$UTXO_JSON" == *"error"* ]]; then
-    echo "FAILURE: Could not reach Litecoin API or address empty."
+if [[ -z "$UTXO_JSON" || "$UTXO_JSON" == "[]" ]]; then
+    echo "FAILURE: API Empty. No coins found at $ADDRESS."
+    exit 1
+fi
+
+# 4. Extract ScriptPubKey via Secondary LitecoinSpace Call
+# We grab the first TXID to get the script (works for standard wallets)
+TXID=$(python3 -c "import json, os; print(json.loads(os.environ['UTXO_JSON'])[0]['txid'])")
+VOUT=$(python3 -c "import json, os; print(json.loads(os.environ['UTXO_JSON'])[0]['vout'])")
+
+TX_DATA=$(curl -s -f "https://litecoinspace.org/api/tx/${TXID}")
+export SCRIPT_PUBKEY=$(python3 -c "import json, sys; d=json.loads(sys.stdin.read()); print(d['vout'][$VOUT]['scriptpubkey'])" <<< "$TX_DATA")
+
+if [[ -z "$SCRIPT_PUBKEY" ]]; then
+    echo "FAILURE: Could not retrieve scriptpubkey from LitecoinSpace."
     exit 1
 fi
 
 export MAIN_SAT TIP_SAT FEE_SAT DEST ADDRESS TIP_ADDRESS
 
-# 4. Python Logic (Cleaned up for LitecoinSpace/Esplora format)
-PYTHON_LOGIC=$(cat <<EOF
+# 5. Python Logic (Assemble the Manifest)
+MANIFEST=$(python3 -c "
 import json, sys, os
 
+def die(msg):
+    print(f'\n[ERROR] {msg}', file=sys.stderr)
+    sys.exit(1)
+
 try:
-    data = json.loads(os.environ.get('UTXO_JSON', '[]'))
+    utxos = json.loads(os.environ.get('UTXO_JSON', '[]'))
+    script = os.environ.get('SCRIPT_PUBKEY')
     
     selected_in = []
     total_in = 0
     
-    for u in data:
-        # LitecoinSpace/Esplora fields: txid, vout, status, value, scriptpubkey
-        script_hex = u.get('status', {}).get('scriptpubkey') or u.get('scriptpubkey')
-        
-        # Ensure we have the scriptpubkey (required for signing)
-        if not script_hex:
-            continue
-            
+    for u in utxos:
         selected_in.append({
-            "txid": u['txid'],
-            "vout": u['vout'],
-            "script": script_hex,
-            "value": u['value']
+            'txid': u['txid'],
+            'vout': u['vout'],
+            'script': script,
+            'value': int(u['value'])
         })
-        total_in += u['value']
+        total_in += int(u['value'])
 
     main_req = int(os.environ.get('MAIN_SAT', 0))
     tip_req = int(os.environ.get('TIP_SAT', 0))
     fee_req = int(os.environ.get('FEE_SAT', 40000))
     
-    dust_limit = 5460
-
     if os.environ.get('CALC_SWEEP') == 'true':
         final_main = total_in - tip_req - fee_req
-        final_tip = tip_req
     else:
         final_main = main_req
-        final_tip = tip_req
+    
+    final_tip = tip_req if final_main > 0 else 0
 
     if final_main <= 0:
-        sys.exit(1)
+        die(f'Insufficient funds. TotalIn:{total_in} Fee:{fee_req} Tip:{tip_req}')
 
     manifest = {
-        "network": "litecoin-mainnet",
-        "from": os.environ.get('ADDRESS'),
-        "inputs": selected_in,
-        "outputs": [
-            {"address": os.environ.get('DEST'), "value": final_main}
-        ],
-        "fee": fee_req
+        'network': 'litecoin-mainnet',
+        'from': os.environ.get('ADDRESS'),
+        'inputs': selected_in,
+        'outputs': [{'address': os.environ.get('DEST'), 'value': final_main}],
+        'fee': fee_req
     }
     
-    if final_tip > dust_limit:
-        manifest["outputs"].append({"address": os.environ.get('TIP_ADDRESS'), "value": final_tip})
+    if final_tip > 5460:
+        manifest['outputs'].append({'address': os.environ.get('TIP_ADDRESS'), 'value': final_tip})
     
     if os.environ.get('CALC_SWEEP') == 'false':
         change = total_in - final_main - final_tip - fee_req
-        if change > dust_limit:
-            manifest["outputs"].append({"address": os.environ.get('ADDRESS'), "value": change})
+        if change > 5460:
+            manifest['outputs'].append({'address': os.environ.get('ADDRESS'), 'value': change})
 
     print(json.dumps(manifest))
 except Exception as e:
-    sys.exit(1)
-EOF
-)
-
-MANIFEST=$(python3 -c "$PYTHON_LOGIC")
+    die(f'Logic Crash: {str(e)}')
+")
 
 if [[ $? -ne 0 ]]; then
-    echo "FAILURE: Transaction creation failed. Check balance or API."
-    log_msg "Selection Error"
     exit 1
 fi
 
-# 5. Save and Simple Output
+# 6. Final Save
 TIMESTAMP=$(date +%s)
 FILE_NAME="unsigned_ltc_${TIMESTAMP}.json"
 echo "$MANIFEST" > "${WALLET_DIR}/${FILE_NAME}"
 chmod 666 "${WALLET_DIR}/${FILE_NAME}"
 
 echo "SUCCESS: Created ${FILE_NAME}"
-echo "NEXT: Sign this manifest on your cold-storage device."
-log_msg "SUCCESS: Generated Manifest ${FILE_NAME}"
+log_msg "SUCCESS: ${FILE_NAME}"

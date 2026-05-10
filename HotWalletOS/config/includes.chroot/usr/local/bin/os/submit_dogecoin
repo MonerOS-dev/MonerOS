@@ -2,26 +2,19 @@
 
 # --- Configuration ---
 BASE_DIR="/mnt/sallyport/watch_dogecoin"
-# UPDATED: Using SoChain broadcast endpoint for DOGE
-RPC_URL="https://chain.so/api/v2/send_tx/DOGE"
+# Using Blockchair's Push API - usually very friendly to headless scripts
+RPC_URL="https://api.blockchair.com/dogecoin/push/transaction"
 LOG_FILE="/tmp/logs/submit_doge.log"
 
-# --- Debug Mode ---
 DEBUG=true
-
-# Counters
 S_COUNT=0
 F_COUNT=0
 
 mkdir -p "$(dirname "$LOG_FILE")"
+log_msg() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; }
 
-log_msg() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
-}
+echo "Submitting Doge Transactions via Blockchair API"
 
-echo "Submitting signed Dogecoin Transactions via SoChain API"
-
-# 1. Search for .json files with the doge prefix
 TX_LIST=$(find "$BASE_DIR" -type f -name "signed_doge_*.json" | sort -t '_' -k3 -n)
 
 if [ -z "$TX_LIST" ]; then
@@ -32,88 +25,48 @@ fi
 for TX_PATH in $TX_LIST; do
     DIR=$(dirname "$TX_PATH")
     SIGNED_FILE=$(basename "$TX_PATH")
-    
-    # Match the pattern replacement for cleanup (signed -> unsigned)
     UNSIGNED_PATTERN=$(echo "$SIGNED_FILE" | sed 's/signed_doge_/unsigned_doge_/')
-    ADDR_ID=$(basename "$DIR")
 
-    if [ "$DEBUG" = true ]; then
-        echo "------------------------------------------------"
-        echo "Processing: $SIGNED_FILE ($ADDR_ID)"
-    fi
-
-    # 2. Extract the raw hex string from the JSON structure
+    # 1. Extract raw hex
     RAW_HEX=$(python3 -c "import sys, json; print(json.load(open('$TX_PATH')).get('hex', ''))" 2>/dev/null)
 
     if [ -z "$RAW_HEX" ]; then
-        echo "[FAILED] $SIGNED_FILE (Could not extract hex from JSON)"
+        echo "[FAILED] $SIGNED_FILE (Hex empty)"
         ((F_COUNT++))
         continue
     fi
 
-    # --- Retry Logic ---
-    ATTEMPT=1
-    MAX_ATTEMPTS=5
-    RETRY_DELAY=20
-    SUCCESS_FLAG=false
+    if [ "$DEBUG" = true ]; then echo "Broadcasting $SIGNED_FILE via Blockchair..."; fi
 
-    while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-        if [ "$DEBUG" = true ] && [ $ATTEMPT -gt 1 ]; then
-            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS..."
-        fi
+    # 2. Broadcast via Blockchair
+    # Blockchair expects a POST with a JSON body: {"data": "HEX_HERE"}
+    RESPONSE=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+        --data "{\"data\":\"$RAW_HEX\"}" \
+        "$RPC_URL")
 
-        # 3. Broadcast via CURL
-        # NOTE: SoChain expects a JSON object with the key "tx_hex"
-        RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            --data "{\"tx_hex\":\"$RAW_HEX\"}" \
-            "$RPC_URL")
+    # 3. Check for Success
+    # Blockchair returns {"data": {"transaction_hash": "..."}}
+    TXID=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('data', {}).get('transaction_hash', ''))" 2>/dev/null)
 
-        if [ "$DEBUG" = true ]; then
-            echo "API Response: $RESPONSE"
-        fi
-
-        # 4. Check for Success
-        # SoChain returns {"status":"success", "data":{"txid":"..."}}
-        STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', ''))" 2>/dev/null)
-        TX_HASH=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('data', {}).get('txid', ''))" 2>/dev/null)
-
-        if [ "$STATUS" = "success" ] && [ -n "$TX_HASH" ] && [ "$TX_HASH" != "None" ]; then
-            echo "[OK] $SIGNED_FILE ($ADDR_ID)"
-            log_msg "SUCCESS: $SIGNED_FILE | Hash: $TX_HASH"
-            ((S_COUNT++))
-            
-            # Cleanup
-            rm -f "$TX_PATH"
-            find "$DIR" -name "$UNSIGNED_PATTERN" -delete
-            
-            SUCCESS_FLAG=true
-            break 
-        else
-            # Extract Error Message from SoChain (usually in data -> message or data -> error_message)
-            ERR=$(echo "$RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin).get('data', {}); print(data.get('error_message', data.get('message', 'Unknown API Error')))" 2>/dev/null)
-            
-            echo "[FAILED ATTEMPT $ATTEMPT] $SIGNED_FILE ($ERR)"
-            
-            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-                echo "Waiting $RETRY_DELAY seconds..."
-                sleep $RETRY_DELAY
-                ((ATTEMPT++))
-            else
-                echo "[FINAL FAILURE] $SIGNED_FILE ($ERR)"
-                log_msg "FAILED: $SIGNED_FILE | Error: $ERR"
-                ((F_COUNT++))
-                break
-            fi
-        fi
-    done
-
+    if [ -n "$TXID" ] && [[ ${#TXID} -eq 64 ]]; then
+        echo "[OK] $SIGNED_FILE | Hash: $TXID"
+        log_msg "SUCCESS: $SIGNED_FILE | Hash: $TXID"
+        ((S_COUNT++))
+        rm -f "$TX_PATH"
+        find "$DIR" -name "$UNSIGNED_PATTERN" -delete
+    else
+        # Extract the specific error if possible
+        ERR_MSG=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('context', {}).get('error', 'Unknown Error'))" 2>/dev/null)
+        echo "[FAILED] $SIGNED_FILE | Response: $RESPONSE"
+        log_msg "FAILED: $SIGNED_FILE | Error: $ERR_MSG"
+        ((F_COUNT++))
+    fi
+    
+    # Blockchair is generous, but let's not spam it
     sleep 2
 done
 
 echo "------------------------------------------------"
-if [ "$F_COUNT" -eq 0 ]; then
-    echo "SUMMARY_SUCCESS: $S_COUNT processed"
-else
-    echo "SUMMARY_FAILURE: $S_COUNT ok, $F_COUNT failed"
-fi
+echo "Done. Success: $S_COUNT | Failed: $F_COUNT"
