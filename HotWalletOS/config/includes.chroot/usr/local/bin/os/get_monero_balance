@@ -10,7 +10,8 @@ if [ ! -d "$BASE_DIR" ]; then
 fi
 
 PASS_FILE="/home/user/password.cfg"
-REMOTE_NODE="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
+NODE_CACHE_FILE="/home/user/monero_node.txt"
+REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
 TOR_PROXY="127.0.0.1:9050"
 BACKEND_DIR="/var/www/backend/Monero"
 

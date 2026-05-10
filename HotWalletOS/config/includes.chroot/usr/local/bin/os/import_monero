@@ -7,20 +7,37 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 BASE_DIR="/mnt/sallyport/watch_monero"
+NODE_LIST_URL="https://sourceforge.net/p/moneros/code/ci/main/tree/monero_nodes.txt?format=raw"
+NODE_CACHE_FILE="/home/user/monero_node.txt"
+HARDCODED_FALLBACK="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
+PROXY="127.0.0.1:9050"
+PASS_FILE="/home/user/password.cfg"
+BACKEND_DIR="/var/www/backend/Monero"
 
-echo "Importing Monero"
+echo "Importing Monero - Initializing Node Selection"
+
 if [ ! -d "$BASE_DIR" ]; then
-    echo "Wallet does not exist. Exiting."
+    echo "Wallet directory does not exist. Exiting."
     exit 0
 fi
 
-PASS_FILE="/home/user/password.cfg"
-BACKEND_DIR="/var/www/backend/Monero"
-REMOTE_NODE="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
-PROXY="127.0.0.1:9050"
+# --- MASTER NODE SELECTION START ---
+# Only this script performs the 'shuf' from SourceForge
+NEW_NODE=$(curl -s --socks5-hostname "$PROXY" "$NODE_LIST_URL" | sed '/^$/d' | shuf -n 1 | tr -d '\r\n ')
 
-# Ensure backend directory exists
-sudo mkdir -p "$BACKEND_DIR"
+if [ -n "$NEW_NODE" ]; then
+    echo "Successfully fetched new node from SourceForge: $NEW_NODE"
+    echo "$NEW_NODE" > "$NODE_CACHE_FILE"
+    REMOTE_NODE="$NEW_NODE"
+elif [ -f "$NODE_CACHE_FILE" ]; then
+    echo "Download failed. Using last known cached node..."
+    REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\r\n ')
+else
+    echo "No download or cache available. Using hardcoded fallback..."
+    REMOTE_NODE="$HARDCODED_FALLBACK"
+    echo "$REMOTE_NODE" > "$NODE_CACHE_FILE"
+fi
+# --- MASTER NODE SELECTION END ---
 
 # Read password
 if [ -f "$PASS_FILE" ]; then
@@ -33,34 +50,34 @@ fi
 # --- RESILIENT CONNECTION & RECOVERY START ---
 CONNECTED=false
 ATTEMPT=0
-
 echo "Checking connection to Monero Node ($REMOTE_NODE) via Tor..."
 
 while [ "$CONNECTED" = false ]; do
     ATTEMPT=$((ATTEMPT + 1))
-
-    # Attempt Connection using socks5h (Tor handles DNS)
-    if curl -m 45 -s -f --proxy "socks5h://$PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
+    if curl -m 45 -s -f --socks5-hostname "$PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
         echo "Successfully connected to the node on attempt $ATTEMPT."
         CONNECTED=true
     else
         echo "Attempt $ATTEMPT failed. Node unreachable."
+        if [ $ATTEMPT -ge 5 ]; then
+             echo "FAILURE: Selected node is down. Run script again to pick a different one."
+             exit 1
+        fi
 
-        # Alternating Recovery Logic
         if (( ATTEMPT % 2 != 0 )); then
-            # Odd attempts: Soft Reset (Refresh Circuits)
             echo "Refreshing Tor circuits (SIGHUP) and retrying in 15s..."
             sudo killall -HUP tor 2>/dev/null || sudo systemctl reload tor
             sleep 15
         else
-            # Even attempts: Hard Reset (Restart Service)
-            echo "Restarting Tor service and waiting 60s for full bootstrap..."
+            echo "Restarting Tor service and waiting 60s..."
             sudo systemctl restart tor
             sleep 60
         fi
     fi
 done
-# --- RESILIENT CONNECTION & RECOVERY END ---
+
+# Ensure backend directory exists
+sudo mkdir -p "$BACKEND_DIR"
 
 for dir in "$BASE_DIR"/*/; do
     if [ -f "${dir}watch_info.txt" ]; then
@@ -72,73 +89,48 @@ for dir in "$BASE_DIR"/*/; do
         VIEW=$(grep "VIEW_KEY:" watch_info.txt | awk '{print $2}' | tr -d '\r')
         R_DATE=$(grep "RESTORE_DATE:" watch_info.txt | awk '{print $2}' | tr -d '\r')
 
-        echo "Restoring/Updating wallet: $ADDR"
-
         if [ ! -f "watchonly.keys" ]; then
-            echo "Wallet keys not found. Importing now via Tor..."
-            
-            export REMOTE_NODE PROXY 
-
-            /usr/bin/expect <<EOF
+            echo "Importing $ADDR..."
+            export REMOTE_NODE PROXY PASSWORD ADDR VIEW R_DATE
+            /usr/bin/expect <<'EOF'
 set timeout -1
-set NODE \$env(REMOTE_NODE)
-set PRX  \$env(PROXY)
+set NODE $env(REMOTE_NODE)
+set PRX  $env(PROXY)
+set PASS $env(PASSWORD)
+set ADR  $env(ADDR)
+set VW   $env(VIEW)
+set DT   $env(R_DATE)
 
-# CRITICAL: Use the TEMP name here
-spawn monero-wallet-cli --generate-from-view-key watchonly_TEMP --daemon-address \$NODE --proxy \$PRX --trusted-daemon
-
+spawn monero-wallet-cli --generate-from-view-key watchonly_TEMP --daemon-address $NODE --proxy $PRX --trusted-daemon
 expect "Standard address:"
-send "$ADDR\r"
-
+send "$ADR\r"
 expect "Secret view key:"
-send "$VIEW\r"
-
+send "$VW\r"
 expect "Enter a new password for the wallet:"
-send "$PASSWORD\r"
-
+send "$PASS\r"
 expect "Confirm password:"
-send "$PASSWORD\r"
-
+send "$PASS\r"
 expect "*alternatively from specific date (YYYY-MM-DD):"
-send "$R_DATE\r"
-
+send "$DT\r"
 expect "*Is this okay?*"
 send "y\r"
-
 expect "*Do you want to do it now?*"
 send "n\r"
-
 expect "Background refresh thread started"
 sleep 2
 send "exit\r"
 expect eof
 EOF
 
-            # This part runs AFTER the expect script finishes
             if [ -f "watchonly_TEMP.keys" ]; then
-                echo "Success! Finalizing wallet files..."
                 mv "watchonly_TEMP.keys" "watchonly.keys"
                 [ -f "watchonly_TEMP" ] && mv "watchonly_TEMP" "watchonly"
-            else
-                echo "FAILURE: The keys were not generated correctly. Check Tor/Node connection."
-                exit 1
             fi
-
-        else
-            echo "Wallet files already exist. Skipping import step."
         fi
-        
-        echo "Creating transfer page..."
         sudo bash /usr/local/bin/os/generate_monero_tx_page "$ADDR"
     fi
 done
 
 pkill -f monero-wallet-cli 2>/dev/null || true
-
-# --- IMPORTANT ---
-# Make sure these scripts below also use the .onion address and --proxy flag!
-echo "Importing key_images (if any)..."
 sudo bash /usr/local/bin/os/refresh_monero
-
-echo "Submitting any pending transactions..."
 sudo bash /usr/local/bin/os/submit_monero
