@@ -40,16 +40,16 @@ while true; do
                       --ok-button "Select" \
                       --menu "\nChoose a selection..." \
                       16 50 4 \
-                      " Main Menu" "" \
+                      " Sign Transactions" "" \
                       " Create Wallet" "" \
                       " Delete Wallet" "" \
-                      " Sign Transactions" "" \
+                      " Main Menu" "" \
                       3>&1 1>&2 2>&3)
 
     case "$OPTION" in
-        " Main Menu") /usr/local/bin/os/main_menu ;;
+        " Sign Transactions") sudo /usr/local/bin/os/sign_crypto ;;
         " Create Wallet") /usr/local/bin/os/create_menu ;;
         " Delete Wallet") /usr/local/bin/os/delete_menu ;;
-        " Sign Transactions") sudo /usr/local/bin/os/sign_crypto ;;
+        " Main Menu") /usr/local/bin/os/main_menu ;;
     esac
 done

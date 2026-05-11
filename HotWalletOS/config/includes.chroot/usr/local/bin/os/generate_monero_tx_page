@@ -21,12 +21,19 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # 4. Create the PHP content 
-# Note: Using 'EOF' in quotes prevents Bash from mangling PHP variables like $_POST
 cat <<'EOF' > "$TARGET_FILE"
 <?php
 $address = "REPLACE_ME_ADDRESS";
 $message = "";
 $status_class = "";
+
+// Path to the unlocked balance file
+$balance_file = "/var/www/backend/Monero/{$address}_unlocked.txt";
+$unlocked_balance = "0.0000000";
+
+if (file_exists($balance_file)) {
+    $unlocked_balance = trim(file_get_contents($balance_file));
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $dest = $_POST['destination'] ?? '';
@@ -64,6 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             --silver-dark: #8e8e8e;
             --matte-black: #0a0a0a;
             --glow-green: #00ff41;
+            --monero-green: #008f11;
         }
 
         body {
@@ -121,7 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         .form-group { 
-            margin-bottom: 18px;
+            margin-bottom: 15px;
             width: 100%; 
             text-align: left;
         }
@@ -149,8 +157,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         input[readonly] { 
-            color: #008f11;
-            border-color: #222;
+            color: var(--monero-green);
+            border-color: #333;
             background: rgba(0, 0, 0, 0.8);
         }
         
@@ -201,43 +209,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         select {
             appearance: none;
-            -webkit-appearance: none; /* Required for Surf/WebKit */
+            -webkit-appearance: none;
             -moz-appearance: none;
-            
-            /* Match the Read-Only Address exactly */
             color: #008f11 !important; 
             background: rgba(0, 0, 0, 0.8) !important;
-            
-            /* Silver border to match other inputs */
             border: 2px solid #333 !important;
             border-radius: 2px;
-            
             padding: 12px;
             width: 100%;
             font-family: 'Roboto Mono', monospace;
             font-size: 0.95rem;
-
-            /* Silver Arrow Icon */
             background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e8e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
             background-repeat: no-repeat;
             background-position: right 1rem center;
             background-size: 1em;
         }
         
-        /* This forces the dropdown menu in Surf/GTK to stay dark */
         select option {
             background-color: #0a0a0a !important;
             color: #008f11 !important;
         }
 
-        /* Prevents the bright green "glow" on click, keeps it silver */
         select:focus {
             outline: none;
             border-color: #444 !important;
             box-shadow: none !important;
         }
 
-        /* Essential for Surf/WebKitGTK to prevent white-out during interaction */
         select:active, select:hover {
             background-color: #050505 !important;
         }
@@ -266,15 +264,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php else: ?>
             <form method="POST" autocomplete="off">
                 <div class="form-group">
-                    <label>From Address (Read-Only)</label>
+                    <label>Transfer From Address (Read-Only)</label>
                     <input type="text" value="<?php echo $address; ?>" readonly tabindex="-1">
                 </div>
                 <div class="form-group">
-                    <label>Destination Monero Address</label>
+                    <label>Transfer To Address</label>
                     <input type="text" name="destination" placeholder="4..." autocomplete="off" required>
                 </div>
+                
                 <div class="form-group">
-                    <label>Amount (or 'sweep_all') in XMR</label>
+                    <label>Unlocked XMR Balance (Read-Only)</label>
+                    <input type="text" value="<?php echo htmlspecialchars($unlocked_balance); ?>" readonly tabindex="-1">
+                </div>
+
+                <div class="form-group">
+                    <label>Transfer Amount in XMR</label>
                     <input type="text" name="amount" placeholder="0.5" autocomplete="off" required>
                 </div>
                 <div class="form-group">
@@ -291,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <label>Wallet Password</label>
                     <input type="password" name="password" autocomplete="new-password" required>
                 </div>
-                <button type="submit" class="btn-cmd btn-action">Create Unsigned XMR Transaction</button>
+                <button type="submit" class="btn-cmd btn-action">Create Unsigned Transaction</button>
             </form>
             <a href="index.php" class="btn-cmd btn-cancel">Cancel and Go Back</a>
         <?php endif; ?>
