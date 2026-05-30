@@ -1,124 +1,83 @@
 #!/bin/bash
+# --- /usr/local/bin/os/get_monero_balance ---
 export PATH=/usr/bin:/bin:/usr/local/bin
 
 BASE_DIR="/mnt/sallyport/watch_monero"
-
-echo "Getting XMR Balance"
-if [ ! -d "$BASE_DIR" ]; then
-    echo "Wallet does not exist. Exiting."
-    exit 0
-fi
-
-PASS_FILE="/home/user/password.cfg"
-NODE_CACHE_FILE="/home/user/monero_node.txt"
-REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
-TOR_PROXY="127.0.0.1:9050"
 BACKEND_DIR="/var/www/backend/Monero"
+sudo mkdir -p "$BACKEND_DIR"
 
-# Read password from file
-if [ -f "$PASS_FILE" ]; then
-    PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
-else
-    echo "Error: Password file not found at $PASS_FILE"
-    exit 1
-fi
+echo "Querying Persistent Monero RPC Daemons..."
 
-# --- CONNECTION & CONDITIONAL RECOVERY START ---
-MAX_RETRIES=3
-RETRY_COUNT=0
-CONNECTED=false
+for dir in "$BASE_DIR"/*/; do
+    WALLET_FILE="${dir}watchonly"
+    PORT_FILE="${dir}rpc_port.cfg"
 
-echo "Checking connection to Monero Node ($REMOTE_NODE) via Tor..."
+    # Safely skip directories that are still initializing or missing configurations
+    if [ -f "$WALLET_FILE" ] && [ -f "$PORT_FILE" ]; then
+        ADDR_ID=$(basename "$dir")
+        RPC_PORT=$(cat "$PORT_FILE" | tr -d '\n\r ')
+        BALANCE_FILE="${BACKEND_DIR}/${ADDR_ID}_balance.txt"
+        UNLOCKED_FILE="${BACKEND_DIR}/${ADDR_ID}_unlocked.txt"
+        
+        echo "--------------------------------------------------"
+        echo "Querying: $ADDR_ID on Port $RPC_PORT"
 
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    # 1. Attempt Connection
-    if curl -m 15 -s -f --socks5-hostname "$TOR_PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
-        echo "Successfully connected to the node."
-        CONNECTED=true
-        break
-    else
-        RETRY_COUNT=$((RETRY_COUNT + 1))
-        echo "Attempt $RETRY_COUNT failed."
+        # --- HARDENED POLLING HEALTH CHECK LOOP ---
+        DAEMON_ONLINE=false
+        ATTEMPT=0
+        MAX_ATTEMPTS=12  # 12 attempts * 10 seconds = 2 minutes maximum wait time
 
-        # 2. Sequential "Soft" Fixes
-        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-            echo "Refreshing Tor circuits (SIGHUP) and retrying in 15s..."
-            sudo killall -HUP tor
-            sleep 15
+        while [ "$DAEMON_ONLINE" = false ] && [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ((ATTEMPT++))
+            
+            # Request basic status verification to test if socket queue is clear
+            if curl -s -m 5 http://127.0.0.1:$RPC_PORT/json_rpc -o /dev/null; then
+                DAEMON_ONLINE=true
+            else
+                if [ $ATTEMPT -eq 1 ]; then
+                    echo "[NOTICE] Daemon on port $RPC_PORT is processing crypto data. Holding pipeline..."
+                fi
+                echo "Waiting for daemon responsiveness... (Attempt $ATTEMPT/$MAX_ATTEMPTS)"
+                sleep 10
+            fi
+        done
+
+        # If the daemon completely fails to respond after 2 minutes, skip out safely
+        if [ "$DAEMON_ONLINE" = false ]; then
+            echo "[WARNING] Daemon on port $RPC_PORT remained offline or unresponsive after $MAX_ATTEMPTS attempts. Retaining old logs."
+            continue
+        fi
+
+        # 2. Query the running daemon directly (now guaranteed responsive)
+        RPC_RESPONSE=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
+            -d '{"jsonrpc":"2.0","id":"0","method":"get_balance","params":{"account_index":0,"all_accounts":true}}')
+        
+        # 3. HARDENED EXTRACTION 
+        CLEAN_JSON=$(echo "$RPC_RESPONSE" | tr -d '\n\r ')
+        
+        # Verify JSON signature integrity to prevent wiping backend logs on empty payloads
+        if echo "$CLEAN_JSON" | grep -q '"result":'; then
+            RAW_BAL=$(echo "$CLEAN_JSON" | grep -oP '"result":\{"balance":\K[0-9]+')
+            RAW_UNL=$(echo "$CLEAN_JSON" | grep -oP '"unlocked_balance":\K[0-9]+' | tail -n1)
+
+            # Fallback values if fields parse empty
+            [ -z "$RAW_BAL" ] && RAW_BAL=0
+            [ -z "$RAW_UNL" ] && RAW_UNL=0
+
+            # 4. MATH CONVERSIONS
+            BALANCE=$(echo "scale=12; $RAW_BAL / 1000000000000" | bc | awk '{printf "%.12f\n", $0}')
+            UNLOCKED=$(echo "scale=12; $RAW_UNL / 1000000000000" | bc | awk '{printf "%.12f\n", $0}')
+
+            OLD_BALANCE="0.000000000000"
+            [ -f "$BALANCE_FILE" ] && OLD_BALANCE=$(cat "$BALANCE_FILE")
+
+            # Save updates to backend web directories
+            printf "%s" "$BALANCE" | sudo tee "$BALANCE_FILE" > /dev/null
+            printf "%s" "$UNLOCKED" | sudo tee "$UNLOCKED_FILE" > /dev/null
+
+            echo "Status: Old ($OLD_BALANCE) | New ($BALANCE)"
+        else
+            echo "[ERROR] Invalid RPC response received on port $RPC_PORT. Skipping file updates."
         fi
     fi
 done
-
-# 3. CRITICAL FAILURE RECOVERY (The "Last Resort")
-# Only runs if the above loop failed completely.
-if [ "$CONNECTED" = false ]; then
-    echo "Connection failed. Initiating deep recovery..."
-
-    # Re-sync time ONLY now, because if Tor is failing, 
-    # certificate expiration due to clock skew is a likely culprit.
-    echo "Emergency time sync..."
-    TIME=$(curl -sI --connect-timeout 5 http://deb.debian.org | grep -i '^Date:' | cut -d' ' -f2-)
-    if [ -n "$TIME" ]; then
-        sudo date -s "$TIME" > /dev/null
-        sudo hwclock --systohc
-        echo "Clock re-verified."
-    fi
-
-    # Full service reset
-    echo "Restarting Tor service..."
-    sudo systemctl restart tor
-    
-    echo "Waiting 25s for circuit establishment..."
-    sleep 25
-    
-    # Final "Hail Mary" attempt
-    if curl -m 30 -s -f --socks5-hostname "$TOR_PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
-        echo "Deep recovery successful! Connection established."
-        CONNECTED=true
-    fi
-fi
-
-if [ "$CONNECTED" = false ]; then
-    echo "FAILURE: Connection unreachable after time-sync and service reset."
-    exit 1
-fi
-# --- CONNECTION & CONDITIONAL RECOVERY END ---
-
-for dir in "$BASE_DIR"/*/; do
-    # 'watchonly' is the filename inside each folder
-    WALLET_FILE="${dir}watchonly"
-
-    if [ -f "$WALLET_FILE" ]; then
-        # Get the address from the folder name to use for the output files
-        ADDR_ID=$(basename "$dir")
-        
-        echo "--------------------------------------------------"
-        echo "Processing: $ADDR_ID"
-
-        # Capturing the full output once so we can get both balances
-        OUTPUT=$(echo -e "balance\nexit" | monero-wallet-cli \
-            --wallet-file "$WALLET_FILE" \
-            --password "$PASSWORD" \
-            --daemon-address "$REMOTE_NODE" \
-            --proxy "$TOR_PROXY" \
-            --trusted-daemon)
-
-        # Extraction logic using your exact sed/grep method
-        BALANCE=$(echo "$OUTPUT" | grep "Balance:" | sed -n 's/.*Balance: \([0-9.]*\).*/\1/p' | head -n 1)
-        UNLOCKED=$(echo "$OUTPUT" | grep "unlocked balance:" | sed -n 's/.*unlocked balance: \([0-9.]*\).*/\1/p' | head -n 1)
-
-        # Fallback to 0 if empty
-        [ -z "$BALANCE" ] && BALANCE="0"
-        [ -z "$UNLOCKED" ] && UNLOCKED="0"
-
-        # Save results to your specific backend files using the address name
-        printf "%s" "$BALANCE" | sudo tee "${BACKEND_DIR}/${ADDR_ID}_balance.txt" > /dev/null
-        printf "%s" "$UNLOCKED" | sudo tee "${BACKEND_DIR}/${ADDR_ID}_unlocked.txt" > /dev/null
-
-        echo "Balance: $BALANCE"
-        echo "Unlocked: $UNLOCKED"
-    fi
-done
-
-# Clean up any hanging processes
-pkill -f monero-wallet-cli 2>/dev/null || true

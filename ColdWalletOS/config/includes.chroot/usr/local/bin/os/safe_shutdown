@@ -18,6 +18,7 @@ stty intr undef
 # UI Styling
 export TERM=linux
 stty sane
+
 # 1. REMAP ANSI PALETTE
 if [ "$TERM" = "linux" ]; then
     echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
@@ -26,9 +27,6 @@ if [ "$TERM" = "linux" ]; then
 fi
 
 # 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -44,22 +42,32 @@ export NEWT_COLORS='
   entry=white,black
 '
 
-# 1. Customized Unmount Sequence for CWOS
+# --- VARIABLES ---
+SALLY_MAPPER="sallyport_unlocked"
+FINAL_MOUNT="/mnt/sallyport"
+MOUNT_POINT="/mnt/vault"
+MAPPER_NAME="cwos_unlocked"
+EXT_MNT="/mnt/external"
+
+# 1. Customized Unmount Sequence for CWOS (LUKS2 Layered Stack)
 {
-    # A. Close the Sallyport (VeraCrypt)
-    echo 20; sudo veracrypt -d 2>/dev/null
+    # A. Unmount Sallyport Virtual File System
+    echo 15; sudo umount "$FINAL_MOUNT" 2>/dev/null
     
-    # B. Unmount the Vault (LUKS)
-    echo 40; sudo umount /mnt/vault 2>/dev/null
+    # B. Close the Sallyport LUKS File Container Mapper
+    echo 35; sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
     
-    # C. Close the LUKS Mapper (cwos_unlocked)
-    echo 60; sudo cryptsetup close cwos_unlocked 2>/dev/null
+    # C. Unmount the Internal Vault Virtual File System
+    echo 55; sudo umount "$MOUNT_POINT" 2>/dev/null
     
-    # D. Unmount the external physical drive
-    echo 80; sudo umount /mnt/external 2>/dev/null
+    # D. Close the Internal Vault LUKS Partition Mapper
+    echo 75; sudo cryptsetup close "$MAPPER_NAME" 2>/dev/null
     
-    # E. Final Sync
-    echo 100; sleep 1; sync
+    # E. Unmount the physical USB Flash Drive
+    echo 90; sudo umount "$EXT_MNT" 2>/dev/null
+    
+    # F. Flush system buffers to hardware disks
+    echo 100; sync; sleep 1
 } | whiptail --title " Locking ColdWalletOS " --fb --nocancel --gauge "\nSafely closing Vaults, Sallyports, and External Drives..." 8 50 0
 
 # Re-enable interrupt key just before power down (good practice)

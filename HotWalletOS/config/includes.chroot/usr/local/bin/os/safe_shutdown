@@ -1,13 +1,27 @@
 #!/bin/bash
 
-# make sure writing is complete
+# Ensure we can find cryptsetup/mount/etc
+export PATH=$PATH:/usr/sbin:/sbin
+
+# --- VARIABLES ---
+SALLY_MAPPER="sallyport_unlocked"
+FINAL_MOUNT="/mnt/sallyport"
+EXT_MNT="/mnt/external"
+
+# 1. Inside-Out Teardown Sequence
+# A. Unmount the Sallyport ext4 filesystem
+sudo umount "$FINAL_MOUNT" 2>/dev/null
+
+# B. Close the LUKS file container mapper device
+sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
+
+# C. Unmount the physical carrier drive 
+sudo umount "$EXT_MNT" 2>/dev/null
+
+# 2. Final Data Flush
+# Ensure all cached blocks are physically written to the storage controller
 sync
+sleep 1
 
-# Close the Sallyport (VeraCrypt)
-sudo veracrypt -d 2>/dev/null
-    
-# Unmount the external physical drive
-sudo umount /mnt/external 2>/dev/null
-
-# Shutdown
+# 3. Shutdown
 sudo shutdown -h now

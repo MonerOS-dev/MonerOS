@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# ---------------------------------------------------------
+#  UI THEME
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+export LC_ALL=C
+stty sane
+
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8"
+    echo -ne "\e]P7ffffff"
+    clear
+fi
+
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+VAULT_BASE="/mnt/vault"
+PASS_FILE="/mnt/vault/config/password.cfg"
+PASSWORD=$(tr -d '\n\r ' < "$PASS_FILE")
+
+# ---------------------------------------------------------
+#  SCAN FOR WALLETS
+# ---------------------------------------------------------
+MENU_OPTIONS=()
+if [ -d "$VAULT_BASE/monero" ]; then
+    while IFS= read -r dir; do
+        FULL_ADDR=$(basename "$dir")
+        [[ "$FULL_ADDR" =~ ^(blocks|chainstate|database|wallets|indexes|backups)$ ]] && continue
+        MENU_OPTIONS+=("$FULL_ADDR" "[monero] ${FULL_ADDR:0:10}...")
+    done < <(find "$VAULT_BASE/monero" -mindepth 1 -maxdepth 1 -type d)
+fi
+
+CHOICE=$(whiptail --title " View Monero Seed " --fb --notags --menu "\nSELECT WALLET:" 16 50 6 "${MENU_OPTIONS[@]}" 3>&1 1>&2 2>&3)
+[ $? -ne 0 ] && exit 0
+
+# ---------------------------------------------------------
+#  RPC QUERY LOGIC
+# ---------------------------------------------------------
+WALLET_PATH="$VAULT_BASE/monero/$CHOICE/wallet"
+RPC_PORT="38088"
+
+killall monero-wallet-rpc 2>/dev/null
+sleep 1
+
+monero-wallet-rpc --wallet-file "$WALLET_PATH" --password "$PASSWORD" --rpc-bind-port "$RPC_PORT" \
+    --rpc-bind-ip 127.0.0.1 --disable-rpc-login --offline --detach >/dev/null 2>&1
+
+until curl -s http://127.0.0.1:"$RPC_PORT"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_version"}' >/dev/null 2>&1; do
+    sleep 0.5
+done
+
+SEED_RESPONSE=$(curl -s -X POST http://127.0.0.1:"$RPC_PORT"/json_rpc \
+    -d '{"jsonrpc":"2.0","id":"0","method":"query_key","params":{"key_type":"mnemonic"}}')
+
+curl -s -X POST http://127.0.0.1:"$RPC_PORT"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"stop_wallet"}' >/dev/null 2>&1
+
+# ---------------------------------------------------------
+#  EXTRACT RESTORE DATE FROM VAULT
+# ---------------------------------------------------------
+WATCH_INFO="$VAULT_BASE/monero/$CHOICE/watch_info.txt"
+RESTORE_DATE="N/A"
+if [ -f "$WATCH_INFO" ]; then
+    RESTORE_DATE=$(grep "RESTORE_DATE:" "$WATCH_INFO" | awk '{print $2}')
+fi
+
+# ---------------------------------------------------------
+#  FORMATTING: COMPACT 3-COLUMN GRID
+# ---------------------------------------------------------
+SEED_RAW=$(echo "$SEED_RESPONSE" | jq -r '.result.key')
+FORMATTED_SEED="Restore Date: $RESTORE_DATE\n"
+i=1
+for word in $SEED_RAW; do
+    FORMATTED_SEED+="$(printf "%-15s" "$i.$word")"
+    if (( i % 3 == 0 )); then 
+        FORMATTED_SEED+="\n" 
+    fi
+    ((i++))
+done
+
+whiptail --title " RECOVERY SEED " --msgbox "$(echo -e "$FORMATTED_SEED")" 16 50

@@ -14,24 +14,31 @@ PROXY="127.0.0.1:9050"
 PASS_FILE="/home/user/password.cfg"
 BACKEND_DIR="/var/www/backend/Monero"
 
-echo "Importing Monero - Initializing Node Selection"
-
 if [ ! -d "$BASE_DIR" ]; then
     echo "Wallet directory does not exist. Exiting."
     exit 0
+else
+    # Global permission reset
+    sudo chown -R user:user "$BASE_DIR"
+    
+    # NEW: Cleanup logs
+    echo "Cleaning up old log files..."
+    find "$BASE_DIR" -name "rpc_daemon.log" -type f -delete
+	  find "$BASE_DIR" -name "monero-wallet-rpc.log" -type f -delete
 fi
 
-# --- MASTER NODE SELECTION START ---
-# Only this script performs the 'shuf' from SourceForge
-NEW_NODE=$(curl -s --socks5-hostname "$PROXY" "$NODE_LIST_URL" | sed '/^$/d' | shuf -n 1 | tr -d '\r\n ')
+echo "Importing Monero - Initializing Node Selection"
 
-if [ -n "$NEW_NODE" ]; then
+# --- MASTER NODE SELECTION START (HARDENED TIMEOUTS) ---
+NEW_NODE=$(curl --connect-timeout 10 -m 20 -s --socks5-hostname "$PROXY" "$NODE_LIST_URL" | sed '/^$/d' | shuf -n 1 | tr -d '\r\n ')
+
+if [ -n "$NEW_NODE" ] && [[ "$NEW_NODE" == *.* ]]; then
     echo "Successfully fetched new node from SourceForge: $NEW_NODE"
     echo "$NEW_NODE" > "$NODE_CACHE_FILE"
     REMOTE_NODE="$NEW_NODE"
 elif [ -f "$NODE_CACHE_FILE" ]; then
-    echo "Download failed. Using last known cached node..."
-    REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\r\n ')
+    echo "Download timed out or failed. Using last known cached node..."
+    REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
 else
     echo "No download or cache available. Using hardcoded fallback..."
     REMOTE_NODE="$HARDCODED_FALLBACK"
@@ -66,31 +73,35 @@ while [ "$CONNECTED" = false ]; do
 
         if (( ATTEMPT % 2 != 0 )); then
             echo "Refreshing Tor circuits (SIGHUP) and retrying in 15s..."
-            sudo killall -HUP tor 2>/dev/null || sudo systemctl reload tor
+            killall -HUP tor 2>/dev/null || systemctl reload tor
             sleep 15
         else
-            echo "Restarting Tor service and waiting 60s..."
-            sudo systemctl restart tor
-            sleep 60
+            echo "Node down. Retrying connection window..."
+            sleep 15
         fi
     fi
 done
 
 # Ensure backend directory exists
-sudo mkdir -p "$BACKEND_DIR"
+mkdir -p "$BACKEND_DIR"
+
+# Prevent empty base directory from breaking the loop evaluation
+shopt -s nullglob
 
 for dir in "$BASE_DIR"/*/; do
     if [ -f "${dir}watch_info.txt" ]; then
         echo "--------------------------------------------------"
         echo "Processing Folder: $(basename "$dir")"
-        cd "$dir"
+        cd "$dir" || continue
 
+        ABS_DIR=$(pwd)
         ADDR=$(grep "ADDRESS:" watch_info.txt | awk '{print $2}' | tr -d '\r')
         VIEW=$(grep "VIEW_KEY:" watch_info.txt | awk '{print $2}' | tr -d '\r')
         R_DATE=$(grep "RESTORE_DATE:" watch_info.txt | awk '{print $2}' | tr -d '\r')
 
+        # --- WALLET GENERATION FLOW ---
         if [ ! -f "watchonly.keys" ]; then
-            echo "Importing $ADDR..."
+            echo "Wallet keys not found. Rebuilding watch-only cache container for $ADDR..."
             export REMOTE_NODE PROXY PASSWORD ADDR VIEW R_DATE
             /usr/bin/expect <<'EOF'
 set timeout -1
@@ -126,11 +137,192 @@ EOF
                 mv "watchonly_TEMP.keys" "watchonly.keys"
                 [ -f "watchonly_TEMP" ] && mv "watchonly_TEMP" "watchonly"
             fi
+            
+            
+            
+            # creating wallet from scratch causes rpc issues
+            chown -R user:user .
+            rm -f *.keys.lock
+            START_PORT=18082
+            CURRENT_PORT=$START_PORT
+            for dir in "$BASE_DIR"/*/; do
+                WALLET_FILE="${dir}watchonly"
+                if [ -f "$WALLET_FILE" ]; then
+                    ADDR_ID=$(basename "$dir")
+                    
+                    echo "Setting up ports"
+                        
+                    # Store the assigned port in the folder for other scripts to read dynamically
+                    echo "$CURRENT_PORT" > "${dir}rpc_port.cfg"
+                    
+                    CURRENT_PORT=$((CURRENT_PORT + 1))
+                fi
+            done
+            
+            # Clean up short-lived interactive processes safely without touching the RPC daemons
+            pkill -x monero-wallet-cli 2>/dev/null || true
         fi
+        
+        # take ownership of all files in directory and release locks
+        chown -R user:user .
+        rm -f *.keys.lock
+        
+        PORT_FILE="${dir}rpc_port.cfg"
+        if [ ! -f "$PORT_FILE" ]; then
+            # Generate a random port between 18200 and 19000
+            RPC_PORT=$(shuf -i 18200-19000 -n 1)
+        else
+            RPC_PORT=$(cat "$PORT_FILE" | tr -d '\n\r ')
+        fi
+        fuser -k "$RPC_PORT/tcp" 2>/dev/null
+        
+        # --- RPC DAEMON SPIN-UP (CLEAN BOOT FIX) ---
+        if ! ss -tln | grep -q ":$RPC_PORT "; then
+            echo "Launching persistent RPC daemon for $(basename "$dir") on port $RPC_PORT..."
+            
+            # Let --detach background itself naturally. Do not use trailing '&' or 'disown'
+            sudo -u user monero-wallet-rpc --detach \
+				        --wallet-file "watchonly" \
+                --password "$PASSWORD" \
+                --rpc-bind-port "$RPC_PORT" \
+                --daemon-address "$REMOTE_NODE" \
+                --proxy "$PROXY" \
+                --trusted-daemon \
+                --disable-rpc-login \
+                --shared-ringdb-dir /home/user/.shared-ringdb \
+                --log-file "rpc_daemon.log" &
+                
+            # Give the system a brief moment to map the networking socket
+            sleep 3
+        fi
+        
+        # --- HEALTH VERIFICATION LOOP ---
+        echo "Verifying Monero Wallet RPC initialization state..."
+        RPC_READY=false
+        MAX_RETRIES=120  
+        RETRY_COUNT=0
+
+        while [ "$RPC_READY" = false ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$RPC_PORT/json_rpc)
+            
+            if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 401 ]; then
+                echo "RPC daemon confirmed active on port $RPC_PORT (HTTP status: $HTTP_STATUS)."
+                RPC_READY=true
+            else
+                ((RETRY_COUNT++))
+                sleep 1
+            fi
+        done
+
+        if [ "$RPC_READY" = false ]; then
+            echo "[FAILED] Target port $RPC_PORT dropped connections for $MAX_RETRIES seconds. Skipping RPC pipeline."
+            continue
+        fi
+
+        # --- NEW VERIFIED NODE SYNC LOOP ---
+        echo "Synchronizing wallet with remote daemon top height..."
+        SYNCED=false
+        while [ "$SYNCED" = false ]; do
+            HEIGHT_RESP=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}')
+            CURRENT_HEIGHT=$(echo "$HEIGHT_RESP" | grep -oP '"height":\s*\K[0-9]+' | head -n 1)
+            
+            DAEMON_RESP=$(curl -s --socks5-hostname "$PROXY" -X POST "http://$REMOTE_NODE/json_rpc" -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
+            TARGET_HEIGHT=$(echo "$DAEMON_RESP" | grep -oP '"target_height":\s*\K[0-9]+' | head -n 1)
+            
+            { [ -z "$TARGET_HEIGHT" ] || [ "$TARGET_HEIGHT" -eq 0 ]; } && TARGET_HEIGHT=$(echo "$DAEMON_RESP" | grep -oP '"height":\s*\K[0-9]+' | head -n 1)
+
+            if [ -n "$CURRENT_HEIGHT" ] && [ -n "$TARGET_HEIGHT" ]; then
+                echo "Progress: Wallet Height = $CURRENT_HEIGHT / Target Height = $TARGET_HEIGHT"
+                if [ "$CURRENT_HEIGHT" -ge "$TARGET_HEIGHT" ]; then
+                    echo "[OK] Wallet blockchain sync matches remote network top."
+                    SYNCED=true
+                fi
+            else
+                echo "[DEBUG] Failed to read heights. Retrying loop..."
+            fi
+            [ "$SYNCED" = false ] && sleep 10
+        done
+        
+        # 1. Update the chain state
+    		curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"refresh"}' >/dev/null
+    
+    		# 2. Reconcile spending with the updated chain
+    		curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"rescan_spent"}' >/dev/null
+    
+    		# 3. Query the actual, updated balance
+    		curl -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_balance"}'
+
+        # ========================================================
+        # BATCH IMPORT
+        # ========================================================
+        TARGET_KI_FILE="./key_images.json"
+
+        if [ -f "$TARGET_KI_FILE" ]; then
+            echo "Parsing key images from existing response object..."
+
+            # Extract ONLY the array we need to send to the daemon
+            # We use jq to pull the array out of the nested 'result' object
+            jq -c '{
+                "jsonrpc": "2.0",
+                "id": "0",
+                "method": "import_key_images",
+                "params": {
+                    "signed_key_images": .result.signed_key_images
+                }
+            }' "$TARGET_KI_FILE" > /tmp/batch_ki.json
+
+            # Fire the request
+            IMAGE_RESPONSE=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
+                -H "Content-Type: application/json" \
+                -d @/tmp/batch_ki.json)
+
+            # Check for success
+            if echo "$IMAGE_RESPONSE" | jq -e '.result' >/dev/null 2>&1; then
+                echo "[OK] Key images successfully imported."
+                # Trigger the mandatory rescan
+                curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
+                     -d '{"jsonrpc":"2.0","id":"0","method":"rescan_spent"}' >/dev/null
+            else
+                echo "[FAILED] Import rejected."
+            fi
+        fi
+
+        # ========================================================
+        # UNCONDITIONAL EXPORT
+        # ========================================================
+        echo "Forcing fresh export of outputs via RPC..."
+        #rm -f "outputs.hex"
+        
+        EXPORT_RESPONSE=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"export_outputs","params":{"all":true}}')
+        HEX=$(echo "$EXPORT_RESPONSE" | jq -r '.result.outputs_data_hex // empty')
+        
+        if [ -n "$HEX" ]; then
+            echo "$HEX" > outputs.hex
+            echo "[OK] outputs.hex written successfully"
+        else
+            ERR_MSG=$(echo "$EXPORT_RESPONSE" | jq -r '.error.message // "Unknown RPC Error"' 2>/dev/null)
+            echo "[CRITICAL WARNING] export_outputs failed: $ERR_MSG"
+        fi
+        
+        # 1. Force the wallet to save current memory state to disk
+        echo "Committing wallet state..."
+        curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"store"}' >/dev/null
+        sleep 5
+
+        # 2. Query balance ONLY after the store command is confirmed
+        curl -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_balance"}'
+        
+        # 3. Shutdown gracefully so lockfiles are removed
+        curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"stop_wallet"}' >/dev/null
+        
+        # 4. Final Cleanup of permissions (Run this as root to fix everything)
+        sudo chown -R user:user "$ABS_DIR"
+
+        # 5. Run page generation as user to prevent root-owned file creation
         sudo bash /usr/local/bin/os/generate_monero_tx_page "$ADDR"
     fi
 done
+shopt -u nullglob
 
-pkill -f monero-wallet-cli 2>/dev/null || true
-sudo bash /usr/local/bin/os/refresh_monero
-sudo bash /usr/local/bin/os/submit_monero
+# Clean up short-lived interactive processes safely without touching the RPC daemons
+pkill -x monero-wallet-cli 2>/dev/null || true

@@ -1,0 +1,170 @@
+#!/bin/bash
+
+# Ensure we can find binaries
+export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
+    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+# window = black (Dark Gray)
+# border/title/text = blue (Cyan)
+# button = white (fg) on black (bg)
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# Configuration
+WATCH_DIR="/mnt/sallyport/watch_monero"
+VAULT_DIR="/mnt/vault/monero"
+PASS_FILE="/mnt/vault/config/password.cfg"
+LOG_FILE="/tmp/logs/sign_monero.log"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# 1. Load the Password
+if [ -f "$PASS_FILE" ]; then
+    PASSWORD=$(tr -d '\n\r ' < "$PASS_FILE")
+    export PASSWORD
+else
+    log_msg "ERROR: Password file not found at $PASS_FILE"
+    exit 1
+fi
+
+# 2. Find all unsigned transactions
+UNSIGNED_LIST=$(find "$WATCH_DIR" -type f -name "unsigned_tx_*")
+if [ -z "$UNSIGNED_LIST" ]; then
+    exit 0
+fi
+
+# --- 3. The Signing Function (Isolated from Whiptail's Pipe) ---
+do_sign() {
+    # We pass variables as arguments to ensure they are local to the call
+    local REAL_WALLET=$1
+    local OUTPUTS_IN=$2
+    local UNSIGNED_FILE=$3
+    local KEY_IMAGES_OUT=$4
+    local LOG=$5
+
+/usr/bin/expect <<EOF >> "$LOG" 2>&1
+set timeout 120
+set PASS \$env(PASSWORD)
+
+spawn monero-wallet-cli --wallet-file "$REAL_WALLET" --offline
+
+expect "Wallet password:"
+sleep 0.5
+send -- "\$PASS\r"
+
+expect -re ".*\]:"
+send -- "import_outputs $OUTPUTS_IN\r"
+expect "Wallet password:"
+sleep 0.5
+send -- "\$PASS\r"
+
+expect -re ".*\]:"
+send -- "sign_transfer $UNSIGNED_FILE\r"
+
+expect {
+    "Wallet password:" {
+        sleep 0.5
+        send -- "\$PASS\r"
+        exp_continue
+    }
+    -re ".*(Is this okay|backlog|Privacy|old outputs|fee).*\[Y/n\]:?" {
+        send -- "y\r"
+        exp_continue
+    }
+    "Transaction successfully signed" {
+        expect -re ".*\]:"
+    }
+}
+
+send -- "export_key_images $KEY_IMAGES_OUT\r"
+expect "Wallet password:"
+sleep 0.5
+send -- "\$PASS\r"
+
+expect -re ".*\]:"
+send -- "exit\r"
+expect eof
+EOF
+}
+
+# --- 4. Main Loop with Progress Bar ---
+TOTAL_FILES=$(echo "$UNSIGNED_LIST" | wc -l)
+CURRENT_COUNT=0
+
+{
+    for TX_PATH in $UNSIGNED_LIST; do
+        SUB_DIR=$(basename "$(dirname "$TX_PATH")")
+        UNSIGNED_FILE=$(basename "$TX_PATH")
+        ID_PART=$(echo "$UNSIGNED_FILE" | sed 's/unsigned_tx_//')
+        
+        OUTDIR="$WATCH_DIR/$SUB_DIR"
+        REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
+        OUTPUTS_IN="$OUTDIR/outputs.bin"
+        SIGNED_TX_FINAL="$OUTDIR/signed_tx_$ID_PART"
+        KEY_IMAGES_OUT="$OUTDIR/key_images.bin"
+
+        # Progress Update (Standard Out for Whiptail)
+        echo "XXX"
+        echo $(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
+        echo ""
+        echo "XXX"
+
+        if [ ! -f "$REAL_WALLET" ]; then
+            CURRENT_COUNT=$((CURRENT_COUNT + 1))
+            continue
+        fi
+
+        cd "$OUTDIR" || continue
+        rm -f "signed_tx" "$KEY_IMAGES_OUT"
+
+        # CALL THE ISOLATED FUNCTION
+        do_sign "$REAL_WALLET" "$OUTPUTS_IN" "$UNSIGNED_FILE" "$KEY_IMAGES_OUT" "$LOG_FILE"
+        
+        # Move signed_tx from wallet directory if it exists there
+        if [ -f "$VAULT_DIR/$SUB_DIR/signed_tx" ]; then
+            mv "$VAULT_DIR/$SUB_DIR/signed_tx" "$OUTDIR/signed_tx"
+        fi
+
+        
+        if [ -f "signed_tx" ] && [ -f "$KEY_IMAGES_OUT" ]; then
+            mv "signed_tx" "$SIGNED_TX_FINAL"
+            chown user:user "$SIGNED_TX_FINAL" "$KEY_IMAGES_OUT"
+            chmod 644 "$SIGNED_TX_FINAL" "$KEY_IMAGES_OUT"
+            rm -f "$UNSIGNED_FILE"
+            log_msg "SUCCESS: $SIGNED_TX_FINAL"
+        else
+            log_msg "ERROR: Failed $UNSIGNED_FILE"
+        fi
+
+
+        CURRENT_COUNT=$((CURRENT_COUNT + 1))
+    done
+    echo "100"
+} | whiptail --title " Signing Monero Transactions " --gauge "Initializing..." 6 50 0
+
+log_msg "--- Signing Session Complete ---"

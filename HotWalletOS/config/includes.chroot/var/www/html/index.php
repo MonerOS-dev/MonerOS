@@ -3,15 +3,19 @@
  * HotWalletOS Dashboard - Ultra-Silver Industrial
  * Update: Centered Column Data & Headers
  */
+ 
+// 0. Get Balance
+$command = "/usr/local/bin/os/get_monero_balance";
+exec("nohup sudo /usr/bin/bash $command > /dev/null 2>&1 &");
 
 // 1. Define configurations
 $coinConfigs = [
-    "Bitcoin"   => ["dir" => "/var/www/backend/Bitcoin/",   "api_id" => "bitcoin",     "display" => "Bitcoin (BTC)"],
-    "Litecoin"  => ["dir" => "/var/www/backend/Litecoin/",  "api_id" => "litecoin",    "display" => "Litecoin (LTC)"],
-    "Dogecoin"  => ["dir" => "/var/www/backend/Dogecoin/",  "api_id" => "dogecoin",    "display" => "Dogecoin (DOGE)"],
+    //"Bitcoin"   => ["dir" => "/var/www/backend/Bitcoin/",   "api_id" => "bitcoin",     "display" => "Bitcoin (BTC)"],
+    //"Litecoin"  => ["dir" => "/var/www/backend/Litecoin/",  "api_id" => "litecoin",    "display" => "Litecoin (LTC)"],
+    //"Dogecoin"  => ["dir" => "/var/www/backend/Dogecoin/",  "api_id" => "dogecoin",    "display" => "Dogecoin (DOGE)"],
     "Monero"    => ["dir" => "/var/www/backend/Monero/",    "api_id" => "monero",      "display" => "Monero (XMR)"],
-    "Ethereum"  => ["dir" => "/var/www/backend/Ethereum/",  "api_id" => "ethereum",    "display" => "Ethereum (ETH)"],
-    "Avalanche" => ["dir" => "/var/www/backend/Avalanche/", "api_id" => "avalanche-2", "display" => "Avalanche (AVAX)"]
+    //"Ethereum"  => ["dir" => "/var/www/backend/Ethereum/",  "api_id" => "ethereum",    "display" => "Ethereum (ETH)"],
+    //"Avalanche" => ["dir" => "/var/www/backend/Avalanche/", "api_id" => "avalanche-2", "display" => "Avalanche (AVAX)"]
 ];
 
 // 2. Fetch Prices

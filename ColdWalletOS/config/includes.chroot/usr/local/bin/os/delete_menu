@@ -99,11 +99,11 @@ DISPLAY_ADDR="${WALLET_ADDR:0:6}...${WALLET_ADDR: -6}"
 
 if whiptail --title " CONFIRM DELETION " --fb --yesno "Are you sure you want to delete:\n\n$DISPLAY_ADDR ($COIN_TYPE)\n\nThis will nuke keys AND watch-only info." 12 50; then
     
-    rm -rf "$VAULT_BASE/$COIN_TYPE/$WALLET_ADDR"
+    sudo rm -rf "$VAULT_BASE/$COIN_TYPE/$WALLET_ADDR"
     
     SALLY_COIN="$COIN_TYPE"
     [ "$COIN_TYPE" == "ethers" ] && SALLY_COIN="ethereum"
-    rm -rf "$SALLY_BASE/watch_$SALLY_COIN/$WALLET_ADDR"
+    sudo rm -rf "$SALLY_BASE/watch_$SALLY_COIN/$WALLET_ADDR"
     
     sync
     whiptail --title " Success " --fb --msgbox "Wallet wiped and synced." 10 50

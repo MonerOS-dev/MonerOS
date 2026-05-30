@@ -19,9 +19,6 @@ if [ "$TERM" = "linux" ]; then
 fi
 
 # 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -37,28 +34,39 @@ export NEWT_COLORS='
   entry=white,black
 '
 
-# 1. Identify Source
+# 1. Identify Source Partition (Raw LUKS Partition)
 LIVE_DEV=$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null)
 PARENT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n 1)
 SOURCE_PART="/dev/${PARENT_DISK}3"
 [[ "$PARENT_DISK" == nvme* ]] && SOURCE_PART="/dev/${PARENT_DISK}p3"
 
-# 2. Silent Mount
+# 2. Silent Mount and Folder Preparation
 mkdir -p /tmp/logs && sudo chown 1000:1000 /tmp/logs 2>/dev/null
 if ! mountpoint -q "$MNT_EXTERNAL"; then
     DEVICE=$(sudo findfs LABEL="$TARGET_LABEL" 2>/dev/null)
     [ -n "$DEVICE" ] && sudo mount "$DEVICE" "$MNT_EXTERNAL" >/dev/null 2>&1
 fi
 
-# 3. The DD Operation (Fixed AWK Logic)
+# Pre-flight check: Make sure we successfully mounted and can write to the stick
+if ! mountpoint -q "$MNT_EXTERNAL"; then
+    whiptail --title " Error " --fb --msgbox "External drive '$TARGET_LABEL' is not mounted.\nAborting export." 10 50
+    exec /usr/local/bin/os/main_menu
+fi
+
+# 3. The DD Operation (Robust Progress Extraction)
 {
-    # We use stdbuf to ensure the pipe doesn't buffer, keeping the gauge moving
+    # We pass status=progress and catch raw bytes in the first argument of the dd output stream
     sudo stdbuf -i0 -o0 -e0 dd if="$SOURCE_PART" of="$MNT_EXTERNAL/cwosvault.bin" bs=4M status=progress 2>&1 | \
-    stdbuf -i0 -o0 -e0 awk -v total=$TOTAL_SIZE '{
-        if ($1 ~ /^[0-9]+$/) {
-            print int(($1 / total) * 100)
+    stdbuf -i0 -o0 -e0 awk -v total=$TOTAL_SIZE '
+        {
+            # Match the leading byte count from dd status updates
+            if ($1 ~ /^[0-9]+$/) {
+                pct = int(($1 / total) * 100)
+                if (pct > 100) pct = 100
+                print pct
+            }
         }
-    }' | whiptail --title " Cold Wallet Export " --gauge "\nCloning encrypted internal partition to external storage...\nDo not remove drive." 8 50 0
+    ' | whiptail --title " Cold Wallet Export " --gauge "\nCloning encrypted internal partition to external storage...\nDo not remove drive." 8 50 0
 
     sudo sync >/dev/null 2>&1
 } 2>>"$LOG_FILE"
@@ -66,7 +74,7 @@ fi
 # 4. Success & Recommendation
 if whiptail --fb --title " Export Complete " --yesno "Vault has been cloned to $TARGET_LABEL.\n\nFor maximum security, it is recommended to SHUTDOWN now.\n\nPower off system?" 12 50; then
     clear
-    sudo poweroff
+    sudo bash /usr/local/bin/os/safe_shutdown
 else
     exec /usr/local/bin/os/main_menu
 fi

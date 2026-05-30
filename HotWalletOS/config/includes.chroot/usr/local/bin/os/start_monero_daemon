@@ -1,0 +1,43 @@
+#!/bin/bash
+# --- /usr/local/bin/os/start_monero_daemons ---
+
+BASE_DIR="/mnt/sallyport/watch_monero"
+START_PORT=18082
+PASS_FILE="/home/user/password.cfg"
+NODE_CACHE_FILE="/home/user/monero_node.txt"
+REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+TOR_PROXY="127.0.0.1:9050"
+
+if [ -f "$PASS_FILE" ]; then
+    PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+else
+    echo "Error: Password file missing."
+    exit 1
+fi
+
+# Clean up any lingering states first
+sudo killall -9 monero-wallet-rpc 2>/dev/null
+sleep 1
+
+CURRENT_PORT=$START_PORT
+
+for dir in "$BASE_DIR"/*/; do
+    WALLET_FILE="${dir}watchonly"
+    if [ -f "$WALLET_FILE" ]; then
+        ADDR_ID=$(basename "$dir")
+        LOG_FILE="${dir}rpc_daemon.log"
+        
+        echo "Launching persistent RPC for $ADDR_ID on port $CURRENT_PORT..."
+        
+        # Start the background daemon permanently
+        monero-wallet-rpc --wallet-file "$WALLET_FILE" --password "$PASSWORD" \
+            --rpc-bind-port "$CURRENT_PORT" --disable-rpc-login \
+            --daemon-address "$REMOTE_NODE" --proxy "$TOR_PROXY" \
+            --trusted-daemon --detach --log-file "$LOG_FILE" > /dev/null 2>&1
+            
+        # Store the assigned port in the folder for other scripts to read dynamically
+        echo "$CURRENT_PORT" > "${dir}rpc_port.cfg"
+        
+        CURRENT_PORT=$((CURRENT_PORT + 1))
+    fi
+done

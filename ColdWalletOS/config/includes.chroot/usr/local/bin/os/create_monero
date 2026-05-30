@@ -140,15 +140,77 @@ if [ -n "$ADDR" ] && [ -n "$VIEW_KEY" ]; then
         echo "TYPE: watch-only"
     } > "$WATCH_PATH/watch_info.txt"
     
+    # Copy the file into the vault directory
+    cp "$WATCH_PATH/watch_info.txt" "$WALLET_DIR/$ADDR/watch_info.txt"
+    
     sync
 
     whiptail --title "Monero Wallet Created" \
              --msgbox "\nYour Monero wallet has been generated.\n\nAddress:\n$ADDR" \
              0 0
+             
+    whiptail --title " WALLET RECOVERY " \
+             --msgbox "\nIt is highly recommended that you write down the information displayed on the next screen. This will allow you to restore your wallet on any other machine in case of data loss.\n\nSTORE IT IN A SAFE PLACE!\n" \
+             0 0
+             
+    # ---------------------------------------------------------
+    #  RPC QUERY LOGIC FOR NEWLY CREATED WALLET
+    # ---------------------------------------------------------
+    RPC_PORT="38088"
+    WALLET_PATH="$WALLET_DIR/$ADDR/wallet"
+
+    # Ensure no lingering RPC processes are alive
+    killall monero-wallet-rpc 2>/dev/null
+    sleep 1
+
+    # Start the RPC daemon pointing to the new wallet file
+    monero-wallet-rpc --wallet-file "$WALLET_PATH" --password "$PASSWORD" --rpc-bind-port "$RPC_PORT" \
+        --rpc-bind-ip 127.0.0.1 --disable-rpc-login --offline --detach >/dev/null 2>&1
+
+    # Wait for RPC to respond
+    until curl -s http://127.0.0.1:"$RPC_PORT"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_version"}' >/dev/null 2>&1; do
+        sleep 0.5
+    done
+
+    # Query the seed directly from the daemon
+    SEED_RESPONSE=$(curl -s -X POST http://127.0.0.1:"$RPC_PORT"/json_rpc \
+        -d '{"jsonrpc":"2.0","id":"0","method":"query_key","params":{"key_type":"mnemonic"}}')
+
+    # Kill the temporary daemon safely
+    curl -s -X POST http://127.0.0.1:"$RPC_PORT"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"stop_wallet"}' >/dev/null 2>&1
+
+    # ---------------------------------------------------------
+    #  FORMATTING: COMPACT 3-COLUMN GRID (24 WORDS ONLY)
+    # ---------------------------------------------------------
+    SEED_RAW=$(echo "$SEED_RESPONSE" | jq -r '.result.key')
+
+    # Format the top layout rows to exactly match the viewing script's appearance
+    ADDR_SHORT="${ADDR:0:8}...${ADDR: -8}"
+    FORMATTED_SEED="Address (shortened): $ADDR_SHORT\nRestore Date: $RESTORE_DATE\n"
+    
+    # Build the 3-column grid, stopping exactly after word 24
+    i=1
+    for word in $SEED_RAW; do
+        if [ $i -gt 24 ]; then
+            break
+        fi
+        
+        FORMATTED_SEED+="$(printf "%-15s" "$i.$word")"
+        if (( i % 3 == 0 )); then 
+            FORMATTED_SEED+="\n" 
+        fi
+        ((i++))
+    done
+
+    # Display the final seed window
+    whiptail --title " RECOVERY SEED " --msgbox "$(echo -e "$FORMATTED_SEED")" 16 50
+    
+    # Return to management environment console
+    /usr/local/bin/os/main_menu
 else
     whiptail --title "Error" \
              --msgbox "\nWallet generation failed.\n" \
              0 0
+             
+    /usr/local/bin/os/main_menu
 fi
-
-/usr/local/bin/os/main_menu

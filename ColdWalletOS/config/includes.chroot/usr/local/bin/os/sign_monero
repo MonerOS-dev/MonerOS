@@ -1,21 +1,19 @@
 #!/bin/bash
 
-# Ensure we can find binaries
-export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
-export TERM=linux
-stty sane
+# --- Configuration ---
+WATCH_DIR="/mnt/sallyport/watch_monero"
+VAULT_DIR="/mnt/vault/monero"
+PASS_FILE="/mnt/vault/config/password.cfg"
+LOG_FILE="/tmp/logs/sign_monero_rpc.log"
 
-# 1. REMAP ANSI PALETTE
+# --- YOUR STYLE ---
+export TERM=linux
 if [ "$TERM" = "linux" ]; then
-    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
-    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P459cbe8"
+    echo -ne "\e]P7ffffff"
     clear
 fi
 
-# 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -31,134 +29,149 @@ export NEWT_COLORS='
   entry=white,black
 '
 
-# Configuration
-WATCH_DIR="/mnt/sallyport/watch_monero"
-VAULT_DIR="/mnt/vault/monero"
-PASS_FILE="/mnt/vault/config/password.cfg"
-LOG_FILE="/tmp/logs/sign_monero.log"
-
 mkdir -p "$(dirname "$LOG_FILE")"
 
-log_msg() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
-}
-
-# 1. Load the Password
-if [ -f "$PASS_FILE" ]; then
-    PASSWORD=$(tr -d '\n\r ' < "$PASS_FILE")
-    export PASSWORD
-else
-    log_msg "ERROR: Password file not found at $PASS_FILE"
+# Ensure jq is installed
+if ! command -v jq &> /dev/null; then
+    echo "[$(date '+%F %T')] ERROR: 'jq' is required but not installed." >> "$LOG_FILE"
     exit 1
 fi
 
-# 2. Find all unsigned transactions
-UNSIGNED_LIST=$(find "$WATCH_DIR" -type f -name "unsigned_tx_*")
-if [ -z "$UNSIGNED_LIST" ]; then
-    exit 0
-fi
+PASSWORD=$(tr -d '\n\r ' < "$PASS_FILE")
+log() { echo "[$(date '+%F %T')] $1" >> "$LOG_FILE"; }
 
-# --- 3. The Signing Function (Isolated from Whiptail's Pipe) ---
-do_sign() {
-    # We pass variables as arguments to ensure they are local to the call
-    local REAL_WALLET=$1
-    local OUTPUTS_IN=$2
-    local UNSIGNED_FILE=$3
-    local KEY_IMAGES_OUT=$4
-    local LOG=$5
-
-/usr/bin/expect <<EOF >> "$LOG" 2>&1
-set timeout 120
-set PASS \$env(PASSWORD)
-
-spawn monero-wallet-cli --wallet-file "$REAL_WALLET" --offline
-
-expect "Wallet password:"
-sleep 0.5
-send -- "\$PASS\r"
-
-expect -re ".*\]:"
-send -- "import_outputs $OUTPUTS_IN\r"
-expect "Wallet password:"
-sleep 0.5
-send -- "\$PASS\r"
-
-expect -re ".*\]:"
-send -- "sign_transfer $UNSIGNED_FILE\r"
-
-expect {
-    "Wallet password:" {
-        sleep 0.5
-        send -- "\$PASS\r"
-        exp_continue
-    }
-    -re ".*(Is this okay|backlog|Privacy|old outputs|fee).*\[Y/n\]:?" {
-        send -- "y\r"
-        exp_continue
-    }
-    "Transaction successfully signed" {
-        expect -re ".*\]:"
-    }
-}
-
-send -- "export_key_images $KEY_IMAGES_OUT\r"
-expect "Wallet password:"
-sleep 0.5
-send -- "\$PASS\r"
-
-expect -re ".*\]:"
-send -- "exit\r"
-expect eof
-EOF
-}
-
-# --- 4. Main Loop with Progress Bar ---
-TOTAL_FILES=$(echo "$UNSIGNED_LIST" | wc -l)
+UNSIGNED_LIST=($(find "$WATCH_DIR" -type f -name "unsigned_tx_*"))
+[ -z "$UNSIGNED_LIST" ] && exit 0
+TOTAL_FILES=${#UNSIGNED_LIST[@]}
 CURRENT_COUNT=0
 
+start_rpc() {
+    local WALLET_PATH=$1
+    local TARGET_PORT=$2
+
+    monero-wallet-rpc \
+        --wallet-file "$WALLET_PATH" \
+        --password "$PASSWORD" \
+        --rpc-bind-port "$TARGET_PORT" \
+        --rpc-bind-ip 127.0.0.1 \
+        --disable-rpc-login \
+        --offline \
+        --daemon-address "" \
+        --log-file /tmp/wallet-rpc.log \
+        --detach >/dev/null 2>&1
+
+    until curl -s http://127.0.0.1:"$TARGET_PORT"/json_rpc \
+        -d '{"jsonrpc":"2.0","id":"0","method":"get_version"}' >/dev/null; do
+        sleep 0.5
+    done
+}
+
+stop_rpc() {
+    local TARGET_PORT=$1
+    curl -s -X POST http://127.0.0.1:"$TARGET_PORT"/json_rpc \
+        -d '{"jsonrpc":"2.0","id":"0","method":"stop_wallet"}' >/dev/null 2>&1
+}
+
+sign_tx_rpc() {
+    local OUTDIR=$1
+    local REAL_WALLET=$2
+    local HEX_FILE=$3
+    local WALLET_PORT=$4
+
+    local OUTPUTS_HEX="$OUTDIR/outputs.hex"
+    local KEY_IMAGES_OUT="$OUTDIR/key_images.json"
+    local ID_PART="${HEX_FILE#unsigned_tx_}"
+    local SIGNED_TX_OUT="$OUTDIR/signed_tx_${ID_PART}"
+
+    log "Starting RPC for wallet: $REAL_WALLET on Port $WALLET_PORT"
+    start_rpc "$REAL_WALLET" "$WALLET_PORT"
+
+    # 1. Import outputs.hex (RPC format)
+    if [ -f "$OUTPUTS_HEX" ]; then
+        log "Found outputs.hex, importing to cold wallet..."
+        local OUT_HEX
+        OUT_HEX=$(tr -d '\n\r ' < "$OUTPUTS_HEX")
+
+        curl -s -X POST http://127.0.0.1:"$WALLET_PORT"/json_rpc \
+            -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"import_outputs\",\"params\":{\"outputs_data_hex\":\"$OUT_HEX\"}}" >> "$LOG_FILE" 2>&1
+    else
+        log "WARNING: outputs.hex missing — cold wallet may be out of sync."
+    fi
+
+    # 2. Load and sign unsigned TX hex
+    local TXSET_HEX
+    TXSET_HEX=$(tr -d '\n\r ' < "$OUTDIR/$HEX_FILE")
+
+    curl -s -X POST http://127.0.0.1:"$WALLET_PORT"/json_rpc \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"sign_transfer\",\"params\":{\"unsigned_txset\":\"$TXSET_HEX\"}}" > "$OUTDIR/signed_resp.json" 2>/dev/null
+
+    local SIGNED_HEX
+    SIGNED_HEX=$(jq -r '.result.signed_txset // empty' "$OUTDIR/signed_resp.json")
+
+    if [ -n "$SIGNED_HEX" ]; then
+        printf '%b' "$(echo "$SIGNED_HEX" | sed 's/../\\x&/g')" > "$SIGNED_TX_OUT"
+        log "Signed tx written: $SIGNED_TX_OUT"
+    else
+        log "ERROR: sign_transfer failed — keeping unsigned tx"
+        stop_rpc "$WALLET_PORT"
+        return
+    fi
+
+    # 3. Export key images (RPC JSON format)
+    curl -s -X POST http://127.0.0.1:"$WALLET_PORT"/json_rpc \
+        -d '{"jsonrpc":"2.0","id":"0","method":"export_key_images","params":{"all":true}}' > "$OUTDIR/ki_resp.json" 2>/dev/null
+
+    if jq -e '.result.signed_key_images' "$OUTDIR/ki_resp.json" >/dev/null 2>&1; then
+        jq '.result' "$OUTDIR/ki_resp.json" > "$KEY_IMAGES_OUT"
+        log "Valid key_images.json exported successfully."
+    else
+        log "ERROR: Key image export failed."
+        jq '.error // .' "$OUTDIR/ki_resp.json" >> "$LOG_FILE"
+    fi
+
+    # 4. Cleanup
+    if [ -s "$SIGNED_TX_OUT" ] && [ -s "$KEY_IMAGES_OUT" ]; then
+        rm -f "$OUTDIR/$HEX_FILE"
+        log "Deleted processed unsigned tx."
+    else
+        log "CRITICAL: Missing signed tx or key images — preserving unsigned tx."
+    fi
+
+    stop_rpc "$WALLET_PORT"
+    rm -f "$OUTDIR/signed_resp.json" "$OUTDIR/ki_resp.json"
+}
+
+# --- Loop over unsigned transactions ---
 {
-    for TX_PATH in $UNSIGNED_LIST; do
-        SUB_DIR=$(basename "$(dirname "$TX_PATH")")
-        UNSIGNED_FILE=$(basename "$TX_PATH")
-        ID_PART=$(echo "$UNSIGNED_FILE" | sed 's/unsigned_tx_//')
-        
+    for HEX_PATH in "${UNSIGNED_LIST[@]}"; do
+        SUB_DIR=$(basename "$(dirname "$HEX_PATH")")
         OUTDIR="$WATCH_DIR/$SUB_DIR"
         REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
-        OUTPUTS_IN="$OUTDIR/outputs.bin"
-        SIGNED_TX_FINAL="$OUTDIR/signed_tx_$ID_PART"
-        KEY_IMAGES_OUT="$OUTDIR/key_images.bin"
+        HEX_FILE=$(basename "$HEX_PATH")
+        PORT_FILE="${OUTDIR}/rpc_port.cfg"
 
-        # Progress Update (Standard Out for Whiptail)
-        echo "XXX"
-        echo $(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
-        echo ""
-        echo "XXX"
-
-        if [ ! -f "$REAL_WALLET" ]; then
-            CURRENT_COUNT=$((CURRENT_COUNT + 1))
+        if [ ! -f "$PORT_FILE" ]; then
+            log "ERROR: $HEX_FILE ($SUB_DIR) - No rpc_port.cfg found. Skipping."
             continue
         fi
 
-        cd "$OUTDIR" || continue
-        rm -f "signed_monero_tx" "$KEY_IMAGES_OUT"
+        PERCENT=$(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
+        echo "XXX"
+        echo "$PERCENT"
+        echo "Signing: $SUB_DIR"
+        echo "XXX"
 
-        # CALL THE ISOLATED FUNCTION
-        do_sign "$REAL_WALLET" "$OUTPUTS_IN" "$UNSIGNED_FILE" "$KEY_IMAGES_OUT" "$LOG_FILE"
-
-        # Post-Processing
-        if [ -f "signed_monero_tx" ] && [ -f "$KEY_IMAGES_OUT" ]; then
-            mv "signed_monero_tx" "$SIGNED_TX_FINAL"
-            chown user:user "$SIGNED_TX_FINAL" "$KEY_IMAGES_OUT"
-            chmod 644 "$SIGNED_TX_FINAL" "$KEY_IMAGES_OUT"
-            rm -f "$UNSIGNED_FILE"
-            log_msg "SUCCESS: $SIGNED_TX_FINAL"
-        else
-            log_msg "ERROR: Failed $UNSIGNED_FILE"
-        fi
+        RPC_PORT=$(tr -d '\n\r ' < "$PORT_FILE")
+        log "Processing $HEX_FILE for $SUB_DIR on Port $RPC_PORT"
+        sign_tx_rpc "$OUTDIR" "$REAL_WALLET" "$HEX_FILE" "$RPC_PORT"
 
         CURRENT_COUNT=$((CURRENT_COUNT + 1))
     done
-    echo "100"
-} | whiptail --title " Signing Monero Transactions " --gauge "Initializing..." 6 50 0
 
-log_msg "--- Signing Session Complete ---"
+    echo "XXX"
+    echo "100"
+    echo "Signing Complete"
+    echo "XXX"
+} | whiptail --title " RPC Transaction Signing " --gauge "Starting..." 6 50 0
+
+log "--- RPC Signing Session Complete ---"

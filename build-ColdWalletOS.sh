@@ -43,26 +43,6 @@ lb config \
   --debian-installer none \
   --apt-recommends false \
   --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live live-media-label=ColdWalletOS live-media-path=/hw_sys"
-  
-  
-# --- 3.5. FETCH EXTERNAL BINARIES (AVALANCHE) since GitHub limits files to 100MB ---
-BIN_DEST="${BASE_DIR}/config/includes.chroot/usr/local/bin"
-mkdir -p "$BIN_DEST"
-
-if [ ! -f "$BIN_DEST/avalanche" ]; then
-    echo "[INFO] Avalanche binary not found. Attempting download..."
-    if ! curl -sSfL https://raw.githubusercontent.com/ava-labs/avalanche-cli/main/scripts/install.sh | sh -s -- -b "$BIN_DEST"; then
-        echo "[CRITICAL] Failed to download Avalanche binary! Aborting build."
-        exit 1
-    fi
-fi
-
-# DOUBLE CHECK: Fail if it's still not there after the attempt
-if [ ! -f "$BIN_DEST/avalanche" ]; then
-    echo "[CRITICAL] Avalanche binary is missing and could not be retrieved. Build stopped."
-    exit 1
-fi
-echo "[OK] Avalanche binary verified."
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build

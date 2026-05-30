@@ -1,27 +1,16 @@
 #!/bin/bash
-# Silently process all cold wallets in the background
-WATCH_DIR="/mnt/sallyport/watch_monero"
-VAULT_DIR="/mnt/vault/monero"
-PASS_FILE="/mnt/vault/config/password.cfg"
-LOG_FILE="/tmp/logs/monero_background_sync.log"
 
-# Ensure we can find cryptsetup/mount/etc ---
-export PATH=$PATH:/usr/sbin:/sbin
-
+# --- 1. ENVIRONMENT & STYLE ---
+export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
 export TERM=linux
 stty sane
 
-# 1. REMAP ANSI PALETTE
 if [ "$TERM" = "linux" ]; then
     echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
     echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
     clear
 fi
 
-# 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -37,57 +26,82 @@ export NEWT_COLORS='
   entry=white,black
 '
 
-# Read password exactly
-PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+# --- 2. CONFIGURATION ---
+WATCH_DIR="/mnt/sallyport/watch_monero"
+VAULT_DIR="/mnt/vault/monero"
+PASS_FILE="/mnt/vault/config/password.cfg"
+LOG_FILE="/tmp/logs/sync_monero_rpc.log"
+PASSWORD=$(tr -d '\n\r ' < "$PASS_FILE")
 
-# Create log directory if missing
-mkdir -p "$(dirname "$LOG_FILE")"
+log() { echo "[$(date '+%F %T')] $1" >> "$LOG_FILE"; }
 
-echo "--- Starting Automated Refresh: $(date) ---" > "$LOG_FILE"
+# --- 3. RPC FUNCTIONS ---
+start_rpc() {
+    monero-wallet-rpc --wallet-file "$1" --password "$PASSWORD" --rpc-bind-port "$2" \
+        --rpc-bind-ip 127.0.0.1 --disable-rpc-login --offline --daemon-address "" \
+        --log-file /tmp/wallet-sync-rpc.log --detach >/dev/null 2>&1
+    
+    until curl -s http://127.0.0.1:"$2"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_version"}' >/dev/null 2>&1; do
+        sleep 0.5
+    done
+}
 
-for dir in "$WATCH_DIR"/*/; do
-    SUB_DIR=$(basename "$dir")
-    REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
-    OUTPUTS_IN="${dir}outputs.bin"
-    KEY_IMAGES_OUT="${dir}key_images.bin"
+stop_rpc() {
+    curl -s -X POST http://127.0.0.1:"$1"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"stop_wallet"}' >/dev/null 2>&1
+}
 
-    # Only process if both the wallet and the exported outputs exist
-    if [[ -f "$REAL_WALLET" && -f "$OUTPUTS_IN" ]]; then
-        echo "Processing: $SUB_DIR" >> "$LOG_FILE"
-        cd "$dir" || continue
+# --- 4. EXECUTION ---
+SYNC_LIST=("$WATCH_DIR"/*)
+TOTAL_DIRS=${#SYNC_LIST[@]}
+CURRENT_COUNT=0
 
-        # Clean up old key images before starting
-        rm -f "$KEY_IMAGES_OUT"
+# Use a named pipe or simple redirection. 
+# We explicitly close everything except what we want to pipe to whiptail.
+{
+    for DIR_PATH in "${SYNC_LIST[@]}"; do
+        [ -d "$DIR_PATH" ] || continue
+        SUB_DIR=$(basename "$DIR_PATH")
+        PORT_FILE="${DIR_PATH}/rpc_port.cfg"
+        REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
 
-        /usr/bin/expect <<EOF >> "$LOG_FILE" 2>&1
-set timeout 300
-spawn monero-wallet-cli --wallet-file "$REAL_WALLET" --offline
+        # PROGRESS UPDATE
+        # Note: We do NOT use >&3 here. We echo to stdout.
+        # Everything inside these brackets is being piped to whiptail.
+        PERCENT=$(( (CURRENT_COUNT * 100) / TOTAL_DIRS ))
+        echo "XXX"
+        echo "$PERCENT"
+        echo "Resyncing: $SUB_DIR"
+        echo "XXX"
 
-expect "Wallet password:"
-send "$PASSWORD\r"
+        if [ -f "$PORT_FILE" ] && [ -f "$REAL_WALLET" ]; then
+            RPC_PORT=$(tr -d '\n\r ' < "$PORT_FILE")
+            start_rpc "$REAL_WALLET" "$RPC_PORT"
 
-expect -re ".*\]:"
-send "import_outputs outputs.bin\r"
-expect "Wallet password:"
-send "$PASSWORD\r"
-
-expect -re ".*\]:"
-sleep 1
-
-send "export_key_images key_images.bin\r"
-expect "Wallet password:"
-send "$PASSWORD\r"
-
-expect -re ".*\]:"
-send "exit\r"
-expect eof
-EOF
-
-        # Verification and cleanup
-        if [ -f "$KEY_IMAGES_OUT" ]; then
-            echo "SUCCESS: $SUB_DIR updated." >> "$LOG_FILE"
-        else
-            echo "FAILURE: $SUB_DIR image export failed." >> "$LOG_FILE"
+            # Your sync logic
+            OUTPUTS_HEX_FILE="$DIR_PATH/outputs.hex"
+            if [ -f "$OUTPUTS_HEX_FILE" ]; then
+                OUT_HEX=$(tr -d '\n\r ' < "$OUTPUTS_HEX_FILE")
+                IMPORT_JSON=$(jq -n --arg hex "$OUT_HEX" '{"jsonrpc":"2.0","id":"0","method":"import_outputs","params":{"outputs_data_hex":$hex}}')
+                curl -s -X POST http://127.0.0.1:"$RPC_PORT"/json_rpc -H "Content-Type: application/json" -d "$IMPORT_JSON" >/dev/null 2>&1
+                curl -s -X POST http://127.0.0.1:"$RPC_PORT"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"store"}' >/dev/null 2>&1
+                rm -f "$OUTPUTS_HEX_FILE"
+            fi
+            curl -s -X POST http://127.0.0.1:"$RPC_PORT"/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"export_key_images","params":{"all":true}}' > "$DIR_PATH/key_images.json" 2>/dev/null
+            stop_rpc "$RPC_PORT"
         fi
-    fi
-done
+
+        CURRENT_COUNT=$((CURRENT_COUNT + 1))
+    done
+    
+    # Finish
+    echo "XXX"
+    echo "100"
+    echo "Sync Complete"
+    echo "XXX"
+} | whiptail --title " Cold Wallet Resync " --gauge "\nResyncing Monero Wallets..." 6 50 0
+
+log "--- Cold Wallet Resync Session Complete ---"
+
+sync
+
+exec /usr/local/bin/os/main_menu
