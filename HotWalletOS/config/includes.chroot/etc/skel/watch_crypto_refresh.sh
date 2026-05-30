@@ -1,1 +1,0 @@
-sudo journalctl -u crypto-refresh -f
