@@ -1,0 +1,31 @@
+# kill rpc
+sudo fuser -k "/mnt/sallyport/watch_monero/4AGWs461KcrNmXoVY3Gmdsf7BsnPhMd97SvbZr6aBViG9ZGmnFjPGSXeHjK1EJM89Kc8irZdx2nXXDW59HRpFqf84UKZVsp/watchonly.keys"
+
+# Navigate to the specific transaction directory first
+cd /mnt/sallyport/watch_monero/4AGWs461KcrNmXoVY3Gmdsf7BsnPhMd97SvbZr6aBViG9ZGmnFjPGSXeHjK1EJM89Kc8irZdx2nXXDW59HRpFqf84UKZVsp
+
+# Run the wallet directly
+sudo monero-wallet-cli --wallet-file "watchonly" --daemon-address cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081 --proxy 127.0.0.1:9050 --trusted-daemon
+
+
+
+
+
+
+
+
+
+
+# this may be needed earlier
+#export_outputs all outputs.bin
+
+
+
+
+
+
+
+# Then run these manually:
+import_key_images key_images.bin
+
+submit_transfer signed_monero_tx

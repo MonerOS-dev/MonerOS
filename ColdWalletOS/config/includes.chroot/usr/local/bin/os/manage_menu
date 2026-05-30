@@ -39,9 +39,10 @@ while true; do
                       --nocancel \
                       --ok-button "Select" \
                       --menu "\nChoose a selection..." \
-                      16 50 4 \
+                      16 50 5 \
                       " Sign Transactions" "" \
                       " Create Wallet" "" \
+                      " Restore Wallet" "" \
                       " Delete Wallet" "" \
                       " Main Menu" "" \
                       3>&1 1>&2 2>&3)
@@ -49,6 +50,7 @@ while true; do
     case "$OPTION" in
         " Sign Transactions") sudo /usr/local/bin/os/sign_crypto ;;
         " Create Wallet") /usr/local/bin/os/create_menu ;;
+        " Restore Wallet") /usr/local/bin/os/restore_monero ;;
         " Delete Wallet") /usr/local/bin/os/delete_menu ;;
         " Main Menu") /usr/local/bin/os/main_menu ;;
     esac

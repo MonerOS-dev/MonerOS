@@ -6,29 +6,6 @@ VAULT_DIR="/mnt/vault/monero"
 PASS_FILE="/mnt/vault/config/password.cfg"
 LOG_FILE="/tmp/logs/sign_monero_rpc.log"
 
-# --- YOUR STYLE ---
-export TERM=linux
-if [ "$TERM" = "linux" ]; then
-    echo -ne "\e]P459cbe8"
-    echo -ne "\e]P7ffffff"
-    clear
-fi
-
-export NEWT_COLORS='
-  root=black,black
-  window=blue,black
-  shadow=black,black
-  border=blue,black
-  title=blue,black
-  textbox=white,black
-  label=white,black
-  listbox=white,black
-  actlistbox=black,blue
-  button=white,black
-  actbutton=black,white
-  entry=white,black
-'
-
 mkdir -p "$(dirname "$LOG_FILE")"
 
 # Ensure jq is installed
@@ -40,10 +17,8 @@ fi
 PASSWORD=$(tr -d '\n\r ' < "$PASS_FILE")
 log() { echo "[$(date '+%F %T')] $1" >> "$LOG_FILE"; }
 
-UNSIGNED_LIST=($(find "$WATCH_DIR" -type f -name "unsigned_tx_*"))
+UNSIGNED_LIST=$(find "$WATCH_DIR" -type f -name "unsigned_tx_*")
 [ -z "$UNSIGNED_LIST" ] && exit 0
-TOTAL_FILES=${#UNSIGNED_LIST[@]}
-CURRENT_COUNT=0
 
 start_rpc() {
     local WALLET_PATH=$1
@@ -58,7 +33,7 @@ start_rpc() {
         --offline \
         --daemon-address "" \
         --log-file /tmp/wallet-rpc.log \
-        --detach >/dev/null 2>&1
+        --detach
 
     until curl -s http://127.0.0.1:"$TARGET_PORT"/json_rpc \
         -d '{"jsonrpc":"2.0","id":"0","method":"get_version"}' >/dev/null; do
@@ -93,7 +68,7 @@ sign_tx_rpc() {
         OUT_HEX=$(tr -d '\n\r ' < "$OUTPUTS_HEX")
 
         curl -s -X POST http://127.0.0.1:"$WALLET_PORT"/json_rpc \
-            -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"import_outputs\",\"params\":{\"outputs_data_hex\":\"$OUT_HEX\"}}" >> "$LOG_FILE" 2>&1
+            -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"import_outputs\",\"params\":{\"outputs_data_hex\":\"$OUT_HEX\"}}" >> "$LOG_FILE"
     else
         log "WARNING: outputs.hex missing — cold wallet may be out of sync."
     fi
@@ -103,12 +78,13 @@ sign_tx_rpc() {
     TXSET_HEX=$(tr -d '\n\r ' < "$OUTDIR/$HEX_FILE")
 
     curl -s -X POST http://127.0.0.1:"$WALLET_PORT"/json_rpc \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"sign_transfer\",\"params\":{\"unsigned_txset\":\"$TXSET_HEX\"}}" > "$OUTDIR/signed_resp.json" 2>/dev/null
+        -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"sign_transfer\",\"params\":{\"unsigned_txset\":\"$TXSET_HEX\"}}" > "$OUTDIR/signed_resp.json"
 
     local SIGNED_HEX
     SIGNED_HEX=$(jq -r '.result.signed_txset // empty' "$OUTDIR/signed_resp.json")
 
     if [ -n "$SIGNED_HEX" ]; then
+        # Convert signed hex ? binary
         printf '%b' "$(echo "$SIGNED_HEX" | sed 's/../\\x&/g')" > "$SIGNED_TX_OUT"
         log "Signed tx written: $SIGNED_TX_OUT"
     else
@@ -119,8 +95,9 @@ sign_tx_rpc() {
 
     # 3. Export key images (RPC JSON format)
     curl -s -X POST http://127.0.0.1:"$WALLET_PORT"/json_rpc \
-        -d '{"jsonrpc":"2.0","id":"0","method":"export_key_images","params":{"all":true}}' > "$OUTDIR/ki_resp.json" 2>/dev/null
+        -d '{"jsonrpc":"2.0","id":"0","method":"export_key_images","params":{"all":true}}' > "$OUTDIR/ki_resp.json"
 
+    # RPC format uses .result.signed_key_images
     if jq -e '.result.signed_key_images' "$OUTDIR/ki_resp.json" >/dev/null 2>&1; then
         jq '.result' "$OUTDIR/ki_resp.json" > "$KEY_IMAGES_OUT"
         log "Valid key_images.json exported successfully."
@@ -141,37 +118,22 @@ sign_tx_rpc() {
     rm -f "$OUTDIR/signed_resp.json" "$OUTDIR/ki_resp.json"
 }
 
-# --- Loop over unsigned transactions ---
-{
-    for HEX_PATH in "${UNSIGNED_LIST[@]}"; do
-        SUB_DIR=$(basename "$(dirname "$HEX_PATH")")
-        OUTDIR="$WATCH_DIR/$SUB_DIR"
-        REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
-        HEX_FILE=$(basename "$HEX_PATH")
-        PORT_FILE="${OUTDIR}/rpc_port.cfg"
+# Loop over unsigned transactions
+for HEX_PATH in $UNSIGNED_LIST; do
+    SUB_DIR=$(basename "$(dirname "$HEX_PATH")")
+    OUTDIR="$WATCH_DIR/$SUB_DIR"
+    REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
+    HEX_FILE=$(basename "$HEX_PATH")
+    PORT_FILE="${OUTDIR}/rpc_port.cfg"
 
-        if [ ! -f "$PORT_FILE" ]; then
-            log "ERROR: $HEX_FILE ($SUB_DIR) - No rpc_port.cfg found. Skipping."
-            continue
-        fi
+    if [ ! -f "$PORT_FILE" ]; then
+        log "ERROR: $HEX_FILE ($SUB_DIR) - No rpc_port.cfg found. Skipping."
+        continue
+    fi
 
-        PERCENT=$(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
-        echo "XXX"
-        echo "$PERCENT"
-        echo "Signing: $SUB_DIR"
-        echo "XXX"
-
-        RPC_PORT=$(tr -d '\n\r ' < "$PORT_FILE")
-        log "Processing $HEX_FILE for $SUB_DIR on Port $RPC_PORT"
-        sign_tx_rpc "$OUTDIR" "$REAL_WALLET" "$HEX_FILE" "$RPC_PORT"
-
-        CURRENT_COUNT=$((CURRENT_COUNT + 1))
-    done
-
-    echo "XXX"
-    echo "100"
-    echo "Signing Complete"
-    echo "XXX"
-} | whiptail --title " RPC Transaction Signing " --gauge "Starting..." 6 50 0
+    RPC_PORT=$(tr -d '\n\r ' < "$PORT_FILE")
+    log "Processing $HEX_FILE for $SUB_DIR on Port $RPC_PORT"
+    sign_tx_rpc "$OUTDIR" "$REAL_WALLET" "$HEX_FILE" "$RPC_PORT"
+done
 
 log "--- RPC Signing Session Complete ---"

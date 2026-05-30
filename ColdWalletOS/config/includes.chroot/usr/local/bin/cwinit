@@ -30,9 +30,6 @@ if [ "$TERM" = "linux" ]; then
 fi
 
 # 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -50,6 +47,7 @@ export NEWT_COLORS='
 
 MOUNT_POINT="/mnt/vault"
 MAPPER_NAME="cwos_unlocked"
+SALLY_MAPPER="sallyport_unlocked"
 FINAL_MOUNT="/mnt/sallyport"
 EXT_MNT="/mnt/external"
 TARGET_LABEL="HWOS_SALLY"
@@ -86,7 +84,7 @@ else
     exec /usr/local/bin/os/setup_menu
 fi
 
-# Retrieve saved password for VeraCrypt
+# Retrieve saved password for the LUKS container
 SAVED_PASS=$(cat "$MOUNT_POINT/config/password.cfg" 2>/dev/null)
 
 # --- 3. HARDWARE SEARCH ---
@@ -109,16 +107,31 @@ if ! mountpoint -q "$FINAL_MOUNT"; then
     fi
 fi
 
-# --- 4. MOUNT SALLYPORT (VERACRYPT) ---
+# --- 4. MOUNT SALLYPORT (LUKS) ---
 if ! mountpoint -q "$FINAL_MOUNT"; then
+    # Verify the sallyport file container is actually a valid LUKS volume
+    if ! sudo cryptsetup isLuks "$CONTAINER_PATH" 2>/dev/null; then
+        echo "FAILURE: $CONTAINER_PATH is not a valid LUKS volume" >> "$LOG_FILE"
+        exec /usr/local/bin/os/setup_menu
+    fi
+
     (
-        echo 50
+        echo 30
         sudo mkdir -p "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
-        if printf '%s' "$SAVED_PASS" | sudo veracrypt --text --non-interactive --stdin \
-            --mount "$CONTAINER_PATH" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1; then
-            echo 100; sleep 1
+        
+        # Unlock the loop container to the sallyport mapper path
+        if printf '%s' "$SAVED_PASS" | sudo cryptsetup open "$CONTAINER_PATH" "$SALLY_MAPPER" -d - >> "$LOG_FILE" 2>&1; then
+            echo 70
+            # Mount the inner ext4 filesystem mapped by cryptsetup
+            if sudo mount "/dev/mapper/$SALLY_MAPPER" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1; then
+                echo 100; sleep 1
+            else
+                echo "FAILED: Mounting /dev/mapper/$SALLY_MAPPER failed." >> "$LOG_FILE"
+                sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
+                exit 1
+            fi
         else
-            echo "FAILED: VeraCrypt mount failed." >> "$LOG_FILE"
+            echo "FAILED: LUKS decryption for sallyport.bin failed." >> "$LOG_FILE"
             exit 1
         fi
     ) | whiptail --title " Opening Sallyport " --gauge "\nDecrypting and mounting sallyport..." 8 50 0
@@ -126,12 +139,7 @@ fi
 
 # --- FINAL VERIFICATION ---
 if mountpoint -q "$FINAL_MOUNT"; then
-    # LAUNCH BACKGROUND REFRESH HERE
-    # The '&' sends it to background, and 'disown' ensures it keeps 
-    # running even after the unlock script exits.
-    /usr/local/bin/os/refresh_monero > /dev/null 2>&1 & disown
-    
-    exec /usr/local/bin/os/main_menu
+    sudo bash /usr/local/bin/os/refresh_monero
 else
     # Decryption failed or file missing? Go to setup.
     exec /usr/local/bin/os/setup_menu

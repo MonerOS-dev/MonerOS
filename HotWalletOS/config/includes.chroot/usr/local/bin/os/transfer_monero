@@ -1,114 +1,183 @@
 #!/bin/bash
 
-# --- Inputs ---
+# --- Configuration & Path Setup ---
 WATCH_ADDR=$1
 DEST=$2
 COMMAND_OR_AMOUNT=$3
 TIP_PERCENT=$4
 PASSWORD=$5
 
-# --- Configuration ---
-TIP_ADDRESS="4AaYPr63zeJHm446W7oVxd4DqwFwzSrVr5HbaGPCMLXDi7cNVMJQkMAKnTBELmGXNoTFHxqx5qax2bNJF22mdSGw2eeRsgE"
+TIP_ADDRESS="4652nzqaNoh2seCWJ2BkUei236kHpsWrMe8WRgcu14otNF8GqFaSFybNG1qtRtJcDn6S2hmzyhnaoSkdtxrWTzDXA6YirrK"
 BASE_DIR="/mnt/sallyport/watch_monero"
 OUTDIR="$BASE_DIR/$WATCH_ADDR"
-NODE_CACHE_FILE="/home/user/monero_node.txt"
-DAEMON=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
-PROXY="127.0.0.1:9050"
 TIMESTAMP=$(date +%s)
-DEBUG=false
+LOG_FILE="$OUTDIR/hot_process.log"
+TIP_LOG="$OUTDIR/tip.log"
+PORT_FILE="$OUTDIR/rpc_port.cfg"
 
-# --- 1. PRE-CHECK ---
-cd "$OUTDIR" || exit 1
+# --- Silent Redirection Setup ---
+# Save original terminal
+exec 3>&1 4>&2
+# Redirect all output to log file silently
+exec > "$LOG_FILE" 2>&1
 
-rm -f "outputs.bin"
-#echo "[CLEAN] Removed old outputs.bin to prevent overwrite prompt."
+# Helper function to print to terminal only when desired
+msg() {
+    echo "$1" >&3
+}
 
-# Check if a transaction is already waiting to be signed or submitted
-if ls unsigned_tx_* 1>/dev/null 2>&1 || ls signed_tx_* 1>/dev/null 2>&1; then
-    echo "ABORTING: A pending transaction already exists! Please sign and submit that one first."
+# Ensure log is fresh
+rm -f "$LOG_FILE"
+
+trap 'exec 1>&3 2>&4; echo "CRITICAL FAILURE: Script crashed. Check $LOG_FILE"; exit 1' ERR
+
+#echo "Initializing operational workspace directory arrays..."
+cd "$OUTDIR" || { echo "FAILURE: Critical execution directory not found: $OUTDIR"; exit 1; }
+
+# Defensive Cleanup: Prevent stale transaction contamination
+echo "Purging legacy transaction artifacts from workspace..."
+rm -f "unsigned_tx_"* "response.json" "outputs.hex" "raw_out.json"
+
+echo "Checking tracking state parameters and active connectivity maps..."
+if [ -f "$PORT_FILE" ]; then
+    RPC_PORT=$(tr -d '\n\r ' < "$PORT_FILE")
+    echo "Active interface route found. Target connection assigned to port: $RPC_PORT"
+else
+    echo "FAILURE: No running RPC server port configuration found for this address segment."
     exit 1
 fi
 
-# --- 2. Calculate Tip and Handle No-Tip Situation ---
-if [ "$COMMAND_OR_AMOUNT" == "sweep_all" ]; then
-    FINAL_CMD="sweep_all $DEST" 
+echo "Sending hard system refresh signal to the wallet tracking loop..."
+curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"refresh","params":{"start_height":0}}' > /dev/null
+
+echo "Retrieving current atomic wallet balance states from the local daemon..."
+BAL_RESP=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_balance","params":{"account_index":0,"all_accounts":true}}')
+BALANCE_RAW=$(echo "$BAL_RESP" | jq -r '.result.balance // 0')
+
+echo "Sanitizing provided tip numeric character fields..."
+TIP_PERCENT_CLEAN=$(echo "$TIP_PERCENT" | tr -cd '0-9.')
+
+if [ -n "$TIP_PERCENT_CLEAN" ] && [ "$(echo "$BALANCE_RAW > 10000000000" | bc)" -eq 1 ]; then 
+    echo "Calculating variable tracking tip allocation parameters..."
+    TIP_ATOMIC=$(echo "$BALANCE_RAW * $TIP_PERCENT_CLEAN / 100" | bc | cut -d. -f1)
 else
-    TIP_AMOUNT=$(printf "%.12f" "$(echo "scale=12; ($COMMAND_OR_AMOUNT * $TIP_PERCENT) / 100" | bc -l)")
-    
-    # If tip is 0, only send to one destination. If > 0, send to both.
-    if (( $(echo "$TIP_AMOUNT > 0" | bc -l) )); then
-        FINAL_CMD="transfer $DEST $COMMAND_OR_AMOUNT $TIP_ADDRESS $TIP_AMOUNT"
-    else
-        FINAL_CMD="transfer $DEST $COMMAND_OR_AMOUNT"
-    fi
+    echo "Tip percentage parameter evaluating to zero or wallet metrics beneath minimal threshold parameters."
+    TIP_ATOMIC=0
 fi
 
-# Clean up internal artifacts before starting
-rm -f "unsigned_monero_tx" "outputs.bin"
-sudo killall -9 monero-wallet-cli 2>/dev/null
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watch: $WATCH_ADDR | Raw Balance: $BALANCE_RAW | Tip %: $TIP_PERCENT_CLEAN% | Calculated Tip (Atomic): $TIP_ATOMIC" >> "$TIP_LOG"
 
-# --- 3. SESSION: Linear Logic ---
-export PASSWORD DAEMON FINAL_CMD PROXY
+CMD_LOWER=$(echo "$COMMAND_OR_AMOUNT" | tr '[:upper:]' '[:lower:]')
 
-{
-expect <<'EOF'
-set timeout 600
-set PASS $env(PASSWORD)
-set NODE $env(DAEMON)
-set CMD  $env(FINAL_CMD)
-set PRX  $env(PROXY)  ;# Capture the proxy variable
+if [ "$CMD_LOWER" == "sweep_all" ]; then
+    echo "Command instruction interpreted as full balance sweep block configuration."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing precision-split sweep via transfer simulation..." >> "$TIP_LOG"
+    
+    REMAINDER_ATOMIC=$BALANCE_RAW
+    ITERATION_COUNT=0
+    
+    if [ "$TIP_ATOMIC" -le 0 ]; then
+        echo "No tip allocations designated. Processing un-split direct native sweep_all map..."
+        PAYLOAD=$(jq -n --arg dest "$DEST" '{"jsonrpc":"2.0","id":"0","method":"sweep_all","params":{"address":$dest,"account_index":0,"priority":1,"ring_size":16,"get_tx_set":true,"do_not_relay":true}}')
+        RPC_RESPONSE=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -H "Content-Type: application/json" -d "$PAYLOAD")
+        echo "$RPC_RESPONSE" > "response.json"
+    else
+        echo "Tip values configured. Commencing iterative zero-dust deduction loop calculations..."
+        while true; do
+            ITERATION_COUNT=$((ITERATION_COUNT + 1))
+            
+            if [ "$ITERATION_COUNT" -gt 50 ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILURE: Max loop iterations (50) reached. Safety exit." >> "$TIP_LOG"
+                echo "FAILURE: Optimization loop took too many steps. Try manually adjusting fees."
+                exit 1
+            fi
 
-spawn monero-wallet-cli --wallet-file "watchonly" --daemon-address "$NODE" --proxy "$PRX" --trusted-daemon
-
-# 1. Login
-expect "Wallet password:"
-send -- "$PASS\r"
-
-# 2. Export Outputs
-expect -re ".*\]:"
-send "export_outputs all outputs.bin\r"
-
-# 3. Password for Export
-expect "Wallet password:"
-send -- "$PASS\r"
-
-# 4. Trigger Transfer
-expect -re ".*\]:"
-send -- "$CMD\r"
-
-# 5. Handle confirmations, final password, and success
-expect {
-    "Wallet password:" {
-        send -- "$PASS\r"
-        exp_continue
-    }
-    -re ".*(Is this okay|backlog|Privacy|old outputs|fee).*\[Y/n\]:?" {
-        send "y\r"
-        exp_continue
-    }
-    # IMPORTANT: We wait specifically for the success message BEFORE allowing an exit
-    "Unsigned transaction(s) successfully written to file: unsigned_monero_tx" {
-        # Now that we know it's written, we wait for the next prompt to exit
-        expect -re ".*\]:"
-        send "exit\r"
-    }
-    timeout {
-        puts "\n\[ERROR\] Request timed out."
-        exit 1
-    }
-    eof
-}
-EOF
-} > $( [ "$DEBUG" = true ] && echo "/dev/stdout" || echo "/dev/null" ) 2>&1
-
-# --- 4. Final Naming ---
-if ls unsigned_monero_tx* 1> /dev/null 2>&1; then
-    for f in unsigned_monero_tx*; do
-        suffix=${f#unsigned_monero_tx}
-        mv "$f" "unsigned_tx_${TIMESTAMP}${suffix}"
-    done
-    echo "SUCCESS: Created unsigned_tx_${TIMESTAMP}"
+            DEST_AMOUNT=$(echo "$REMAINDER_ATOMIC - $TIP_ATOMIC" | bc)
+            
+            if [ -z "$DEST_AMOUNT" ] || [ "$(echo "$DEST_AMOUNT <= 0" | bc)" -eq 1 ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILURE: Wallet balance is too low to cover network fees and tips." >> "$TIP_LOG"
+                echo "FAILURE: Wallet balance is too low to cover network fees and tips."
+                exit 1
+            fi
+            
+            PAYLOAD=$(jq -n --arg dest "$DEST" --argjson dest_amt "$DEST_AMOUNT" --arg tip_addr "$TIP_ADDRESS" --argjson tip_amt "$TIP_ATOMIC" \
+                '{"jsonrpc":"2.0","id":"0","method":"transfer","params":{"destinations":[{"address":$dest,"amount":$dest_amt},{"address":$tip_addr,"amount":$tip_amt}],"account_index":0,"priority":1,"ring_size":16,"get_tx_set":true,"do_not_relay":true}}')
+            
+            RPC_RESPONSE=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -H "Content-Type: application/json" -d "$PAYLOAD")
+            
+            if echo "$RPC_RESPONSE" | jq -e '.result.unsigned_txset' >/dev/null 2>&1; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: Found zero-dust fee balance point on iteration $ITERATION_COUNT." >> "$TIP_LOG"
+                echo "$RPC_RESPONSE" > "response.json"
+                break
+            else
+                FEE_RESERVE=$(echo "$RPC_RESPONSE" | jq -r '.error.data.fee // empty')
+                
+                if [ -n "$FEE_RESERVE" ] && [ "$FEE_RESERVE" != "null" ] && [ "$FEE_RESERVE" -gt 0 ]; then
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loop iteration $ITERATION_COUNT failed. Fee required: $FEE_RESERVE." >> "$TIP_LOG"
+                    REMAINDER_ATOMIC=$(echo "$REMAINDER_ATOMIC - $FEE_RESERVE" | bc)
+                else
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loop iteration $ITERATION_COUNT failed without explicit fee parameters. Shaving 4000000 units." >> "$TIP_LOG"
+                    REMAINDER_ATOMIC=$(echo "$REMAINDER_ATOMIC - 4000000" | bc)
+                fi
+            fi
+        done
+    fi
+elif [[ "$CMD_LOWER" =~ ^[0-9.]+$ ]]; then
+    echo "Command parsed as fixed-amount transfer logic configuration."
+    AMT_ATOMIC=$(echo "$COMMAND_OR_AMOUNT * 1000000000000" | bc | cut -d. -f1)
+    
+    if [ -n "$TIP_PERCENT_CLEAN" ] && [ "$TIP_ATOMIC" -gt 0 ]; then
+        TIP_ATOMIC=$(echo "$AMT_ATOMIC * $TIP_PERCENT_CLEAN / 100" | bc | cut -d. -f1)
+    fi
+    
+    if [ "$TIP_ATOMIC" -gt 0 ]; then
+        PAYLOAD=$(jq -n --arg dest "$DEST" --argjson amt "$AMT_ATOMIC" --arg tip_addr "$TIP_ADDRESS" --argjson tip_amt "$TIP_ATOMIC" \
+            '{"jsonrpc":"2.0","id":"0","method":"transfer","params":{"destinations":[{"address":$dest,"amount":$amt},{"address":$tip_addr,"amount":$tip_amt}],"account_index":0,"priority":1,"ring_size":16,"get_tx_set":true,"do_not_relay":true}}')
+    else
+        PAYLOAD=$(jq -n --arg dest "$DEST" --argjson amt "$AMT_ATOMIC" \
+            '{"jsonrpc":"2.0","id":"0","method":"transfer","params":{"destinations":[{"address":$dest,"amount":$amt}],"account_index":0,"priority":1,"ring_size":16,"get_tx_set":true,"do_not_relay":true}}')
+    fi
+    RPC_RESPONSE=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -H "Content-Type: application/json" -d "$PAYLOAD")
+    echo "$RPC_RESPONSE" > "response.json"
 else
-    echo "FAILURE: Transaction not created. Check your wallet balance or node connection."
+    echo "FAILURE: Invalid transactional instruction token parameter specified: '$COMMAND_OR_AMOUNT'"
+    exit 1
+fi
+
+echo "Verifying server error payload data maps..."
+RPC_ERR_MSG=$(echo "$RPC_RESPONSE" | jq -r '.error.message // empty')
+if [ -n "$RPC_ERR_MSG" ]; then
+    echo "FAILURE: Monero Wallet RPC server returned direct exception rule: $RPC_ERR_MSG"
+    rm -f "response.json" "raw_out.json" "outputs.hex"
+    exit 1
+fi
+
+echo "Compiling current outputs tracking data matrices from local wallet map..."
+curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"export_outputs","params":{"all":true}}' > "raw_out.json"
+
+OUT_HEX_DATA=$(jq -r '.result.outputs_data_hex // empty' "raw_out.json")
+
+if [ -n "$OUT_HEX_DATA" ] && [ "$OUT_HEX_DATA" != "null" ]; then
+    echo "$OUT_HEX_DATA" > "outputs.hex"
+else
+    echo "FAILURE: Critical exception. Could not parse outputs_data_hex token string from compile maps."
+    rm -f "raw_out.json" "response.json"
+    exit 1
+fi
+rm -f "raw_out.json"
+
+TX_SET_HEX=$(jq -r '.result.unsigned_txset // .result.tx_metadata_list[0] // empty' "response.json")
+
+# --- Final Status Report ---
+exec 1>&3 2>&4
+if [ -n "$TX_SET_HEX" ] && [ -f "outputs.hex" ]; then
+    echo "$TX_SET_HEX" > "unsigned_tx_${TIMESTAMP}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] STATUS: SUCCESS generated tx file." >> "$TIP_LOG"
+    rm -f "response.json" "$LOG_FILE"
+    msg "SUCCESS: Created unsigned_tx_${TIMESTAMP}"
+else
+    msg "FAILURE: Final output validation checks encountered errors."
+    cat "$LOG_FILE"
+    rm -f "$LOG_FILE"
     exit 1
 fi

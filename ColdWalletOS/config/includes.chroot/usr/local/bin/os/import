@@ -7,6 +7,7 @@ EXT_MNT="/mnt/external"
 BACKUP_NAME="cwosvault.bin"
 SALLY_BIN="sallyport.bin"
 MAPPER_NAME="cwos_unlocked"
+SALLY_MAPPER="sallyport_unlocked"
 MOUNT_POINT="/mnt/vault"
 FINAL_MOUNT="/mnt/sallyport"
 TOTAL_SIZE=1073741824 
@@ -23,9 +24,6 @@ if [ "$TERM" = "linux" ]; then
 fi
 
 # 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -64,10 +62,9 @@ while ! mountpoint -q "$EXT_MNT"; do
 done
 
 # Ensure the user understands that $TARGET will be wiped.
-# --defaultno makes "No/Cancel" the pre-selected option for safety.
 if ! whiptail --title " WARNING: OVERWRITE DATA " --fb --defaultno --yesno \
 "\nYOU ARE ABOUT TO IMPORT A VAULT.\n\n\
-This will COMPLETELY OVERWRITE the existing vault \n\n
+This will COMPLETELY OVERWRITE the existing vault \n\n\
 All internal data will be permanently lost.\n\n\
 Are you sure you want to proceed?" 15 50; then
     exec /usr/local/bin/os/main_menu
@@ -75,7 +72,9 @@ Are you sure you want to proceed?" 15 50; then
 fi
 
 # Clear internal locks before DD
-sudo umount "$TARGET" >/dev/null 2>&1
+sudo umount "$FINAL_MOUNT" >/dev/null 2>&1
+sudo cryptsetup close "$SALLY_MAPPER" >/dev/null 2>&1
+sudo umount "$MOUNT_POINT" >/dev/null 2>&1
 sudo cryptsetup close "$MAPPER_NAME" >/dev/null 2>&1
 
 # --- 2. EXECUTE RESTORE (DD) ---
@@ -98,19 +97,31 @@ while true; do
     VAULT_PASS=$(whiptail --title " Verify New Vault " --fb --nocancel --passwordbox \
         "\nEnter Password for the imported Vault:" 11 50 3>&1 1>&2 2>&3)
 
-    # Attempt to open the newly written partition
-    if printf "%s" "$VAULT_PASS" | sudo cryptsetup open "$TARGET" "$MAPPER_NAME" -d -; then
+    # Attempt to open the newly written partition via LUKS
+    if printf "%s" "$VAULT_PASS" | sudo cryptsetup open "$TARGET" "$MAPPER_NAME" -d - >> "$LOG_FILE" 2>&1; then
         sudo mkdir -p "$MOUNT_POINT"
-        sudo mount "/dev/mapper/$MAPPER_NAME" "$MOUNT_POINT"
+        sudo mount "/dev/mapper/$MAPPER_NAME" "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
         
-        # Pull saved pass for sallyport (if it exists)
+        # Pull saved pass for sallyport loop container
         SAVED_PASS=$(cat "$MOUNT_POINT/config/password.cfg" 2>/dev/null)
         
         # Check for Sallyport file on the same external drive
         if [ -f "$EXT_MNT/$SALLY_BIN" ]; then
-            sudo mkdir -p "$FINAL_MOUNT"
-            printf '%s' "$SAVED_PASS" | sudo veracrypt --text --non-interactive --stdin \
-                --mount "$EXT_MNT/$SALLY_BIN" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+            # Verify the restored/existing sallyport container file is a valid LUKS target
+            if sudo cryptsetup isLuks "$EXT_MNT/$SALLY_BIN" 2>/dev/null; then
+                sudo mkdir -p "$FINAL_MOUNT"
+                # Open container via loop interface natively through cryptsetup
+                if printf '%s' "$SAVED_PASS" | sudo cryptsetup open "$EXT_MNT/$SALLY_BIN" "$SALLY_MAPPER" -d - >> "$LOG_FILE" 2>&1; then
+                    if ! sudo mount "/dev/mapper/$SALLY_MAPPER" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1; then
+                        echo "WARNING: Failed mounting sallyport device mapping." >> "$LOG_FILE"
+                        sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
+                    fi
+                else
+                    echo "WARNING: Failed unlocking sallyport container payload." >> "$LOG_FILE"
+                fi
+            else
+                echo "WARNING: $SALLY_BIN found but is not a valid LUKS image." >> "$LOG_FILE"
+            fi
         fi
         
         whiptail --title " Success " --msgbox "Vault restored and Sallyport mapped." 8 45

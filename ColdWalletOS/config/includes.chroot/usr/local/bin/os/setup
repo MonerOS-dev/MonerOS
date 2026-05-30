@@ -25,9 +25,6 @@ if [ "$TERM" = "linux" ]; then
 fi
 
 # 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -53,15 +50,17 @@ MOUNT_POINT="/mnt/vault"
 MNT_PATH="/mnt/external"
 TARGET_LABEL="HWOS_SALLY"
 CONTAINER_PATH="$MNT_PATH/sallyport.bin"
+SALLY_MAPPER="sallyport_unlocked"
 FINAL_MOUNT="/mnt/sallyport"
 
 # SIZE: 250MB in Kilobytes
 SALLY_SIZE_KB=256000
 
 # Cleanup environment
+sudo umount "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+sudo cryptsetup close "$SALLY_MAPPER" >> "$LOG_FILE" 2>&1
 sudo umount "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
 sudo umount "$MNT_PATH" >> "$LOG_FILE" 2>&1
-sudo umount "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
 sudo cryptsetup close "$MAPPER_NAME" >> "$LOG_FILE" 2>&1
 
 # --- START UI ---
@@ -89,7 +88,7 @@ while true; do
                      printf "%s" "$PASS1" > "$MOUNT_POINT/config/password.cfg"
                      chmod 600 "$MOUNT_POINT/config/password.cfg"
             echo 100; sleep 1
-        ) | whiptail --title " Initializing Vault " --gauge "\n   Creating encrypted internal container... " 9 50 0
+        ) | whiptail --title " Initializing Vault " --gauge "\n   Creating encrypted internal container... " 8 50 0
         break
     else
         whiptail --title " Error " --fb --msgbox "\n   Passwords do not match. Try again. " 10 45
@@ -100,7 +99,6 @@ done
 while true; do
     sudo umount "$MNT_PATH" 2>/dev/null >> "$LOG_FILE" 2>&1
     
-    # Ensure udev has registered the labels
     sudo udevadm trigger
     sudo udevadm settle --timeout=2
 
@@ -108,8 +106,6 @@ while true; do
         FOUND_PATH=""
         echo 10
         while [ -z "$FOUND_PATH" ]; do
-            # findfs is much more reliable than parsing lsblk output
-            # It returns the full path (e.g., /dev/sdb3) directly
             FOUND_PATH=$(sudo findfs LABEL="$TARGET_LABEL" 2>/dev/null)
             
             if [ -n "$FOUND_PATH" ]; then
@@ -118,12 +114,10 @@ while true; do
                 if sudo mount "$FOUND_PATH" "$MNT_PATH" >> "$LOG_FILE" 2>&1; then
                     echo 100; sleep 1; exit 0
                 else
-                    # If mount fails, clear FOUND_PATH to keep searching
                     FOUND_PATH=""
                 fi
             fi
             
-            # The bounce animation
             echo 20; sleep 0.5; echo 25; sleep 0.5
         done
     } | whiptail --title " Sallyport Hardware Search " --gauge "\nSearching for drive: $TARGET_LABEL\n\nPlease insert the hardware now..." 8 50 0
@@ -137,43 +131,38 @@ while true; do
     fi
 done
 
-# 3. Encrypted Sallyport Creation
+# 3. Encrypted Sallyport Creation (LUKS + ext4)
 VAULT_PASS=$(cat "$MOUNT_POINT/config/password.cfg" | xargs)
 
 if [ -f "$CONTAINER_PATH" ]; then
-    sudo rm "$CONTAINER_PATH"
+    sudo rm -f "$CONTAINER_PATH"
 fi
 
-printf '%s' "$VAULT_PASS" | sudo veracrypt --text --non-interactive --stdin \
-    --create "$CONTAINER_PATH" \
-    --size="${SALLY_SIZE_KB}K" \
-    --volume-type=normal \
-    --encryption=AES \
-    --hash=SHA-512 \
-    --filesystem=FAT \
-    --pim=0 \
-    --keyfiles="" >> "$LOG_FILE" 2>&1 &
-VC_PID=$!
-
 {
-    while kill -0 $VC_PID 2>/dev/null; do
-        if [ -f "$CONTAINER_PATH" ]; then
-            CUR_B=$(stat -c%s "$CONTAINER_PATH" 2>/dev/null || echo 0)
-            CUR_KB=$((CUR_B / 1024))
-            # Fixed progress calculation:
-            PERCENT=$(( 100 * CUR_KB / SALLY_SIZE_KB ))
-            [ "$PERCENT" -gt 98 ] && PERCENT=98
-            echo "$PERCENT"
-        fi
-        sleep 1
-    done
-
-    echo XXX; echo 99; echo "\nFinalizing: Mounting Sallyport..."; echo XXX
+    echo 10
+    # Create the raw container file using dd (allocated with zeroes for stability)
+    sudo dd if=/dev/zero of="$CONTAINER_PATH" bs=1K count="$SALLY_SIZE_KB" conv=fsync >> "$LOG_FILE" 2>&1
+    
+    echo 40
+    # Format the file container as LUKS2
+    printf '%s' "$VAULT_PASS" | sudo cryptsetup luksFormat --type luks2 "$CONTAINER_PATH" -d - >> "$LOG_FILE" 2>&1
+    
+    echo 60
+    # Open the LUKS file container via loopback mapping
+    printf '%s' "$VAULT_PASS" | sudo cryptsetup open "$CONTAINER_PATH" "$SALLY_MAPPER" -d - >> "$LOG_FILE" 2>&1
+    
+    echo 80
+    # Format the unlocked mapper device with ext4
+    sudo mkfs.ext4 -q -F -L sallyport "/dev/mapper/$SALLY_MAPPER" >> "$LOG_FILE" 2>&1
+    
+    echo 90
+    echo XXX; echo 95; echo "\nFinalizing: Mounting Sallyport..."; echo XXX
     sudo mkdir -p "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
-    printf '%s' "$VAULT_PASS" | sudo veracrypt --text --non-interactive --stdin \
-        --mount "$CONTAINER_PATH" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
-    (sudo sync &)
-    echo 100
+    sudo mount "/dev/mapper/$SALLY_MAPPER" "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+    sudo chown 1000:1000 "$FINAL_MOUNT" >> "$LOG_FILE" 2>&1
+    
+    sudo sync
+    echo 100; sleep 1
 } | whiptail --title " Finalizing " --fb --gauge "\nWriting: sallyport.bin" 8 50 0
 
 # Final check

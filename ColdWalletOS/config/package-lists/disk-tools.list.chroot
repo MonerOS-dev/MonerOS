@@ -10,3 +10,5 @@ dos2unix
 nodejs
 whiptail
 expect
+curl
+jq

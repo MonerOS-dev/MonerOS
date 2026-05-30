@@ -1,12 +1,6 @@
 #!/bin/bash
 
-
-
 ######################### This page should be edited in hwos_mods ###########################
-
-
-
-
 
 #exit 0   # Temporarily disable this file
 
@@ -15,7 +9,6 @@ sudo chvt 1
 exec < /dev/tty1 > /dev/tty1 2>&1
 
 # 2. ENVIRONMENT & STYLE
-# UI Styling
 export TERM=linux
 stty sane
 
@@ -33,8 +26,7 @@ sleep 1
 
 HW_VERSION=$(cat "/usr/local/bin/hwversion" | tr -d '\n' | xargs)
 
-
-# Prevent exit via keyboard shortcuts (Matches your known-good config)
+# Prevent exit via keyboard shortcuts
 trap '' SIGINT SIGTERM SIGTSTP
 
 # --- 2. CONFIGURATION & LOGGING ---
@@ -42,7 +34,7 @@ LOG_FILE="/tmp/logs/hwos_unlock.log"
 sudo mkdir -p /tmp/logs
 sudo chown 1000:1000 /tmp/logs
 
-# Suppress kernel spam (From your known-good script)
+# Suppress kernel spam
 sudo dmesg -n 3
 export TERM=linux
 stty sane
@@ -50,6 +42,7 @@ stty sane
 EXT_MNT="/mnt/external"
 SALLY_MNT="/mnt/sallyport"
 TARGET_FILE="$EXT_MNT/sallyport.bin"
+SALLY_MAPPER="sallyport_unlocked"
 
 # 1. REMAP ANSI PALETTE
 if [ "$TERM" = "linux" ]; then
@@ -61,9 +54,6 @@ if [ "$TERM" = "linux" ]; then
 fi
 
 # 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (now remapped to Bright Red)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -95,28 +85,16 @@ fi
 
 echo "Targeting Partition: $TARGET_PART" >> "$LOG_FILE"
 
-
 # Mount the external partition
 sudo mkdir -p "$EXT_MNT"
-
 sudo mount -t exfat -o uid=1000,gid=1000,fmask=0000,dmask=0000 "$TARGET_PART" "$EXT_MNT"
 
-
-
-
-
 # Setup internet
-# Give the system 2 seconds to stabilize the hardware after mounting
 sleep 2
 IP_ADDR=$(hostname -I)
 if [[ -z "${IP_ADDR// }" ]]; then
     sudo bash /usr/local/bin/os/wifi-setup
 fi
-
-
-
-
-
 
 # Verify file exists
 if [ ! -f "$TARGET_FILE" ]; then
@@ -126,9 +104,17 @@ if [ ! -f "$TARGET_FILE" ]; then
     exit 1
 fi
 
-# --- 4. UNLOCK VERACRYPT LOOP ---
+# --- 4. UNLOCK LUKS LOOP CONTAINER ---
 sudo mkdir -p "$SALLY_MNT"
 PASS_FILE="/home/user/password.cfg"
+
+# Quick structural verification that the target is a valid LUKS target image
+if ! sudo cryptsetup isLuks "$TARGET_FILE" 2>/dev/null; then
+    echo "CRITICAL: $TARGET_FILE is not a valid LUKS volume!" >> "$LOG_FILE"
+    whiptail --title " ERROR " --msgbox "Sallyport container is corrupted or not configured for LUKS!\n\nClick 'OK' to shutdown..." 0 0
+    sudo poweroff
+    exit 1
+fi
 
 while true; do
     # 1. Capture password
@@ -136,34 +122,33 @@ while true; do
         "\nEnter password to unlock Sallyport:" 12 50 \
         --nocancel 3>&1 1>&2 2>&3)
 
-    # 2. Pre-cleanup: Kill any previous hung processes & unmount partials
-    sudo pkill -9 veracrypt > /dev/null 2>&1
-    sudo veracrypt -d "$TARGET_FILE" > /dev/null 2>&1 || true
+    # 2. Pre-cleanup: Clean up any stale mapper nodes or partial hanging mounts safely
+    sudo umount "$SALLY_MNT" > /dev/null 2>&1
+    sudo cryptsetup close "$SALLY_MAPPER" > /dev/null 2>&1
 
-    echo "Attempting VeraCrypt mount..." >> "$LOG_FILE"
+    echo "Attempting LUKS decryption..." >> "$LOG_FILE"
     
-    # 3. The "Fail-Fast" Mount Command
-    # We use 'timeout 10' as a hard limit and ensure --non-interactive is set.
-    # We also use 'stdbuf' to ensure the error message isn't buffered/hidden.
-    # The 'Lax' version - gives RWX to everyone
-    if printf '%s\n' "$PASS" | sudo timeout 15s veracrypt --text --non-interactive --stdin \
-        --pim=0 \
-        --hash=sha512 \
-        --fs-options="umask=000" \
-        --mount "$TARGET_FILE" "$SALLY_MNT" >> "$LOG_FILE" 2>&1; then
-
-        echo "SUCCESS: $TARGET_FILE mounted" >> "$LOG_FILE"
-        printf '%s' "$PASS" > "$PASS_FILE"
-        chmod 600 "$PASS_FILE"
-        unset PASS
-        break 
+    # 3. Open the container file natively through the loop interface using cryptsetup
+    if printf '%s' "$PASS" | sudo timeout 15s cryptsetup open "$TARGET_FILE" "$SALLY_MAPPER" -d - >> "$LOG_FILE" 2>&1; then
+        
+        echo "Attempting to mount inner ext4 partition..." >> "$LOG_FILE"
+        if sudo mount "/dev/mapper/$SALLY_MAPPER" "$SALLY_MNT" >> "$LOG_FILE" 2>&1; then
+            # Ensure standard user space can read/write the unlocked ext4 partition payload
+            sudo chown -R 1000:1000 "$SALLY_MNT"
+            
+            echo "SUCCESS: $TARGET_FILE mounted safely." >> "$LOG_FILE"
+            printf '%s' "$PASS" > "$PASS_FILE"
+            chmod 600 "$PASS_FILE"
+            unset PASS
+            break 
+        else
+            echo "FAILED: Mount operation rejected." >> "$LOG_FILE"
+            sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
+            whiptail --title " Error " --msgbox "Failed to mount partition. Filesystem might be damaged." 8 50
+        fi
     else
-        # 4. Immediate Notification on Failure
+        # 4. Immediate Notification on Decryption Failure
         echo "FAILED: Incorrect Password or Timeout" >> "$LOG_FILE"
-        
-        # Force kill the specific hung process if it didn't exit
-        sudo pkill -9 veracrypt > /dev/null 2>&1
-        
         whiptail --title " Error " --msgbox "Incorrect password. Please try again." 8 40
     fi
 done
@@ -176,97 +161,69 @@ stty sane
 
 # Clear screen for a clean desktop transition
 clear
-#echo "Sallyport Ready."
 sleep 1
 
-
-
-
-
-
-### DELETE THIS BEFORE PRODUCTION!!!! ### or maybe not?
+### SYSTEM CLOCK SYNC ###
 TIME=$(curl -sI --connect-timeout 2 http://deb.debian.org | grep -i '^Date:' | cut -d' ' -f2-)
-
 if [ -n "$TIME" ]; then
     sudo date -s "$TIME"
     sudo hwclock --systohc
 fi
-#########################################
 
-
-    
-    
+# Launch backend infrastructure imports
 sudo bash /usr/local/bin/os/import_monero || true
-#sudo bash /usr/local/bin/os/import_ethereum || true
-#sudo bash /usr/local/bin/os/import_avax || true
-#sudo bash /usr/local/bin/os/import_bitcoin || true
-#sudo bash /usr/local/bin/os/import_litecoin || true
-#sudo bash /usr/local/bin/os/import_dogecoin || true
-
+sudo bash /usr/local/bin/os/start_monero_daemon || true
+sudo bash /usr/local/bin/os/submit_monero || true
 
 echo "Getting Balances..."
 sudo bash /usr/local/bin/os/get_crypto_balances || true
 
+################ # get balances service ##############################################
+#echo "--- Starting Crypto Refresh Daemon (Protected Mode) ---"
 
-################################# get balances service ##############################################
-echo "--- Starting Crypto Refresh Daemon (Protected Mode) ---"
+#sudo systemd-run --unit=crypto-refresh \
+#    --description="Persistent Crypto Refresh" \
+#    --property=Restart=always \
+#    --property=RestartSec=10s \
+#    --property=MemoryMax=256M \
+#    --property=CPUSchedulingPolicy=idle \
+#    --property=Nice=19 \
+#    --property=TimeoutStopSec=900 \
+#    --property=User=user \
+#    --property=Group=user \
+#    --property=Environment="HOME=/home/user" \
+#    /bin/bash -c "while true; do timeout 300 /bin/bash /usr/local/bin/os/get_crypto_balances; sleep 600; done"
 
-# 2. Use systemd-run to create a 'transient' service. 
-# This exists ONLY in RAM and disappears on reboot.
-# Run every 10-15 minutes
-sudo systemd-run --unit=crypto-refresh \
-    --description="Persistent Crypto Refresh" \
-    --property=Restart=always \
-    --property=RestartSec=10s \
-    --property=MemoryMax=256M \
-    --property=CPUSchedulingPolicy=idle \
-    --property=Nice=19 \
-    --property=TimeoutStopSec=900 \
-    --property=User=user \
-    --property=Group=user \
-    --property=Environment="HOME=/home/user" \
-    /bin/bash -c "while true; do timeout 300 /bin/bash /usr/local/bin/os/get_crypto_balances; sleep 600; done"
-
-echo "SUCCESS: Refresh daemon is running in a protected memory container."
+#echo "SUCCESS: Refresh daemon is running in a protected memory container."
 ######################################################################################################
 
-
 ################################ Tor #########################################
-
-
 sudo bash /usr/local/bin/os/start_tor_server || true
-
-
 
 ###############################################
 # --- 6. SWITCH BACK TO X11 FOR GUI ---
 ###############################################
 
 # 1. Return to the graphical interface
-# We switch first so X11 commands have a valid "active" target
 sudo chvt 7
 export DISPLAY=:0
 sleep 1 
 
 # 2. X11 Settings & Permissions
-# Wake screen and disable sleep/screensaver
 xset -display :0 dpms force on
 xhost +local:root > /dev/null 2>&1
 xset s off s noblank -dpms
 pkill xscreensaver > /dev/null 2>&1 || true
 
 # 3. Launch Surf as the standard user
-# We launch this into the background so the script can continue to wmctrl
 sudo -u user DISPLAY=:0 nohup surf -K -F -N http://localhost > /dev/null 2>&1 &
 
 # 4. Wait for the Surf window to actually exist
-# It takes a moment for the X-Server to register the new window
 until wmctrl -l 2>/dev/null | grep -i "surf"; do
     sleep 0.2
 done
 
 # 5. Force Fullscreen and Keep Above
-# This ensures the browser covers the taskbar/desktop
 wmctrl -r "surf" -b add,fullscreen,above
 
 # 6. Hide the cursor in X11
@@ -275,8 +232,7 @@ if command -v unclutter >/dev/null; then
 fi
 
 # 7. Final Background Cleanup
-# We quickly wipe TTY1 so no password residue remains in the scrollback
-# then return focus to the GUI on TTY7
+# Wipe TTY1 so no password residue remains in the scrollback console buffer
 sudo chvt 1
 clear
 setterm -cursor off

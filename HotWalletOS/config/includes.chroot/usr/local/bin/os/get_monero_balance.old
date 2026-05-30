@@ -1,0 +1,52 @@
+#!/bin/bash
+# --- /usr/local/bin/os/get_monero_balance ---
+export PATH=/usr/bin:/bin:/usr/local/bin
+
+BASE_DIR="/mnt/sallyport/watch_monero"
+BACKEND_DIR="/var/www/backend/Monero"
+sudo mkdir -p "$BACKEND_DIR"
+
+echo "Querying Persistent Monero RPC Daemons..."
+
+for dir in "$BASE_DIR"/*/; do
+    WALLET_FILE="${dir}watchonly"
+    PORT_FILE="${dir}rpc_port.cfg"
+
+    if [ -f "$WALLET_FILE" ] && [ -f "$PORT_FILE" ]; then
+        ADDR_ID=$(basename "$dir")
+        RPC_PORT=$(cat "$PORT_FILE" | tr -d '\n\r ')
+        BALANCE_FILE="${BACKEND_DIR}/${ADDR_ID}_balance.txt"
+        UNLOCKED_FILE="${BACKEND_DIR}/${ADDR_ID}_unlocked.txt"
+        
+        echo "--------------------------------------------------"
+        echo "Querying: $ADDR_ID on Port $RPC_PORT"
+
+        # 1. Query the running daemon directly
+        RPC_RESPONSE=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
+            -d '{"jsonrpc":"2.0","id":"0","method":"get_balance","params":{"account_index":0,"all_accounts":true}}')
+        
+        # 2. HARDENED EXTRACTION 
+        # Clean out spaces/newlines first, then grab the top-level keys before the sub-array splits
+        CLEAN_JSON=$(echo "$RPC_RESPONSE" | tr -d '\n\r ')
+        
+        RAW_BAL=$(echo "$CLEAN_JSON" | grep -oP '"result":\{"balance":\K[0-9]+')
+        RAW_UNL=$(echo "$CLEAN_JSON" | grep -oP '"unlocked_balance":\K[0-9]+' | tail -n1)
+
+        # Fallback to zero if extraction failed
+        [ -z "$RAW_BAL" ] && RAW_BAL=0
+        [ -z "$RAW_UNL" ] && RAW_UNL=0
+
+        # 3. MATH CONVERSIONS
+        BALANCE=$(echo "scale=12; $RAW_BAL / 1000000000000" | bc | awk '{printf "%.12f\n", $0}')
+        UNLOCKED=$(echo "scale=12; $RAW_UNL / 1000000000000" | bc | awk '{printf "%.12f\n", $0}')
+
+        OLD_BALANCE="0.000000000000"
+        [ -f "$BALANCE_FILE" ] && OLD_BALANCE=$(cat "$BALANCE_FILE")
+
+        # Save updates to backend web directories
+        printf "%s" "$BALANCE" | sudo tee "$BALANCE_FILE" > /dev/null
+        printf "%s" "$UNLOCKED" | sudo tee "$UNLOCKED_FILE" > /dev/null
+
+        echo "Status: Old ($OLD_BALANCE) | New ($BALANCE)"
+    fi
+done
