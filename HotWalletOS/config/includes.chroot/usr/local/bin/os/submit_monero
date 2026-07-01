@@ -40,13 +40,13 @@ while read -r TX_PATH; do
     # --- ADDED READINESS CHECK ---
     echo "Checking daemon readiness..."
     READY=false
-    for i in {1..8}; do
+    for i in {1..15}; do
         if curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_balance"}' | grep -q "balance"; then
             READY=true
             break
         fi
-        echo "Daemon busy or syncing... waiting 3s (Attempt $i/8)..."
-        sleep 3
+        echo "Daemon busy or syncing... waiting 3s (Attempt $i/15)..."
+        sleep 5
     done
     
     if [ "$READY" = false ]; then

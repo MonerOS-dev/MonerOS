@@ -8,6 +8,8 @@ SALLY_MAPPER="sallyport_unlocked"
 FINAL_MOUNT="/mnt/sallyport"
 EXT_MNT="/mnt/external"
 
+sudo pkill monerod
+
 # 1. Inside-Out Teardown Sequence
 # A. Unmount the Sallyport ext4 filesystem
 sudo umount "$FINAL_MOUNT" 2>/dev/null

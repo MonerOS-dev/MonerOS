@@ -1,0 +1,18 @@
+#!/bin/bash
+set -e
+
+echo "[HOOK] Purging 1.4GB of bloat..."
+
+# 1. Mask services
+systemctl mask networking wpa_supplicant bluetooth avahi-daemon modemmanager || true
+
+# 2. Purge Firmware & Drivers
+apt-get purge -y firmware-linux firmware-atheros firmware-iwlwifi firmware-realtek \
+               wireless-regdb network-manager wpasupplicant bluetooth bluez
+apt-get autoremove -y
+apt-get clean
+
+# 3. Manual Scrape (The extra insurance)
+rm -rf /lib/modules/*/kernel/drivers/net
+rm -rf /lib/modules/*/kernel/drivers/bluetooth
+rm -rf /lib/firmware/*

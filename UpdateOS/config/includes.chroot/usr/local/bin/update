@@ -1,0 +1,154 @@
+#!/bin/bash
+set -e
+
+# --- ROOT PRIVILEGE CHECK ---
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: This script must be run with sudo or as root." >&2
+    exit 1
+fi
+
+# --- SIGNAL HANDLING ---
+trap '' SIGINT SIGTERM SIGTSTP
+
+# --- UI SETUP ---
+export TERM=linux
+stty sane
+
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P400ff00"   # Blue -> Bright Green
+    echo -ne "\e]P7ffffff"   # Light gray -> White
+    clear
+fi
+
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# --- LOGGING SETUP ---
+FLASH_LOG="/tmp/logs/flash.log"
+mkdir -p /tmp/logs
+echo "=== Flash Session Started: $(date) ===" > "$FLASH_LOG"
+
+MNT_POINT="/mnt/update"
+HOT_IMG="$MNT_POINT/HotWalletOS.update"
+COLD_IMG="$MNT_POINT/ColdWalletOS.update"
+
+UPDATED_HOT=false
+UPDATED_COLD=false
+
+# --- UTILITY FUNCTION: BUILT-IN DD PROGRESS GAUGE ---
+flash_with_progress() {
+    local src="$1"
+    local dest="$2"
+    local name="$3"
+
+    echo "--- Flashing $name ---" >> "$FLASH_LOG"
+    echo "Source: $src" >> "$FLASH_LOG"
+    echo "Destination: $dest" >> "$FLASH_LOG"
+
+    if [ ! -f "$src" ]; then
+        echo "ERROR: Source file missing: $src" >> "$FLASH_LOG"
+        return 1
+    fi
+
+    local total_size=$(stat -c%s "$src")
+    echo "Total Size: $total_size bytes" >> "$FLASH_LOG"
+
+    # Use a named pipe to split the error/progress tracking safely
+    local fifo="/tmp/flash_progress.fifo"
+    rm -f "$fifo"
+    mkfifo "$fifo"
+
+    # Execute dd. We use oflag=sync here as you suggested to ensure data physical sync,
+    # and stdbuf to keep the pipe fluid.
+    stdbuf -oL dd if="$src" of="$dest" bs=4M oflag=sync status=progress 2>&1 \
+        | tee -a "$FLASH_LOG" > "$fifo" &
+    local dd_pid=$!
+
+    # Pure Bash Progress Parser
+    # -d $'\r' instructs read to process updates immediately when dd sends a carriage return
+    (
+        while read -d $'\r' -r line; do
+            if [[ "$line" =~ ([0-9]+)\ bytes ]]; then
+                local bytes="${BASH_REMATCH[1]}"
+                if [ "$bytes" -gt 0 ]; then
+                    local pct=$(( bytes * 100 / total_size ))
+                    [ "$pct" -gt 100 ] && pct=100
+                    echo "$pct"
+                    echo "# Updating $name... ($pct%)"
+                fi
+            fi
+        done < "$fifo"
+    ) | whiptail --title " MonerOS Update Utility " \
+                 --fb \
+                 --nocancel \
+                 --gauge "Updating $name..." 7 50 0
+
+    rm -f "$fifo"
+
+    # Safely await the background process and log the result
+    wait $dd_pid && dd_status=$? || dd_status=$?
+    echo "dd exit status code: $dd_status" >> "$FLASH_LOG"
+    echo "------------------------" >> "$FLASH_LOG"
+
+    if [ $dd_status -ne 0 ]; then
+        return 1
+    fi
+}
+
+# --- 1. SCAN AND FLASH HOT WALLET OS ---
+HOT_DEV=$(blkid -L "HotWalletOS" || true)
+if [ -n "$HOT_DEV" ] && [ -f "$HOT_IMG" ]; then
+    if flash_with_progress "$HOT_IMG" "$HOT_DEV" "HotWalletOS"; then
+        UPDATED_HOT=true
+    else
+        echo "Update failed for HotWalletOS" >> "$FLASH_LOG"
+    fi
+fi
+
+# --- 2. SCAN AND FLASH COLD WALLET OS ---
+COLD_DEV=$(blkid -L "ColdWalletOS" || true)
+if [ -n "$COLD_DEV" ] && [ -f "$COLD_IMG" ]; then
+    if flash_with_progress "$COLD_IMG" "$COLD_DEV" "ColdWalletOS"; then
+        UPDATED_COLD=true
+    else
+        echo "Flash failed for ColdWalletOS" >> "$FLASH_LOG"
+    fi
+fi
+
+# --- 3. BUILD COMPLETION MESSAGE ---
+SUCCESS_TRACKER=()
+
+[ "$UPDATED_HOT" = true ] && SUCCESS_TRACKER+=("HotWalletOS")
+[ "$UPDATED_COLD" = true ] && SUCCESS_TRACKER+=("ColdWalletOS")
+
+# Calculate how many targets succeeded
+count=${#SUCCESS_TRACKER[@]}
+
+if [ "$count" -eq 2 ]; then
+    SUMMARY_MSG="Successfully updated ${SUCCESS_TRACKER[0]} & ${SUCCESS_TRACKER[1]}."
+elif [ "$count" -eq 1 ]; then
+    SUMMARY_MSG="Successfully updated ${SUCCESS_TRACKER[0]}."
+else
+    SUMMARY_MSG="ERROR: No suitable partition found."
+fi
+
+# Display final message box
+whiptail --title " Update Complete " \
+         --nocancel \
+         --msgbox "\n$SUMMARY_MSG" 10 0
+
+# --- 4. RETURN TO MAIN MENU ---
+clear
+exec /usr/local/bin/main_menu

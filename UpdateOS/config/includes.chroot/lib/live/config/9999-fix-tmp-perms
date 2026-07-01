@@ -1,0 +1,11 @@
+#!/bin/sh
+# This script runs at the VERY end of the boot process
+# It forces /tmp to the only valid state for a Linux system
+
+chown root:root /tmp
+chmod 1777 /tmp
+
+# Also ensure your log directory is ready for the user
+mkdir -p /tmp/logs
+chown -R 1000:1000 /tmp/logs
+chmod 777 /tmp/logs

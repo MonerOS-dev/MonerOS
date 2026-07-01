@@ -6,7 +6,7 @@ set -e
 
 # Production version vs non-production
 PRODUCTION=true
-MODS_DIR="$HOME/hwos_mods"
+MODS_DIR="$HOME/MonerOS_Project/admin_mods"
 BUILD_DIR="$HOME/MonerOS_Project/HotWalletOS"
 UFW_HOOK="01-outbound-only-ufw.chroot"
 SSH_HOOK="99-ssh-gen.chroot"
@@ -76,7 +76,7 @@ cd $BASE_DIR
 echo "[INFO] Starting HotWalletOS build..."
 
 # copy splash
-convert $HOME/hwos_mods/hwos_splash.png \
+convert $HOME/MonerOS_Project/admin_mods/hwos_splash.png \
         -flip \
         -colors 14 \
         $HOME/MonerOS_Project/HotWalletOS/config/includes.binary/boot/grub/splash.tga
@@ -168,16 +168,26 @@ sudo xorriso -dev "$FINAL_IMG" \
     -boot_image any platform_id=0xef \
     -boot_image any emul_type=no_emulation \
     -commit
+    
+# --- 7.6. EXPORT THE PATCHED ISO9660 UPDATE FILE ---
+UPDATE_FILE="$HOME/HotWalletOS.update"
+echo "[INFO] Exporting the pure ISO9660 update file to $UPDATE_FILE..."
+cp "$FINAL_IMG" "$UPDATE_FILE"
 
 # --- 8. SMART DYNAMIC EXPAND AND RE-LAYOUT ---
 echo "[INFO] Calculating ISO size and re-partitioning..."
 
-# Get Partition 1 size in sectors
-P1_SIZE=$(sudo fdisk -l "$FINAL_IMG" | grep "${FINAL_IMG}1" | awk '{print $4}')
+# Get actual Partition 1 size in sectors using your original fdisk method
+ISO_SIZE=$(sudo fdisk -l "$FINAL_IMG" | grep "${FINAL_IMG}1" | awk '{print $4}')
 
-if [ -z "$P1_SIZE" ] || [ "$P1_SIZE" -lt 100 ]; then
-    echo "[ERROR] Could not determine ISO size. Falling back to safe estimate."
-    P1_SIZE=800000 
+# Set your fixed 2.1GB target in sectors (2100 MiB * 2048 sectors/MiB)
+P1_SIZE=$(( 2100 * 2048 ))
+
+# CRITICAL FAIL GUARD: Stop if the real ISO size exceeds your 2.1GB limit
+if [ -n "$ISO_SIZE" ] && [ "$ISO_SIZE" -gt "$P1_SIZE" ]; then
+    echo "[CRITICAL ERROR] Built ISO ($ISO_SIZE sectors) is larger than the 2.1GB limit ($P1_SIZE sectors)!"
+    echo "Aborting build to prevent data corruption."
+    exit 1
 fi
 
 # Define sizes (in 512-byte sectors)

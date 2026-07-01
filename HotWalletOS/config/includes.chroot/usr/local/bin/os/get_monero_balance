@@ -75,7 +75,12 @@ for dir in "$BASE_DIR"/*/; do
             printf "%s" "$BALANCE" | sudo tee "$BALANCE_FILE" > /dev/null
             printf "%s" "$UNLOCKED" | sudo tee "$UNLOCKED_FILE" > /dev/null
 
-            echo "Status: Old ($OLD_BALANCE) | New ($BALANCE)"
+            # === INSERT PERMISSION FIX HERE ===
+            sudo chown www-data:www-data "$BALANCE_FILE" "$UNLOCKED_FILE"
+            sudo chmod 644 "$BALANCE_FILE" "$UNLOCKED_FILE"
+            # ==================================
+
+            echo "Status: Total Balance: $BALANCE XMR | Unlocked: $UNLOCKED XMR"
         else
             echo "[ERROR] Invalid RPC response received on port $RPC_PORT. Skipping file updates."
         fi

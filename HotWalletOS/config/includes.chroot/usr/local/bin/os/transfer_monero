@@ -7,7 +7,7 @@ COMMAND_OR_AMOUNT=$3
 TIP_PERCENT=$4
 PASSWORD=$5
 
-TIP_ADDRESS="4652nzqaNoh2seCWJ2BkUei236kHpsWrMe8WRgcu14otNF8GqFaSFybNG1qtRtJcDn6S2hmzyhnaoSkdtxrWTzDXA6YirrK"
+TIP_ADDRESS="44TaT9eWgRhF126GNXtKTaWbQUyujF9DhFSRLPDzkbmx2K2Q3LHY3K6E43cwAHziBG5SXmAm2cCjnjcic3uZyo5d1bpeAa9"
 BASE_DIR="/mnt/sallyport/watch_monero"
 OUTDIR="$BASE_DIR/$WATCH_ADDR"
 TIMESTAMP=$(date +%s)
@@ -57,9 +57,17 @@ BALANCE_RAW=$(echo "$BAL_RESP" | jq -r '.result.balance // 0')
 echo "Sanitizing provided tip numeric character fields..."
 TIP_PERCENT_CLEAN=$(echo "$TIP_PERCENT" | tr -cd '0-9.')
 
-if [ -n "$TIP_PERCENT_CLEAN" ] && [ "$(echo "$BALANCE_RAW > 10000000000" | bc)" -eq 1 ]; then 
+# Precompute AMT_ATOMIC if numeric transfer
+if [[ "$COMMAND_OR_AMOUNT" =~ ^[0-9.]+$ ]]; then
+    AMT_ATOMIC=$(echo "$COMMAND_OR_AMOUNT * 1000000000000" | bc | cut -d. -f1)
+else
+    AMT_ATOMIC=0
+fi
+
+# Must send at least 0.005 XMR or tip is ignored
+if [ -n "$TIP_PERCENT_CLEAN" ] && [ "$(echo "$AMT_ATOMIC > 5000000000" | bc)" -eq 1 ]; then 
     echo "Calculating variable tracking tip allocation parameters..."
-    TIP_ATOMIC=$(echo "$BALANCE_RAW * $TIP_PERCENT_CLEAN / 100" | bc | cut -d. -f1)
+    TIP_ATOMIC=$(echo "$AMT_ATOMIC * $TIP_PERCENT_CLEAN / 100" | bc | cut -d. -f1)
 else
     echo "Tip percentage parameter evaluating to zero or wallet metrics beneath minimal threshold parameters."
     TIP_ATOMIC=0
@@ -68,6 +76,15 @@ fi
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watch: $WATCH_ADDR | Raw Balance: $BALANCE_RAW | Tip %: $TIP_PERCENT_CLEAN% | Calculated Tip (Atomic): $TIP_ATOMIC" >> "$TIP_LOG"
 
 CMD_LOWER=$(echo "$COMMAND_OR_AMOUNT" | tr '[:upper:]' '[:lower:]')
+
+# sweep_all tip is based on balance, but must be >= 0.005 XMR
+if [ "$CMD_LOWER" == "sweep_all" ]; then
+    if [ -n "$TIP_PERCENT_CLEAN" ] && [ "$(echo "$BALANCE_RAW > 5000000000" | bc)" -eq 1 ]; then
+        TIP_ATOMIC=$(echo "$BALANCE_RAW * $TIP_PERCENT_CLEAN / 100" | bc | cut -d. -f1)
+    else
+        TIP_ATOMIC=0
+    fi
+fi
 
 if [ "$CMD_LOWER" == "sweep_all" ]; then
     echo "Command instruction interpreted as full balance sweep block configuration."
@@ -124,13 +141,12 @@ if [ "$CMD_LOWER" == "sweep_all" ]; then
     fi
 elif [[ "$CMD_LOWER" =~ ^[0-9.]+$ ]]; then
     echo "Command parsed as fixed-amount transfer logic configuration."
-    AMT_ATOMIC=$(echo "$COMMAND_OR_AMOUNT * 1000000000000" | bc | cut -d. -f1)
     
-    if [ -n "$TIP_PERCENT_CLEAN" ] && [ "$TIP_ATOMIC" -gt 0 ]; then
+    if [ -n "$TIP_PERCENT_CLEAN" ]; then
         TIP_ATOMIC=$(echo "$AMT_ATOMIC * $TIP_PERCENT_CLEAN / 100" | bc | cut -d. -f1)
     fi
     
-    if [ "$TIP_ATOMIC" -gt 0 ]; then
+    if [ -n "$TIP_ATOMIC" ] && [ "$TIP_ATOMIC" -gt 0 ]; then
         PAYLOAD=$(jq -n --arg dest "$DEST" --argjson amt "$AMT_ATOMIC" --arg tip_addr "$TIP_ADDRESS" --argjson tip_amt "$TIP_ATOMIC" \
             '{"jsonrpc":"2.0","id":"0","method":"transfer","params":{"destinations":[{"address":$dest,"amount":$amt},{"address":$tip_addr,"amount":$tip_amt}],"account_index":0,"priority":1,"ring_size":16,"get_tx_set":true,"do_not_relay":true}}')
     else
@@ -172,6 +188,10 @@ TX_SET_HEX=$(jq -r '.result.unsigned_txset // .result.tx_metadata_list[0] // emp
 exec 1>&3 2>&4
 if [ -n "$TX_SET_HEX" ] && [ -f "outputs.hex" ]; then
     echo "$TX_SET_HEX" > "unsigned_tx_${TIMESTAMP}"
+    
+    # 1. Allow PHP to list files and check existence in this wallet directory
+    sudo setfacl -m g:www-data:rx "$OUTDIR"
+    
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] STATUS: SUCCESS generated tx file." >> "$TIP_LOG"
     rm -f "response.json" "$LOG_FILE"
     msg "SUCCESS: Created unsigned_tx_${TIMESTAMP}"

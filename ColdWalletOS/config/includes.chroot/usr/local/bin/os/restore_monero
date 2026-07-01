@@ -98,7 +98,7 @@ VIEW_KEY=$(echo "$RESTORE_OUT" | awk -F': ' '/^View key:/ {print $2}' | tr -d '[
 sleep 3 
 
 # Improved robust extraction - extracts up to 24 words to match the input format length
-ACTUAL_SEED=$(grep -oE '\b[a-z]{3,}\b' "$LOG_FILE" | grep -A 25 "edgy" | head -n 24 | tr '\n' ' ' | xargs)
+ACTUAL_SEED=$(grep -oE '\b[a-z]{3,}\b' "$LOG_FILE" | grep -A 25 "${MNEMONIC_ARRAY[0]}" | head -n 24 | tr '\n' ' ' | xargs)
 
 # Normalize inputs for comparison
 INPUT_CLEAN=$(echo $MNEMONIC | xargs)

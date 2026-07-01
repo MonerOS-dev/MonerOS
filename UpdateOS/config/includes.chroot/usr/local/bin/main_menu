@@ -1,0 +1,65 @@
+#!/bin/bash
+set -e
+
+# --- ROOT PRIVILEGE CHECK ---
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: This script must be run with sudo or as root." >&2
+    exit 1
+fi
+
+# --- SIGNAL HANDLING ---
+# Ignore Ctrl-C, kill, and suspend
+trap '' SIGINT SIGTERM SIGTSTP
+
+# --- UI SETUP ---
+export TERM=linux
+stty sane
+
+# Remap ANSI palette (Linux console only)
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P400ff00"   # Blue -> Bright Green
+    echo -ne "\e]P7ffffff"   # Light gray -> White
+    clear
+fi
+
+# NEWT color theme
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+while true; do
+    OPTION=$(whiptail --title " MonerOS Update Utility " \
+                      --fb \
+                      --nocancel \
+                      --ok-button "Select" \
+                      --menu "\nMain Menu" \
+                      16 50 5 \
+                      "Update Systems" "" \
+                      "Safe Shutdown" "" \
+                      "Terminal" "" \
+                      3>&1 1>&2 2>&3)
+
+    case "$OPTION" in
+        "Update Systems") 
+            sudo bash /usr/local/bin/update
+            ;;
+        "Safe Shutdown") 
+            sudo bash /usr/local/bin/safe_shutdown 
+            ;;
+        "Terminal")
+            clear
+            /bin/bash
+            ;;
+    esac
+done
