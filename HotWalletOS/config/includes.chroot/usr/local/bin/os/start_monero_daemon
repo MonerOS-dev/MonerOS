@@ -2,24 +2,116 @@
 # --- /usr/local/bin/os/start_monero_daemons ---
 
 BASE_DIR="/mnt/sallyport/watch_monero"
-START_PORT=18082
-PASS_FILE="/home/user/password.cfg"
+START_PORT=18084
+CUSTOM_REMOTE_PATH="/mnt/external/remote_node.cfg"
 NODE_CACHE_FILE="/home/user/monero_node.txt"
-REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
 TOR_PROXY="127.0.0.1:9050"
+LOCAL_TOR_NODE="127.0.0.1:18081"
 
-if [ -f "$PASS_FILE" ]; then
-    PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+# --- MASTER NODE SELECTION (SMART LOCAL DETECTION) ---
+if ss -tln | grep -q ":18081 "; then
+    echo "[*] Local Monero node detected active on 18081. Enforcing Self-Sync."
+    TARGET_NODE="$LOCAL_TOR_NODE"
+    RPC_PROXY_FLAG=""
+# Otherwise, fall back to the remote config if it exists
+elif [ -f "$CUSTOM_REMOTE_PATH" ] && [ -n "$(cat "$CUSTOM_REMOTE_PATH" | tr -d '[:space:]')" ]; then
+    TARGET_NODE=$(cat "$CUSTOM_REMOTE_PATH" | tr -d '\n\r ')
+    echo "[*] Custom remote configuration found: $TARGET_NODE"
+    
+    RPC_PROXY_FLAG=""
+    if [[ "$TARGET_NODE" == *".onion"* ]]; then
+        echo "[*] Tor onion node detected. Enabling proxy flag."
+        RPC_PROXY_FLAG="--proxy $TOR_PROXY"
+    else
+        echo "[!] Clearnet host detected. Bypassing proxy flag."
+    fi
 else
-    echo "Error: Password file missing."
-    exit 1
+    # Fallback to cache tracking file or hardcoded localhost
+    echo "[!] No custom config or active local node detected. Falling back to cache settings."
+    if [ -f "$NODE_CACHE_FILE" ]; then
+        TARGET_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+    else
+        TARGET_NODE="$LOCAL_TOR_NODE"
+    fi
+    
+    RPC_PROXY_FLAG=""
+    if [[ "$TARGET_NODE" == *".onion"* ]]; then
+        echo "[*] Remote Tor node detected from cache. Enabling Tor proxy flag."
+        RPC_PROXY_FLAG="--proxy $TOR_PROXY"
+    elif [[ "$TARGET_NODE" == "127.0.0.1"* ]] || [[ "$TARGET_NODE" == "localhost"* ]]; then
+        echo "[!] Local node detected from cache. Bypassing Tor proxy flag."
+    else
+        echo "[!] Remote Clearnet node detected from cache. Bypassing Tor proxy flag."
+    fi
 fi
 
-# Clean up any lingering states first
-sudo killall -9 monero-wallet-rpc 2>/dev/null
-sleep 1
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    # Color 4 (Blue) -> Bright Red (#ff0000)
+    echo -ne "\e]P4ff0000" 
+    # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS (Strict Black, Red, White Palette)
+export NEWT_COLORS='
+  root=black,black
+  window=red,black
+  shadow=black,black
+  border=red,black
+  title=red,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,red
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# --- 1. BLOCK KEYBOARD INTERRUPTS ---
+trap '' SIGINT SIGTSTP
+
+# Define target file container context here so cryptsetup knows what to test
+TARGET_FILE="/mnt/external/sallyport.bin"
+
+while true; do
+    # Force whiptail's drawing engine to tty1, but keep the standard out pipeline clean for Bash
+    PASSWORD=$(whiptail --passwordbox --fb --nocancel "\nEnter Master Password" 10 50 3>&1 1>&2 2>&3) </dev/tty1 >/dev/tty1
+    STATUS=$?
+    
+    if [ $STATUS -ne 0 ]; then
+        whiptail --fb --msgbox "Input cancelled or failed. Please try again." 9 50 </dev/tty1 >/dev/tty1
+        continue
+    fi
+    
+    if [ -z "$PASSWORD" ]; then
+        whiptail --fb --msgbox "Password cannot be blank. Please try again." 9 50 </dev/tty1 >/dev/tty1
+        continue
+    fi
+    
+    # Test the passphrase using the verified syntax
+    if printf '%s' "$PASSWORD" | sudo cryptsetup open --type luks --test-passphrase "$TARGET_FILE" -d - > /dev/null 2>&1; then
+        # Success! Clear the screen and proceed with $PASSWORD intact
+        clear
+        break
+    else
+        whiptail --fb --msgbox "Incorrect password. Please try again." 9 50 </dev/tty1 >/dev/tty1
+        unset PASSWORD
+    fi
+done
+
+clear
+
+# Clean up any lingering states first (SIGINT -2 is graceful for LMDB)
+sudo killall -2 monero-wallet-rpc 2>/dev/null
+sleep 2
 
 CURRENT_PORT=$START_PORT
+
+# Prevent empty base directory from breaking loop evaluation
+shopt -s nullglob
 
 for dir in "$BASE_DIR"/*/; do
     WALLET_FILE="${dir}watchonly"
@@ -29,10 +121,11 @@ for dir in "$BASE_DIR"/*/; do
         
         echo "Launching persistent RPC for $ADDR_ID on port $CURRENT_PORT..."
         
-        # Start the background daemon permanently
+        # Start the background daemon pointing dynamically to verified destination
         monero-wallet-rpc --wallet-file "$WALLET_FILE" --password "$PASSWORD" \
             --rpc-bind-port "$CURRENT_PORT" --disable-rpc-login \
-            --daemon-address "$REMOTE_NODE" --proxy "$TOR_PROXY" \
+            --daemon-address "$TARGET_NODE" \
+            $RPC_PROXY_FLAG \
             --trusted-daemon --detach --log-file "$LOG_FILE" > /dev/null 2>&1
             
         # Store the assigned port in the folder for other scripts to read dynamically
@@ -41,3 +134,9 @@ for dir in "$BASE_DIR"/*/; do
         CURRENT_PORT=$((CURRENT_PORT + 1))
     fi
 done
+
+# Clear the variable from memory immediately for security
+unset PASSWORD
+
+shopt -u nullglob
+echo "All RPC daemons initiated."

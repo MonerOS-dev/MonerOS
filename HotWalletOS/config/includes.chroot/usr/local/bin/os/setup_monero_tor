@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# =====================================================================
+# MonerOS Hardware Optimizer for monerod.conf (TOR-ONLY POST-SYNC)
+# =====================================================================
+
+# 1. GATHER SYSTEM STATS
+TOTAL_CORES=$(nproc)
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+
+# Calculate Half Cores for base stability
+CORES=$(($TOTAL_CORES > 1 ? $TOTAL_CORES / 2 : 1))
+
+
+# =====================================================================
+# 2. LOGIC FOR TOR BLOCK SYNC SIZE & TOR PEER COUNT (POST-SYNC)
+# =====================================================================
+# Thresholds are padded to account for hardware/kernel memory reservations.
+# Tor networks handle heavy connection latency, so peer counts are kept
+# compact to prevent proxy circuit exhaustion.
+
+if [ "$TOTAL_RAM_MB" -lt 6000 ]; then
+    # 4GB RAM Tier (Usually reports ~3800 MB)
+    SYNC_SIZE=1
+    PEERS=12
+elif [ "$TOTAL_RAM_MB" -lt 14000 ]; then
+    # 8GB RAM Tier (Usually reports ~7800 MB)
+    SYNC_SIZE=5
+    PEERS=24
+else
+    # 16GB / 32GB+ RAM Tier
+    SYNC_SIZE=10
+    PEERS=32
+fi
+
+
+# =====================================================================
+# 3. TOR THREAD SAFETY ALIGNMENT (Proxy Protection Guard)
+# =====================================================================
+# Post-sync nodes only track micro-updates (1 block every 2 minutes). 
+# Giving monerod high thread counts here forces wasteful CPU switching 
+# and starves the critical cryptographic cycles Tor needs for packet routing.
+
+if [ "$TOTAL_RAM_MB" -lt 6000 ] && [ "$CORES" -gt 2 ]; then
+    # Low-memory systems over Tor must prioritize the proxy's performance
+    CORES=1
+elif [ "$CORES" -gt 4 ]; then
+    # On high-thread systems (e.g., 16 or 32 threads), clamp monerod to 4 threads.
+    # This leaves vast, uninterrupted CPU resources free for Tor routing.
+    CORES=4
+fi
+
+# 5. DEFINE TARGET PATH
+CONF_FILE="/home/user/monerod-tor.conf"
+
+# Create directory if it doesn't exist
+mkdir -p "$(dirname "$CONF_FILE")"
+
+# 6. WRITE THE TOR-ONLY OPTIMIZED CONFIGURATION
+cat <<EOF > "$CONF_FILE"
+# =====================================================================
+# DATA DIRECTORY & LOGGING
+# =====================================================================
+data-dir=/mnt/p4/monero
+log-file=/mnt/p4/monero/monerod.log
+log-level=0
+
+# =====================================================================
+# NETWORK & RPC SETTINGS (LOCAL ONLY - FULL ACCESS)
+# =====================================================================
+public-node=0
+# Disabled restriction so your local wallet/transaction scripts can poll fully
+restricted-rpc=0
+rpc-bind-ip=127.0.0.1
+rpc-bind-port=18081
+
+# =====================================================================
+# TOR-ONLY P2P NETWORK SETTINGS (OUTBOUND ENFORCEMENT)
+# =====================================================================
+# Route all standard outbound P2P traffic through the Tor SOCKS proxy
+proxy=127.0.0.1:9050
+
+# Dedicated proxy stream rules for transaction broadcasting
+tx-proxy=tor,127.0.0.1:9050,$PEERS
+
+# Network Isolation & Privacy Hardening
+no-igd=1
+disable-dns-checkpoints=1
+enable-dns-blocklist=1
+hide-my-port=1
+offline=0
+p2p-use-ipv6=0
+p2p-bind-ip=127.0.0.1
+p2p-bind-port=18080
+
+# Hardware Optimized for Tor: $TOTAL_RAM_MB MB RAM detected
+out-peers=$PEERS
+in-peers=0
+
+# =====================================================================
+# BLOCKCHAIN PRUNING
+# =====================================================================
+prune-blockchain=1
+
+# =====================================================================
+# AUTO-OPTIMIZED SAFETY TWEAKS (POST-SYNC STATUS)
+# =====================================================================
+db-sync-mode=safe
+
+# Block batching adjusted for micro-updates: $SYNC_SIZE
+block-sync-size=$SYNC_SIZE
+
+# Scaling down concurrency to save CPU cycles for Tor packet routing
+prep-blocks-threads=$CORES
+max-concurrency=$CORES
+EOF
+
+
+# 7. OUTPUT RESULTS TO TERMINAL
+#echo "-------------------------------------------------------"
+#echo " MonerOS Tor Configuration Generated"
+#echo "-------------------------------------------------------"
+#echo " Detected CPU Cores: $CORES"
+#echo " Dedicated Tor Threads: $(($CORES > 2 ? $CORES / 2 : 1))"
+#echo " Detected Total RAM: $TOTAL_RAM_MB MB"
+#echo " Set Sync Buffer:    $(($SYNC_BUFFER_BYTES / 1048576)) MB"
+#echo " Set Batch Size:     $SYNC_SIZE"
+#echo " Set Out-Peers:      $PEERS"
+#echo " Target File:        $CONF_FILE"
+#echo "-------------------------------------------------------"

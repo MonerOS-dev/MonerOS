@@ -6,12 +6,68 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    # Color 4 (Blue) -> Bright Red (#ff0000)
+    echo -ne "\e]P4ff0000" 
+    # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# --- 1. BLOCK KEYBOARD INTERRUPTS ---
+# This forces the script to ignore Ctrl+C (SIGINT) and Ctrl+Z (SIGTSTP)
+trap '' SIGINT SIGTSTP
+
+# Define target file container context here so cryptsetup knows what to test
+TARGET_FILE="/mnt/external/sallyport.bin"
+
+while true; do
+    # Force whiptail to bind directly to the hardware terminal you claimed at boot
+    PASSWORD=$(whiptail --passwordbox --fb --nocancel "\nEnter Master Password" 10 50 3>&1 1>&2 2>&3 </dev/tty1 >/dev/tty1)
+    STATUS=$?
+    
+    if [ $STATUS -ne 0 ]; then
+        whiptail --fb --msgbox "Input cancelled or failed. Please try again." 9 50 </dev/tty1 >/dev/tty1
+        continue
+    fi
+    
+    if [ -z "$PASSWORD" ]; then
+        whiptail --fb --msgbox "Password cannot be blank. Please try again." 9 50 </dev/tty1 >/dev/tty1
+        continue
+    fi
+    
+    # Test the passphrase using the verified syntax
+    if printf '%s' "$PASSWORD" | sudo cryptsetup open --type luks --test-passphrase "$TARGET_FILE" -d - > /dev/null 2>&1; then
+        # Success! Clear the screen and proceed with $PASSWORD intact
+        clear
+        break
+    else
+        whiptail --fb --msgbox "Incorrect password. Please try again." 9 50 </dev/tty1 >/dev/tty1
+        unset PASSWORD
+    fi
+done
+
+clear
+
 BASE_DIR="/mnt/sallyport/watch_monero"
-NODE_LIST_URL="https://sourceforge.net/p/moneros/code/ci/main/tree/monero_nodes.txt?format=raw"
-NODE_CACHE_FILE="/home/user/monero_node.txt"
-HARDCODED_FALLBACK="cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081"
 PROXY="127.0.0.1:9050"
-PASS_FILE="/home/user/password.cfg"
 BACKEND_DIR="/var/www/backend/Monero"
 
 if [ ! -d "$BASE_DIR" ]; then
@@ -29,56 +85,92 @@ fi
 
 echo "Importing Monero - Initializing Node Selection"
 
-# --- MASTER NODE SELECTION START (HARDENED TIMEOUTS) ---
-NEW_NODE=$(curl --connect-timeout 10 -m 20 -s --socks5-hostname "$PROXY" "$NODE_LIST_URL" | sed '/^$/d' | shuf -n 1 | tr -d '\r\n ')
 
-if [ -n "$NEW_NODE" ] && [[ "$NEW_NODE" == *.* ]]; then
-    echo "Successfully fetched new node from SourceForge: $NEW_NODE"
-    echo "$NEW_NODE" > "$NODE_CACHE_FILE"
-    REMOTE_NODE="$NEW_NODE"
-elif [ -f "$NODE_CACHE_FILE" ]; then
-    echo "Download timed out or failed. Using last known cached node..."
-    REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
-else
-    echo "No download or cache available. Using hardcoded fallback..."
-    REMOTE_NODE="$HARDCODED_FALLBACK"
-    echo "$REMOTE_NODE" > "$NODE_CACHE_FILE"
-fi
-# --- MASTER NODE SELECTION END ---
 
-# Read password
-if [ -f "$PASS_FILE" ]; then
-    PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
+# --- GLOBAL PORT MAPPING PASS ---
+# Bash naturally expands globs alphabetically. 
+# The lowest alphabetical folder gets 18084, the next gets 18085, etc.
+
+echo "Re-indexing wallet RPC ports alphabetically..."
+START_PORT=18084
+CURRENT_PORT=$START_PORT
+
+# Prevent empty base directory from breaking the loop evaluation
+shopt -s nullglob
+
+for map_dir in "$BASE_DIR"/*/; do
+    # We map the port regardless of whether 'watchonly' exists yet, 
+    # ensuring the port assignment is permanently locked to this folder name.
+    echo "$CURRENT_PORT" > "${map_dir}rpc_port.cfg"
+    CURRENT_PORT=$((CURRENT_PORT + 1))
+done
+
+shopt -u nullglob
+echo "Port mapping complete. Proceeding to node selection..."
+
+
+
+# --- MASTER NODE SELECTION (SMART LOCAL DETECTION) ---
+# --- MASTER NODE SELECTION (SMART LOCAL DETECTION) ---
+LOCAL_TOR_NODE="127.0.0.1:18081"
+CUSTOM_REMOTE_PATH="/mnt/external/remote_node.cfg"
+
+# Check if a local Monero daemon is actively listening on port 18081
+if ss -tln | grep -q ":18081 "; then
+    echo "[*] Local Monero node detected active on 18081. Defaulting to Self-Sync."
+    REMOTE_NODE="$LOCAL_TOR_NODE"
+# Otherwise, fall back to the remote config if it exists
+elif [ -f "$CUSTOM_REMOTE_PATH" ] && [ -n "$(cat "$CUSTOM_REMOTE_PATH" | tr -d '[:space:]')" ]; then
+    REMOTE_NODE=$(cat "$CUSTOM_REMOTE_PATH" | tr -d '\n\r ')
+    echo "[*] Remote node configuration found: $REMOTE_NODE"
 else
-    echo "Error: Password file not found at $PASS_FILE"
-    exit 1
-fi
+    echo "[!] No local node active and no remote config found. Defaulting to: $LOCAL_TOR_NODE"
+    REMOTE_NODE="$LOCAL_TOR_NODE"
+fi # <--- CRITICAL FIX: This closes the conditional branch properly
+
+# Keep the cache file in sync for downstream script dependencies
+NODE_CACHE_FILE="/home/user/monero_node.txt"
+echo "$REMOTE_NODE" > "$NODE_CACHE_FILE"
+
+# Final verification
+echo "Active Node: $REMOTE_NODE"
+
 
 # --- RESILIENT CONNECTION & RECOVERY START ---
 CONNECTED=false
 ATTEMPT=0
-echo "Checking connection to Monero Node ($REMOTE_NODE) via Tor..."
+
+# Determine if we need Tor for the health check
+if [[ "$REMOTE_NODE" == "127.0.0.1"* ]] || [[ "$REMOTE_NODE" == "localhost"* ]]; then
+    CURL_CMD="curl -m 45 -s -f"
+    echo "Checking connection to LOCAL Monero Node ($REMOTE_NODE)..."
+elif [[ "$REMOTE_NODE" == *".onion"* ]]; then
+    CURL_CMD="curl -m 45 -s -f --socks5-hostname $PROXY"
+    echo "Checking connection to REMOTE Monero Node ($REMOTE_NODE) via Tor..."
+else
+    # Clearnet Remote Address -> Direct connection, no proxy
+    CURL_CMD="curl -m 45 -s -f"
+    echo "Checking connection to REMOTE Clearnet Monero Node ($REMOTE_NODE)..."
+fi
 
 while [ "$CONNECTED" = false ]; do
     ATTEMPT=$((ATTEMPT + 1))
-    if curl -m 45 -s -f --socks5-hostname "$PROXY" "http://$REMOTE_NODE/get_info" > /dev/null; then
+    if $CURL_CMD "http://$REMOTE_NODE/get_info" > /dev/null; then
         echo "Successfully connected to the node on attempt $ATTEMPT."
         CONNECTED=true
     else
         echo "Attempt $ATTEMPT failed. Node unreachable."
         if [ $ATTEMPT -ge 5 ]; then
-             echo "FAILURE: Selected node is down. Run script again to pick a different one."
+             echo "FAILURE: Selected node is down. Run script again."
              exit 1
         fi
 
-        if (( ATTEMPT % 2 != 0 )); then
-            echo "Refreshing Tor circuits (SIGHUP) and retrying in 15s..."
+        # Only SIGHUP Tor if we are actually trying to reach a remote node
+        if [[ "$CURL_CMD" == *"--socks5-hostname"* ]]; then
+            echo "Refreshing Tor circuits (SIGHUP) and retrying..."
             killall -HUP tor 2>/dev/null || systemctl reload tor
-            sleep 15
-        else
-            echo "Node down. Retrying connection window..."
-            sleep 15
         fi
+        sleep 15
     fi
 done
 
@@ -88,13 +180,34 @@ mkdir -p "$BACKEND_DIR"
 # Prevent empty base directory from breaking the loop evaluation
 shopt -s nullglob
 
+# --- THE GRAND RESET ---
+# Kill any lingering processes ONCE before starting the loop
+echo "Performing global wallet lock reset..."
+sudo pkill -9 monero-wallet-rpc 2>/dev/null
+sudo pkill -9 monero-wallet-cli 2>/dev/null
+# Delete all lock files across the entire directory tree
+find "$BASE_DIR" -name "*.keys.lock" -type f -delete
+sleep 2
+
+# Prevent empty base directory from breaking the loop evaluation
+shopt -s nullglob
+
 for dir in "$BASE_DIR"/*/; do
     if [ -f "${dir}watch_info.txt" ]; then
         echo "--------------------------------------------------"
         echo "Processing Folder: $(basename "$dir")"
+        
+        # We don't need pkill inside the loop anymore! 
+        # The start of the script cleared the path.
+
         cd "$dir" || continue
 
         ABS_DIR=$(pwd)
+        
+        # 1. READ THE PRE-ASSIGNED PORT IMMEDIATELY
+        RPC_PORT=$(cat "rpc_port.cfg" | tr -d '\n\r ')
+        fuser -k "$RPC_PORT/tcp" 2>/dev/null
+        
         ADDR=$(grep "ADDRESS:" watch_info.txt | awk '{print $2}' | tr -d '\r')
         VIEW=$(grep "VIEW_KEY:" watch_info.txt | awk '{print $2}' | tr -d '\r')
         R_DATE=$(grep "RESTORE_DATE:" watch_info.txt | awk '{print $2}' | tr -d '\r')
@@ -112,7 +225,13 @@ set ADR  $env(ADDR)
 set VW   $env(VIEW)
 set DT   $env(R_DATE)
 
-spawn monero-wallet-cli --generate-from-view-key watchonly_TEMP --daemon-address $NODE --proxy $PRX --trusted-daemon
+# Dynamic string evaluation to drop the proxy flag if running on local node/self
+if {[string match "*.onion*" $NODE]} {
+    spawn monero-wallet-cli --generate-from-view-key watchonly_TEMP --daemon-address $NODE --proxy $PRX --trusted-daemon
+} {
+    spawn monero-wallet-cli --generate-from-view-key watchonly_TEMP --daemon-address $NODE --trusted-daemon
+}
+
 expect "Standard address:"
 send "$ADR\r"
 expect "Secret view key:"
@@ -138,70 +257,46 @@ EOF
                 [ -f "watchonly_TEMP" ] && mv "watchonly_TEMP" "watchonly"
             fi
             
-            
-            
-            # creating wallet from scratch causes rpc issues
-            chown -R user:user .
-            rm -f *.keys.lock
-            START_PORT=18082
-            CURRENT_PORT=$START_PORT
-            for dir in "$BASE_DIR"/*/; do
-                WALLET_FILE="${dir}watchonly"
-                if [ -f "$WALLET_FILE" ]; then
-                    ADDR_ID=$(basename "$dir")
-                    
-                    echo "Setting up ports"
-                        
-                    # Store the assigned port in the folder for other scripts to read dynamically
-                    echo "$CURRENT_PORT" > "${dir}rpc_port.cfg"
-                    
-                    CURRENT_PORT=$((CURRENT_PORT + 1))
-                fi
-            done
-            
-            # Clean up short-lived interactive processes safely without touching the RPC daemons
+            # Clean up short-lived interactive processes safely
             pkill -x monero-wallet-cli 2>/dev/null || true
         fi
         
-        # take ownership of all files in directory and release locks
+        # Clean up permissions and locks for the current folder
         chown -R user:user .
         rm -f *.keys.lock
         
-        PORT_FILE="${dir}rpc_port.cfg"
-        if [ ! -f "$PORT_FILE" ]; then
-            # Generate a random port between 18200 and 19000
-            RPC_PORT=$(shuf -i 18200-19000 -n 1)
-        else
-            RPC_PORT=$(cat "$PORT_FILE" | tr -d '\n\r ')
-        fi
-        fuser -k "$RPC_PORT/tcp" 2>/dev/null
-        
-        # --- RPC DAEMON SPIN-UP (CLEAN BOOT FIX) ---
+        # --- RPC DAEMON SPIN-UP ---
         if ! ss -tln | grep -q ":$RPC_PORT "; then
-            echo "Launching persistent RPC daemon for $(basename "$dir") on port $RPC_PORT..."
+            echo "Launching persistent RPC daemon on pre-assigned port $RPC_PORT..."
             
-            # Let --detach background itself naturally. Do not use trailing '&' or 'disown'
-            sudo -u user monero-wallet-rpc --detach \
-				        --wallet-file "watchonly" \
+            RPC_PROXY_FLAG=""
+            if [[ "$REMOTE_NODE" == *".onion"* ]]; then
+                RPC_PROXY_FLAG="--proxy $PROXY"
+            fi
+            
+            sudo -u user PASSWORD="$PASSWORD" monero-wallet-rpc --detach \
+                --wallet-file "watchonly" \
                 --password "$PASSWORD" \
                 --rpc-bind-port "$RPC_PORT" \
                 --daemon-address "$REMOTE_NODE" \
-                --proxy "$PROXY" \
+                $RPC_PROXY_FLAG \
                 --trusted-daemon \
                 --disable-rpc-login \
                 --shared-ringdb-dir /home/user/.shared-ringdb \
                 --log-file "rpc_daemon.log" &
                 
-            # Give the system a brief moment to map the networking socket
             sleep 3
         fi
+        
+        # Clear the variable from memory immediately for security
+        unset PASSWORD
         
         # --- HEALTH VERIFICATION LOOP ---
         echo "Verifying Monero Wallet RPC initialization state..."
         RPC_READY=false
-        MAX_RETRIES=120  
+        MAX_RETRIES=300  # <--- Increased from 120 to 300 to give Tor breathing room
         RETRY_COUNT=0
-
+        
         while [ "$RPC_READY" = false ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$RPC_PORT/json_rpc)
             
@@ -213,33 +308,58 @@ EOF
                 sleep 1
             fi
         done
-
+        
         if [ "$RPC_READY" = false ]; then
-            echo "[FAILED] Target port $RPC_PORT dropped connections for $MAX_RETRIES seconds. Skipping RPC pipeline."
+            echo "[FAILED] Target port $RPC_PORT dropped connections for $MAX_RETRIES seconds. Cleaning up..."
+            # Kill the specific process using this port so it doesn't become a zombie
+            fuser -k "$RPC_PORT/tcp" 2>/dev/null
+            rm -f *.keys.lock
             continue
         fi
 
-        # --- NEW VERIFIED NODE SYNC LOOP ---
-        echo "Synchronizing wallet with remote daemon top height..."
+        # --- UNIVERSAL SYNC LOOP ---
+        echo "Synchronizing wallet with daemon..."
         SYNCED=false
         while [ "$SYNCED" = false ]; do
-            HEIGHT_RESP=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}')
-            CURRENT_HEIGHT=$(echo "$HEIGHT_RESP" | grep -oP '"height":\s*\K[0-9]+' | head -n 1)
+            # 1. Always query the LOCAL Wallet RPC (no proxy needed)
+            CURRENT_HEIGHT=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
+                -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}' | jq -r '.result.height // empty')
             
-            DAEMON_RESP=$(curl -s --socks5-hostname "$PROXY" -X POST "http://$REMOTE_NODE/json_rpc" -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
-            TARGET_HEIGHT=$(echo "$DAEMON_RESP" | grep -oP '"target_height":\s*\K[0-9]+' | head -n 1)
+            # 2. Query the DAEMON (Local or Remote)
+            if [[ "$REMOTE_NODE" == *".onion"* ]]; then
+                DAEMON_RESP=$(curl -s -m 45 --socks5-hostname "$PROXY" -X POST "http://$REMOTE_NODE/json_rpc" \
+                    -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
+            else
+                DAEMON_RESP=$(curl -s -m 20 -X POST "http://$REMOTE_NODE/json_rpc" \
+                    -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
+            fi
             
-            { [ -z "$TARGET_HEIGHT" ] || [ "$TARGET_HEIGHT" -eq 0 ]; } && TARGET_HEIGHT=$(echo "$DAEMON_RESP" | grep -oP '"height":\s*\K[0-9]+' | head -n 1)
+            # 3. Handle 'target_height: 0' logic (Common on synced nodes)
+            T_HT=$(echo "$DAEMON_RESP" | jq -r '.result.target_height // 0')
+            R_HT=$(echo "$DAEMON_RESP" | jq -r '.result.height // 0')
 
-            if [ -n "$CURRENT_HEIGHT" ] && [ -n "$TARGET_HEIGHT" ]; then
-                echo "Progress: Wallet Height = $CURRENT_HEIGHT / Target Height = $TARGET_HEIGHT"
+            if [ "$T_HT" -gt "$R_HT" ]; then
+                TARGET_HEIGHT=$T_HT
+            else
+                TARGET_HEIGHT=$R_HT
+            fi
+        
+            # 4. Validation and Comparison
+            if [[ "$CURRENT_HEIGHT" =~ ^[0-9]+$ ]] && [[ "$TARGET_HEIGHT" =~ ^[0-9]+$ ]] && [ "$TARGET_HEIGHT" -gt 0 ]; then
+                echo "Progress: Wallet ($CURRENT_HEIGHT) / Daemon ($TARGET_HEIGHT)"
                 if [ "$CURRENT_HEIGHT" -ge "$TARGET_HEIGHT" ]; then
                     echo "[OK] Wallet blockchain sync matches remote network top."
                     SYNCED=true
                 fi
             else
-                echo "[DEBUG] Failed to read heights. Retrying loop..."
+                echo "[DEBUG] Waiting for valid height data... (Is the node or Tor responsive?)"
+                # If we have a response but it's empty, it might be a dead Tor circuit
+                if [ -z "$DAEMON_RESP" ] && [[ "$REMOTE_NODE" == *".onion"* ]]; then
+                    echo "    -> Empty response from Onion node. Refreshing Tor..."
+                    killall -HUP tor 2>/dev/null
+                fi
             fi
+            
             [ "$SYNCED" = false ] && sleep 10
         done
         
@@ -317,11 +437,15 @@ EOF
         
         # 4. Final Cleanup of permissions (Run this as root to fix everything)
         sudo chown -R user:user "$ABS_DIR"
+        
+        # 1. Allow PHP to list files and check existence in this wallet directory
+        sudo setfacl -m g:www-data:rx "$ABS_DIR"
 
         # 5. Run page generation as user to prevent root-owned file creation
         sudo bash /usr/local/bin/os/generate_monero_tx_page "$ADDR"
     fi
 done
+
 shopt -u nullglob
 
 # Clean up short-lived interactive processes safely without touching the RPC daemons

@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+mkdir -p /home/user
+# Apply ownership to UID 1000 (the 'user' account)
+chown -R 1000:1000 /home/user
+find /usr/local/bin -type f -exec dos2unix {} +

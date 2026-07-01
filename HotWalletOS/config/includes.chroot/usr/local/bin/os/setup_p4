@@ -1,0 +1,171 @@
+#!/bin/bash
+set -e
+
+# --- 0. CLAIM HARDWARE TTY (Fixes "no tty" and keyboard lockouts) ---
+# Because this is run via sudo, we must manually reconnect standard input/output to the hardware console
+#exec < /dev/tty1 > /dev/tty1 2>&1
+#chvt 1
+
+# --- 1. THEME & COLORS ---
+export TERM=linux
+stty sane
+
+if [ "$TERM" = "linux" ]; then
+    # Color 4 (Blue) -> Bright Red (#ff0000)
+    echo -ne "\e]P4ff0000" 
+    # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# --- 2. PRE-REQUISITES & PATHS ---
+NODE_CFG="/mnt/external/node.cfg"
+sudo mkdir -p /mnt/external
+
+# Dynamically find the boot disk
+if df -h | grep -qE '/run/live/medium|/usr/lib/live/mount/medium'; then
+    LIVE_DEV=$(df /run/live/medium 2>/dev/null | tail -n1 | awk '{print $1}')
+    BOOT_DISK=$(lsblk -no PKNAME "$LIVE_DEV")
+else
+    ROOT_DEV=$(df / | tail -n1 | awk '{print $1}')
+    BOOT_DISK=$(lsblk -no PKNAME "$ROOT_DEV")
+fi
+
+# Fallback if detection fails
+[ -z "$BOOT_DISK" ] && BOOT_DISK=$(lsblk -nro NAME,TYPE | grep 'disk' | head -n1 | awk '{print $1}')
+
+DISK_PATH="/dev/$BOOT_DISK"
+
+# --- 3. IMPROVED SPACE CHECK (lsblk logic) ---
+REQUIRED_BYTES=$((200 * 1024 * 1024 * 1024)) # 200 GB in bytes
+TOTAL_DISK_BYTES=$(lsblk -bno SIZE "$DISK_PATH" | head -n1 | xargs)
+# Fix: Force awk to output a plain integer instead of scientific notation
+USED_PART_BYTES=$(lsblk -bno SIZE "$DISK_PATH" | tail -n +2 | awk '{sum += $1} END {printf "%.0f", sum}')
+
+# Ensure variables aren't empty for math
+TOTAL_DISK_BYTES=${TOTAL_DISK_BYTES:-0}
+USED_PART_BYTES=${USED_PART_BYTES:-0}
+
+#FREE_BYTES=$((TOTAL_DISK_BYTES - USED_PART_BYTES))
+FREE_BYTES=$((TOTAL_DISK_BYTES))
+
+# --- 4. USER DECISION FLOW ---
+
+# Check if config already exists to skip prompts
+if [ -f "$NODE_CFG" ]; then
+    NODE_CHOICE=$(cat "$NODE_CFG")
+    if [ "$NODE_CHOICE" = "remote" ]; then
+        exit 0
+    elif [ "$NODE_CHOICE" = "self" ]; then
+        RUN_SELF_SETUP=true
+    fi
+fi
+
+# If no config was found, ask the user
+if [ "$RUN_SELF_SETUP" != true ]; then
+    if [ "$FREE_BYTES" -lt "$REQUIRED_BYTES" ]; then
+        # SCENARIO A: NOT ENOUGH SPACE
+        MSG_LOW_SPACE="You do not have enough space to run your own node. You must use our public node which can be a privacy risk.\n\nWould you like to continue or shut down?"
+        if whiptail --title " Insufficient Space " --yesno "$MSG_LOW_SPACE" 12 50 --fb --yes-button "Continue" --no-button "Shut Down"; then
+            echo "remote" | sudo tee "$NODE_CFG" > /dev/null
+            exit 0
+        else
+            sudo bash /usr/local/bin/os/safe_shutdown
+            exit 0
+        fi
+    else
+        # SCENARIO B: ENOUGH SPACE AVAILABLE
+        MSG_NODE="Would you like to use our remote node or host your own node?\n\nNote: Hosting your own (Self-Sync) ensures maximum privacy but takes a long time to sync (typically days). Using our remote node is faster (virtually immediate) but carries privacy risks."
+        
+        if whiptail --title " Node Selection " --yesno "$MSG_NODE" 16 50 --fb --yes-button "Remote Node" --no-button "Self-Sync"; then
+            # User chose Remote Node
+            echo "remote" | sudo tee "$NODE_CFG" > /dev/null
+            #whiptail --title " Configuration " --msgbox "Remote node selected. Configuration saved." 8 50
+            clear
+            exit 0
+        else
+            # User chose Self-Sync
+            echo "self" | sudo tee "$NODE_CFG" > /dev/null
+            RUN_SELF_SETUP=true
+        fi
+    fi
+fi
+
+# --- 5. PARTITIONING & FORMATTING ---
+if [ "$RUN_SELF_SETUP" = true ]; then
+    if [[ "$DISK_PATH" == *"nvme"* || "$DISK_PATH" == *"mmcblk"* ]]; then
+        TARGET_PART_PATH="${DISK_PATH}p4"
+    else
+        TARGET_PART_PATH="${DISK_PATH}4"
+    fi
+
+    if [ ! -b "$TARGET_PART_PATH" ]; then
+        {
+            echo 10
+            # We send all the "Disk in use" chatter to /dev/null
+            sudo fdisk -w always -W always "$DISK_PATH" <<EOF > /dev/null 2>&1
+n
+p
+4
+
+
+w
+EOF
+            echo 50
+            # Force kernel to see it, keep it quiet
+            sudo partx -u "$DISK_PATH" > /dev/null 2>&1 || true
+            sudo udevadm settle
+            sleep 5
+            
+            echo 80
+            # Format it, keep it quiet
+            sudo mkfs.ext4 -F -K "$TARGET_PART_PATH" > /dev/null 2>&1
+            echo 100
+        } | whiptail --title " Storage Setup " --gauge "Creating and Formatting Partition 4..." 8 60 0
+    fi
+    
+    sleep 5
+
+    # --- 6. MOUNTING & SWAP ---
+    sudo mkdir -p /mnt/p4
+    
+    if ! mountpoint -q /mnt/p4; then
+        # If mount fails initially, try one 'partprobe' then try one last time
+        if ! sudo mount "$TARGET_PART_PATH" /mnt/p4 > /dev/null 2>&1; then
+            sudo partprobe "$DISK_PATH" > /dev/null 2>&1
+            sleep 2
+            sudo mount "$TARGET_PART_PATH" /mnt/p4 || (whiptail --msgbox "Mount failed! Even though the partition was created, the system isn't letting us mount it yet. Try running the script once more." 16 50 && exit 1)
+        fi
+    fi
+
+    sudo mkdir -p /mnt/p4/monero
+    sudo chown user:user /mnt/p4/monero
+
+    if [ ! -f /mnt/p4/swapfile ]; then
+        {
+            echo 20; sudo fallocate -l 8G /mnt/p4/swapfile > /dev/null 2>&1
+            echo 50; sudo chmod 600 /mnt/p4/swapfile > /dev/null 2>&1
+            echo 70; sudo mkswap /mnt/p4/swapfile > /dev/null 2>&1
+            echo 90; sudo swapon /mnt/p4/swapfile > /dev/null 2>&1
+            echo 100
+        } | whiptail --title " Optimization " --gauge "Creating 8GB Swap File..." 8 50 0
+    fi
+    
+    # starup self-hosted sync
+    sudo bash /usr/local/bin/os/start_self_monero
+fi

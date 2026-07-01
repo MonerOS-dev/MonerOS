@@ -26,6 +26,15 @@ cat <<'EOF' > "$TARGET_FILE"
 $address = "REPLACE_ME_ADDRESS";
 $message = "";
 $status_class = "";
+$show_overwrite_warning = false;
+
+// Form retention variables for the overwrite screen
+$form_data = [
+    'destination' => '',
+    'amount' => '',
+    'tip_percent' => '1.25',
+    'password' => ''
+];
 
 // Path to the unlocked balance file
 $balance_file = "/var/www/backend/Monero/{$address}_unlocked.txt";
@@ -40,21 +49,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $amount = strtolower($_POST['amount'] ?? '');
     $tip_percent = $_POST['tip_percent'] ?? '1.25'; 
     $password = $_POST['password'] ?? '';
-    
-    $cmd = "sudo /usr/bin/bash /usr/local/bin/os/transfer_monero " . 
-            escapeshellarg($address) . " " . 
-            escapeshellarg($dest) . " " . 
-            escapeshellarg($amount) . " " . 
-            escapeshellarg($tip_percent) . " " . 
-            escapeshellarg($password);
-    
-    $output = shell_exec($cmd . " 2>&1");
-    $message = trim($output);
+    $confirm_overwrite = $_POST['confirm_overwrite'] ?? '0';
 
-    if (strpos($message, 'SUCCESS') !== false) {
-        $status_class = "success";
+    // Save for form re-submission in case warning triggers
+    $form_data = [
+        'destination' => $dest,
+        'amount' => $amount,
+        'tip_percent' => $tip_percent,
+        'password' => $password
+    ];
+
+    // Scan the target directory for pre-existing unsigned transactions
+    $target_dir = "/mnt/sallyport/watch_monero/{$address}/";
+    $has_existing_tx = false;
+    
+    if (is_dir($target_dir) && ($files = @scandir($target_dir)) !== false) {
+        foreach ($files as $file) {
+            if (strpos($file, 'unsigned_tx') !== false) {
+                $has_existing_tx = true;
+                break;
+            }
+        }
+    }
+
+    // Check conditions: If a file exists and user has NOT already clicked "Overwrite"
+    if ($has_existing_tx && $confirm_overwrite !== '1') {
+        $show_overwrite_warning = true;
     } else {
-        $status_class = "error";
+        // Proceed to execution (No file exists, or user bypassed via overwrite confirmation)
+        $cmd = "sudo /usr/bin/bash /usr/local/bin/os/transfer_monero " . 
+                escapeshellarg($address) . " " . 
+                escapeshellarg($dest) . " " . 
+                escapeshellarg($amount) . " " . 
+                escapeshellarg($tip_percent) . " " . 
+                escapeshellarg($password);
+        
+        $output = shell_exec($cmd . " 2>&1");
+        $message = trim($output);
+
+        if (strpos($message, 'SUCCESS') !== false) {
+            $status_class = "success";
+        } else {
+            $status_class = "error";
+        }
     }
 }
 ?>
@@ -250,7 +287,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="update-tag">MONERO TRANSFER</div>
     
     <div class="container">
-        <?php if ($message): ?>
+        <?php if ($show_overwrite_warning): ?>
+            <div class="response error">
+                <p style="letter-spacing:1px; color: #ff3333; font-size: 0.75rem; font-weight: bold; margin-bottom: 10px;">PENDING TRANSACTION DETECTED:</p>
+                <p style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem; color: #ff3333; margin-bottom: 15px;">
+                    An unsigned transaction file already exists in this wallet's directory. Creating a new transaction will replace it.
+                </p>
+            </div>
+            
+            <form method="POST" autocomplete="off" style="margin-top: 20px;">
+                <input type="hidden" name="destination" value="<?php echo htmlspecialchars($form_data['destination']); ?>">
+                <input type="hidden" name="amount" value="<?php echo htmlspecialchars($form_data['amount']); ?>">
+                <input type="hidden" name="tip_percent" value="<?php echo htmlspecialchars($form_data['tip_percent']); ?>">
+                <input type="hidden" name="password" value="<?php echo htmlspecialchars($form_data['password']); ?>">
+                <input type="hidden" name="confirm_overwrite" value="1">
+                
+                <button type="submit" class="btn-cmd btn-action" style="border-color: #ff3333; color: #fff; background: rgba(255,0,0,0.2);">OVERWRITE AND PROCEED</button>
+            </form>
+            <a href="index.php" class="btn-cmd btn-cancel">CANCEL AND GO BACK</a>
+
+        <?php elseif ($message): ?>
             <div class="response <?php echo $status_class; ?>">
                 <?php if ($status_class === "success"): ?>
                     <p style="letter-spacing:1px; color: var(--glow-green); font-size: 0.75rem; font-weight: bold; margin-bottom: 10px;">GENERATE UNSIGNED XMR:</p>
@@ -261,6 +317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php endif; ?>
             </div>
             <a href="index.php" class="btn-cmd btn-action" style="margin-top:20px;">RETURN TO DASHBOARD</a>
+            
         <?php else: ?>
             <form method="POST" autocomplete="off">
                 <div class="form-group">
@@ -278,7 +335,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
 
                 <div class="form-group">
-                    <label>Transfer Amount in XMR</label>
+                    <label>Transfer Amount in XMR (or sweep_all)</label>
                     <input type="text" name="amount" placeholder="" autocomplete="off" required>
                 </div>
                 <div class="form-group">

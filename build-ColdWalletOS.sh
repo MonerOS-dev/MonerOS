@@ -7,7 +7,7 @@ cd $BASE_DIR
 echo "[INFO] Starting ColdWalletOS build..."
 
 # copy splash
-convert $HOME/hwos_mods/cwos_splash.png \
+convert $HOME/MonerOS_Project/admin_mods/cwos_splash.png \
         -flip \
         -colors 14 \
         $HOME/MonerOS_Project/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
@@ -100,38 +100,43 @@ sudo xorriso -dev "$FINAL_IMG" \
     -boot_image any platform_id=0xef \
     -boot_image any emul_type=no_emulation \
     -commit
+    
+# --- 7.6. EXPORT THE PATCHED ISO9660 UPDATE FILE ---
+UPDATE_FILE="$HOME/ColdWalletOS.update"
+echo "[INFO] Exporting the pure ISO9660 update file to $UPDATE_FILE..."
+cp "$FINAL_IMG" "$UPDATE_FILE"
 
 # --- 8. SMART DYNAMIC EXPAND AND RE-LAYOUT ---
 echo "[INFO] Calculating ISO size and re-partitioning..."
 
-# 1. Get the current size of Partition 1 in sectors (512-byte blocks)
-# We look at the image before we wipe the table.
-P1_SIZE=$(sudo fdisk -l "$FINAL_IMG" | grep "${FINAL_IMG}1" | awk '{print $4}')
+# Get actual Partition 1 size in sectors using your original fdisk method
+ISO_SIZE=$(sudo fdisk -l "$FINAL_IMG" | grep "${FINAL_IMG}1" | awk '{print $4}')
 
-if [ -z "$P1_SIZE" ] || [ "$P1_SIZE" -lt 100 ]; then
-    echo "[ERROR] Could not determine ISO size. Falling back to safe estimate."
-    P1_SIZE=800000 
+# Set fixed 0.9GB target in sectors (900 MiB * 2048 sectors/MiB)
+P1_SIZE=$(( 900 * 2048 ))
+
+# CRITICAL FAIL GUARD: Stop if the real ISO size exceeds your 0.9GB limit
+if [ -n "$ISO_SIZE" ] && [ "$ISO_SIZE" -gt "$P1_SIZE" ]; then
+    echo "[CRITICAL ERROR] Built ISO ($ISO_SIZE sectors) is larger than the 0.9GB limit ($P1_SIZE sectors)!"
+    echo "Aborting build to prevent data corruption."
+    exit 1
 fi
 
-# 2. Define our gaps (in sectors)
+# Define our gaps (in sectors)
 EFI_SIZE=131072      # 64MB (Safe for FAT32)
 PERSIST_SIZE=512000  # 250MB 
 
-# 3. Calculate start points
-P2_START=$(( 64 + P1_SIZE ))
-# Align P2_START to 2048 for better performance (modern disk alignment)
-P2_START=$(( (P2_START + 2047) / 2048 * 2048 ))
-
-P3_START=$(( P2_START + EFI_SIZE ))
-P3_START=$(( (P3_START + 2047) / 2048 * 2048 ))
+# Calculate start points with clean 2048 alignment
+P2_START=$(( (64 + P1_SIZE + 2047) / 2048 * 2048 ))
+P3_START=$(( (P2_START + EFI_SIZE + 2047) / 2048 * 2048 ))
 
 echo "[INFO] ISO ends at $P1_SIZE. P2 starts at $P2_START. P3 starts at $P3_START."
 
-# 4. Expand the image to fit the new calculated math
+# Expand physical image file size
 TOTAL_SECTORS=$(( P3_START + PERSIST_SIZE + 2048 ))
 truncate -s $(( TOTAL_SECTORS * 512 )) "$FINAL_IMG"
 
-# 5. Wipe and Apply new table
+# Apply new MBR table
 sudo wipefs -a "$FINAL_IMG"
 sudo sfdisk "$FINAL_IMG" << EOF
 label: dos

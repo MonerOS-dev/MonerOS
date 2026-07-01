@@ -1,0 +1,93 @@
+#!/bin/bash
+set -e
+
+# --- ROOT PRIVILEGE CHECK ---
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: This script must be run with sudo or as root." >&2
+    exit 1
+fi
+
+# --- SILENCE KERNEL CONSOLE SPAM ---
+# Set console log level to 1 (Alerts/Panics only). 
+# This completely stops USB, keyboard, and network interface status spam.
+dmesg -n 1
+
+# --- SIGNAL HANDLING ---
+# Ignore Ctrl-C, kill, and suspend
+trap '' SIGINT SIGTERM SIGTSTP
+
+# --- UI SETUP ---
+export TERM=linux
+stty sane
+
+# Remap ANSI palette (Linux console only)
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P400ff00"   # Blue -> Bright Green
+    echo -ne "\e]P7ffffff"   # Light gray -> White
+    clear
+fi
+
+# NEWT color theme
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+
+# --- LOGGING ---
+LOG_FILE="/tmp/logs/udinit.log"
+mkdir -p /tmp/logs
+echo "--- Update Started: $(date) ---" > "$LOG_FILE"
+
+# --- MOUNT SETTINGS ---
+MNT_POINT="/mnt/update"
+TARGET_LABEL="UPDATE"
+
+# --- 1. Identify the device we booted from ---
+LIVE_DEV=$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null || findmnt -n -o SOURCE /)
+PARENT_DISK=$(lsblk -no PKNAME "$LIVE_DEV")
+
+if [ -z "$PARENT_DISK" ]; then
+    echo "ERROR: Could not determine parent disk" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+BOOT_DISK="/dev/$PARENT_DISK"
+echo "Boot disk detected: $BOOT_DISK" >> "$LOG_FILE"
+
+# --- 2. Find the UPDATE partition on that disk only ---
+FOUND_DEV=$(lsblk -o NAME,LABEL,PATH -nr | awk -v disk="$PARENT_DISK" -v label="$TARGET_LABEL" '
+    $1 ~ disk && $2 == label { print $3 }')
+
+if [ -z "$FOUND_DEV" ]; then
+    echo "ERROR: No partition labeled $TARGET_LABEL found on $BOOT_DISK" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+echo "Found UPDATE partition: $FOUND_DEV" >> "$LOG_FILE"
+
+# --- 3. Mount it ---
+mkdir -p "$MNT_POINT"
+
+if mount | grep -q "$MNT_POINT"; then
+    umount "$MNT_POINT"
+fi
+
+if ! mount "$FOUND_DEV" "$MNT_POINT"; then
+    echo "ERROR: Failed to mount $FOUND_DEV" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+echo "Mounted $FOUND_DEV at $MNT_POINT" >> "$LOG_FILE"
+
+sudo bash /usr/local/bin/main_menu

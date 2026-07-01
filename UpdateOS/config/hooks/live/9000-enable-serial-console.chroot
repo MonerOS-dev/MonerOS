@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+
+# 1. Enable serial console login
+systemctl enable serial-getty@ttyS0.service
+
+# 2. Add kernel boot parameter
+sed -i 's/boot=live/boot=live console=ttyS0/' /etc/default/grub || true
+update-grub || true

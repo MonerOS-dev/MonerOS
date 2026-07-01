@@ -1,0 +1,129 @@
+#!/bin/bash
+
+# =====================================================================
+# MonerOS Hardware Optimizer for monerod.conf
+# =====================================================================
+
+# 1. GATHER SYSTEM STATS
+TOTAL_CORES=$(nproc)
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+
+# Calculate Half Cores (ensuring it never drops below 1 for low-end hardware)
+#CORES=$(($TOTAL_CORES > 1 ? $TOTAL_CORES / 2 : 1))
+CORES=$TOTAL_CORES
+
+# =====================================================================
+# 2. LOGIC FOR BLOCK SYNC SIZE & PEER COUNT
+# =====================================================================
+# Thresholds are padded to account for hardware/kernel memory reservations
+
+if [ "$TOTAL_RAM_MB" -lt 6000 ]; then
+    # 4GB RAM Tier (Usually reports ~3800 MB)
+    SYNC_SIZE=20
+    PEERS=16
+elif [ "$TOTAL_RAM_MB" -lt 14000 ]; then
+    # 8GB RAM Tier (Usually reports ~7800 MB)
+    SYNC_SIZE=40
+    PEERS=32
+elif [ "$TOTAL_RAM_MB" -lt 28000 ]; then
+    # 16GB RAM Tier (Usually reports ~15800 MB)
+    SYNC_SIZE=64
+    PEERS=64
+else
+    # 32GB+ RAM Tier (Usually reports ~31800 MB or higher)
+    # NETWORK SAFETY: Capped at 64. Batches of 100 trigger P2P timeouts and peer drops.
+    SYNC_SIZE=64
+    PEERS=128
+fi
+
+
+# =====================================================================
+# 3. THREAD & MEMORY SAFETY ALIGNMENT (The OOM Guard)
+# =====================================================================
+# Cross-references thread count with RAM. If a system has a high thread count 
+# but low RAM, this overrides and clamps the threads to prevent an Out-Of-Memory crash.
+
+if [ "$TOTAL_RAM_MB" -lt 6000 ] && [ "$CORES" -gt 2 ]; then
+    # 4GB RAM cannot safely sustain more than 2 verification threads simultaneously
+    CORES=2
+elif [ "$TOTAL_RAM_MB" -lt 14000 ] && [ "$CORES" -gt 4 ]; then
+    # 8GB RAM should be restricted to a max of 4 threads to prevent OOM during heavy sync
+    CORES=4
+fi
+
+
+# 4. CALCULATE DB SYNC BUFFER (2.5% of total RAM in bytes)
+# Formula: (RAM_MB * 0.025) * 1024 * 1024
+SYNC_BUFFER_BYTES=$(awk "BEGIN {printf \"%.0f\", ($TOTAL_RAM_MB * 0.025) * 1048576}")
+
+# 5. DEFINE TARGET PATH
+# Ensure this directory exists in your ISO build environment
+CONF_FILE="/home/user/monerod-clearnet.conf"
+
+# Create directory if it doesn't exist (useful for testing)
+mkdir -p "$(dirname "$CONF_FILE")"
+
+# 6. WRITE THE OPTIMIZED CONFIGURATION
+cat <<EOF > "$CONF_FILE"
+# =====================================================================
+# DATA DIRECTORY & LOGGING
+# =====================================================================
+# Points directly to your new 200GB+ partition
+data-dir=/mnt/p4/monero
+log-file=/mnt/p4/monero/monerod.log
+
+# =====================================================================
+# NETWORK & RPC SETTINGS (LOCAL ONLY)
+# =====================================================================
+public-node=0
+restricted-rpc=1
+rpc-bind-ip=127.0.0.1
+rpc-bind-port=18081
+
+# =====================================================================
+# P2P NETWORK SETTINGS (OUTBOUND ENFORCEMENT)
+# =====================================================================
+p2p-bind-ip=127.0.0.1
+p2p-bind-port=18080
+no-igd=1
+offline=0
+p2p-use-ipv6=0
+disable-dns-checkpoints=1
+
+# Hardware Optimized: $TOTAL_RAM_MB MB RAM detected
+out-peers=$PEERS
+in-peers=0
+
+# =====================================================================
+# BLOCKCHAIN PRUNING
+# =====================================================================
+# Discards 7/8ths of historic data layout to save ~70% disk space
+prune-blockchain=1
+
+# =====================================================================
+# AUTO-OPTIMIZED SYNC TWEAKS
+# =====================================================================
+# Buffer scaled to 2.5% of RAM: $(($SYNC_BUFFER_BYTES / 1048576))MB
+#db-sync-mode=fast:async:${SYNC_BUFFER_BYTES}bytes
+db-sync-mode=safe
+
+# Batch size scaled for memory safety: $SYNC_SIZE
+block-sync-size=$SYNC_SIZE
+
+# Strictly matched to $CORES physical cores for zero overhead
+prep-blocks-threads=$CORES
+max-concurrency=$CORES
+EOF
+
+
+# 7. OUTPUT RESULTS TO TERMINAL
+#echo "-------------------------------------------------------"
+#echo " MonerOS Configuration Generated"
+#echo "-------------------------------------------------------"
+#echo " Detected CPU Cores: $CORES"
+#echo " Detected Total RAM: $TOTAL_RAM_MB MB"
+#echo " Set Sync Buffer:    $(($SYNC_BUFFER_BYTES / 1048576)) MB"
+#echo " Set Batch Size:     $SYNC_SIZE"
+#echo " Set Out-Peers:      $PEERS"
+#echo " Target File:        $CONF_FILE"
+#echo "-------------------------------------------------------"

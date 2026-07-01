@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Hardware OS Unlock
+Exec=x-terminal-emulator -e /usr/local/bin/hwinit
+Terminal=true
+X-GNOME-Autostart-enabled=true
+Categories=System;

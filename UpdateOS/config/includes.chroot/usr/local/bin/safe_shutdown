@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# Ensure we can find cryptsetup/mount/etc
+export PATH=$PATH:/usr/sbin:/sbin
+
+# Stop kernel messages from interrupting the UI
+sudo dmesg -n 3
+
+# --- SECURITY LOCKDOWN ---
+# This ignores Ctrl+C (SIGINT) and Termination (SIGTERM)
+# The empty quotes tell the script to do absolutely nothing when these are pressed.
+trap "" SIGINT SIGTERM
+
+# Disables the interrupt key at the terminal level (extra layer)
+stty intr undef
+# -------------------------
+
+# UI Styling
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P400ff00"   # Blue -> Bright Green
+    echo -ne "\e]P7ffffff"   # Light gray -> White
+    clear
+fi
+
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# --- VARIABLES ---
+SALLY_MAPPER="sallyport_unlocked"
+FINAL_MOUNT="/mnt/sallyport"
+MOUNT_POINT="/mnt/vault"
+MAPPER_NAME="cwos_unlocked"
+EXT_MNT="/mnt/external"
+
+# 1. Customized Unmount Sequence for CWOS (LUKS2 Layered Stack)
+{
+    # A. Unmount Sallyport Virtual File System
+    echo 15; sudo umount "$FINAL_MOUNT" 2>/dev/null
+    
+    # B. Close the Sallyport LUKS File Container Mapper
+    echo 35; sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
+    
+    # C. Unmount the Internal Vault Virtual File System
+    echo 55; sudo umount "$MOUNT_POINT" 2>/dev/null
+    
+    # D. Close the Internal Vault LUKS Partition Mapper
+    echo 75; sudo cryptsetup close "$MAPPER_NAME" 2>/dev/null
+    
+    # E. Unmount the physical USB Flash Drive
+    echo 90; sudo umount "$EXT_MNT" 2>/dev/null
+    
+    # F. Flush system buffers to hardware disks
+    echo 100; sync; sleep 1
+} | whiptail --title " Locking ColdWalletOS " --fb --nocancel --gauge "\nSafely closing Vaults, Sallyports, and External Drives..." 8 50 0
+
+# Re-enable interrupt key just before power down (good practice)
+stty intr ^C
+
+sudo shutdown -h now

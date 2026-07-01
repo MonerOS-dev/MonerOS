@@ -1,0 +1,10 @@
+#!/bin/bash
+# 1000 is the default ID for the live user
+chown -R 1000:1000 /home/user/.bash_profile
+chmod 644 /home/user/.bash_profile
+
+# 6. Force the live 'user' to own every file inside /usr/local/bin/
+chown -R 1000:1000 /usr/local/bin/* 2>/dev/null || true
+
+# 7. Ensure they are all universally readable and executable
+chmod 755 /usr/local/bin/* 2>/dev/null || true
