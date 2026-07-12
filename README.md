@@ -9,6 +9,10 @@ You don't need to be an expert to setup your own security and privacy focused wa
 
 ---
 
+## Installation and User Manual
+* **[Read the Installation Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_Installation_Manual.pdf)**
+* **[Read the User Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_User_Manual.pdf)**
+
 ## **The Power of Two: How It Works**
 
 The MonerOS architecture relies on physical isolation to protect your wealth. Instead of trusting a single device, you use two independent environments:
