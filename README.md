@@ -10,8 +10,8 @@ You don't need to be an expert to setup your own security and privacy focused wa
 ---
 
 ## Installation and User Manual
-* **[Read the Installation Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_Installation_Manual.pdf)**
-* **[Read the User Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_User_Manual.pdf)**
+* **[Read the Installation Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_Installation_Manual.pdf?format=raw)**
+* **[Read the User Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_User_Manual.pdf?format=raw)**
 
 ## **The Power of Two: How It Works**
 
