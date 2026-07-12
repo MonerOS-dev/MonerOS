@@ -42,10 +42,8 @@ The MonerOS architecture relies on physical isolation to protect your wealth. In
 
 ## **Important: Alpha Phase Notice**
 
-**MonerOS is currently in Alpha.** While we strive for maximum security, please be aware that the software is still under active development.
+**MonerOS is currently in Beta.** While we strive for maximum security, please be aware that the software is still under active development.
 
-* **Risk of Data Loss:** As with any Alpha-stage software, bugs or unexpected behavior may occur, potentially leading to the loss of funds or data.
-* **Exercise Caution:** We strongly recommend only transferring small amounts of cryptocurrency that you are comfortable losing during this testing period.
 * **Community Contribution:** Real-world testing is vital to the evolution of this project. By using MonerOS now, you are helping us identify edge cases and harden the system for the entire community.
 
 ---
