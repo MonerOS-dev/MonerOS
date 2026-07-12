@@ -5,6 +5,8 @@
 
 The ecosystem consists of two specialized nodes: **HotWalletOS** and **ColdWalletOS**.
 
+You don't need to be an expert to setup your own security and privacy focused wallet. MonerOS does this by default.
+
 ---
 
 ## **The Power of Two: How It Works**
