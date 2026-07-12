@@ -40,7 +40,7 @@ The MonerOS architecture relies on physical isolation to protect your wealth. In
 
 ---
 
-## **Important: Alpha Phase Notice**
+## **Important: Beta Phase Notice**
 
 **MonerOS is currently in Beta.** While we strive for maximum security, please be aware that the software is still under active development.
 
