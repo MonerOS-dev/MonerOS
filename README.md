@@ -52,6 +52,12 @@ The MonerOS architecture relies on physical isolation to protect your wealth. In
 
 ---
 
+## **Bitcoin Support**
+
+Bitcoin support is coming soon but will not be implemented until Monero has been stress tested. This is to ensure we can provide the utmost security, privacy and reliability to both Monero and Bitcoin.
+
+---
+
 ## **Hardware Requirements**
 
 **MonerOS** is designed to be lightweight and efficient. It can be deployed on most amd64 (64-bit) hardware, from older laptops to modern workstations. Self-Sync Nodes are best for maximum privacy but require significantly better hardware than Remote Nodes. Self-Sync Nodes also take days to be ready for use, whereas Remote Nodes are ready immediately.
