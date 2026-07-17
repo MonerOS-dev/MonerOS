@@ -1,0 +1,457 @@
+#!/bin/bash
+
+######################### This page should be edited in hwos_mods ###########################
+
+#exit 0   # Temporarily disable this file
+
+# 1. CLAIM THE HARDWARE (TTY1)
+sudo chvt 1
+exec < /dev/tty1 > /dev/tty1 2>&1
+
+# 2. ENVIRONMENT & STYLE
+export TERM=linux
+stty sane
+
+export LANG=C.UTF-8
+reset
+clear
+setfont /usr/share/consolefonts/Lat2-TerminusBold32x16.psf.gz
+setterm -cursor off
+
+############################### Style and Unlock ############################################
+export DISPLAY=:0
+
+# --- 1. INITIALIZATION & KIOSK MODE ---
+sleep 1
+
+HW_VERSION=$(cat "/usr/local/bin/hwversion" | tr -d '\n' | xargs)
+
+# Prevent exit via keyboard shortcuts
+trap '' SIGINT SIGTERM SIGTSTP
+
+# --- 2. CONFIGURATION & LOGGING ---
+LOG_FILE="/tmp/logs/hwos_unlock.log"
+sudo mkdir -p /tmp/logs
+sudo chown 1000:1000 /tmp/logs
+
+# Suppress kernel spam
+sudo dmesg -n 3
+export TERM=linux
+stty sane
+
+EXT_MNT="/mnt/external"
+SALLY_MNT="/mnt/sallyport"
+TARGET_FILE="$EXT_MNT/sallyport.bin"
+SALLY_MAPPER="sallyport_unlocked"
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    # Color 4 (Blue) -> Bright Red (#ff0000)
+    echo -ne "\e]P4ff0000" 
+    # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+# --- 3. IDENTIFY & MOUNT BOOT PARTITION ---
+echo "--- Unlock Process Started: $(date) ---" > "$LOG_FILE"
+
+# Find the disk we booted from
+LIVE_DEV=$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null || findmnt -n -o SOURCE /)
+PARENT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n 1)
+
+# Target Partition 3 (nvme0n1p3 vs sda3)
+if [[ "$PARENT_DISK" == nvme* || "$PARENT_DISK" == mmcblk* ]]; then
+    TARGET_PART="/dev/${PARENT_DISK}p3"
+else
+    TARGET_PART="/dev/${PARENT_DISK}3"
+fi
+
+echo "Targeting Partition: $TARGET_PART" >> "$LOG_FILE"
+
+# Mount the external partition
+sudo mkdir -p "$EXT_MNT"
+sudo mount -t exfat -o uid=1000,gid=1000,fmask=0000,dmask=0000 "$TARGET_PART" "$EXT_MNT"
+
+# Setup internet
+sleep 2
+IP_ADDR=$(hostname -I)
+if [[ -z "${IP_ADDR// }" ]]; then
+    sudo bash /usr/local/bin/os/wifi-setup
+fi
+
+# Verify file exists
+if [ ! -f "$TARGET_FILE" ]; then
+    echo "CRITICAL: $TARGET_FILE not found!" >> "$LOG_FILE"
+    whiptail --title " ERROR " --msgbox "No Sallyport File Detected!\n\nYou must connect this device and boot from ColdWalletOS first to setup Sallyport!\n\nClick 'OK' to shutdown now..." 0 0
+    sudo poweroff
+    exit 1
+fi
+
+# --- 4. UNLOCK LUKS LOOP CONTAINER ---
+sudo mkdir -p "$SALLY_MNT"
+
+# Quick structural verification that the target is a valid LUKS target image
+if ! sudo cryptsetup isLuks "$TARGET_FILE" 2>/dev/null; then
+    echo "CRITICAL: $TARGET_FILE is not a valid LUKS volume!" >> "$LOG_FILE"
+    whiptail --title " ERROR " --msgbox "Sallyport container is corrupted or not configured for LUKS!\n\nClick 'OK' to shutdown..." 0 0
+    sudo poweroff
+    exit 1
+fi
+
+while true; do
+    # 1. Capture password
+    PASS=$(whiptail --title " $HW_VERSION " --passwordbox \
+        "\nEnter password to unlock Sallyport:" 12 50 \
+        --nocancel 3>&1 1>&2 2>&3)
+
+    # 2. Pre-cleanup: Clean up any stale mapper nodes or partial hanging mounts safely
+    sudo umount "$SALLY_MNT" > /dev/null 2>&1
+    sudo cryptsetup close "$SALLY_MAPPER" > /dev/null 2>&1
+
+    echo "Attempting LUKS decryption..." >> "$LOG_FILE"
+    
+    # 3. Open the container file natively through the loop interface using cryptsetup
+    if printf '%s' "$PASS" | sudo timeout 15s cryptsetup open "$TARGET_FILE" "$SALLY_MAPPER" -d - >> "$LOG_FILE" 2>&1; then
+        
+        echo "Attempting to mount inner ext4 partition..." >> "$LOG_FILE"
+        if sudo mount "/dev/mapper/$SALLY_MAPPER" "$SALLY_MNT" >> "$LOG_FILE" 2>&1; then
+            # Ensure standard user space can read/write the unlocked ext4 partition payload
+            sudo chown -R 1000:1000 "$SALLY_MNT"
+            
+            echo "SUCCESS: $TARGET_FILE mounted safely." >> "$LOG_FILE"
+            unset PASS
+            break 
+        else
+            echo "FAILED: Mount operation rejected." >> "$LOG_FILE"
+            sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
+            whiptail --title " Error " --msgbox "Failed to mount partition. Filesystem might be damaged." 8 50
+        fi
+    else
+        # 4. Immediate Notification on Decryption Failure
+        echo "FAILED: Incorrect Password or Timeout" >> "$LOG_FILE"
+        whiptail --title " Error " --msgbox "Incorrect password. Please try again." 8 40
+    fi
+done
+
+# --- 5. CLEANUP & EXIT ---
+# Restore terminal behavior
+setterm -cursor on
+stty sane
+[[ "$TERM" == "xterm"* ]] && stty erase '^?' || stty erase '^H'
+
+# Clear screen for a clean desktop transition
+clear
+sleep 1
+
+### SYSTEM CLOCK SYNC ###
+TIME=$(curl -sI --connect-timeout 2 http://deb.debian.org | grep -i '^Date:' | cut -d' ' -f2-)
+if [ -n "$TIME" ]; then
+    sudo date -s "$TIME"
+    sudo hwclock --systohc
+fi
+
+
+
+
+
+
+
+
+MONERO_EXISTS=true
+
+# run whiptail in a way that allows arrow keys
+run_whiptail() {
+    local ecfile=$(mktemp)
+    script -q -c "$(printf '%q ' "$@"); echo \$? > $ecfile" /dev/null
+    local ec=$(cat "$ecfile")
+    rm -f "$ecfile"
+    return "$ec"
+}
+    
+# Restore proper keyboard mode
+sudo loadkeys us
+stty sane -ixon
+
+# 1. Verify the base directory actually exists
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet directory does not exist"
+    MONERO_EXISTS=false
+fi
+
+# 2. Count only the subdirectories inside BASE_DIR (1 level deep)
+SUBDIR_COUNT=$(find "$BASE_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)
+
+if [ "$SUBDIR_COUNT" -eq 0 ]; then
+    echo "Wallet directory does not contain any addresses"
+    MONERO_EXISTS=false
+fi
+
+if [ "$RUN_SELF_SETUP" = true ]; then
+    if df -h | grep -qE '/run/live/medium|/usr/lib/live/mount/medium'; then
+        LIVE_DEV=$(df /run/live/medium 2>/dev/null | tail -n1 | awk '{print $1}')
+        BOOT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n1)
+    else
+        ROOT_DEV=$(df / | tail -n1 | awk '{print $1}')
+        BOOT_DISK=$(lsblk -no PKNAME "$ROOT_DEV" | head -n1)
+    fi
+    [ -z "$BOOT_DISK" ] && BOOT_DISK=$(lsblk -nro NAME,TYPE | grep 'disk' | head -n1 | awk '{print $1}')
+    DISK_PATH="/dev/$BOOT_DISK"
+    
+    # Launch backend infrastructure imports
+    REMOTE_NODE_CFG="/mnt/external/remote_node.cfg"
+    
+    # 1. EXPAND TARGET PARTITION PATH BASED ON ARCHITECTURE
+    if [[ "$DISK_PATH" == *"nvme"* || "$DISK_PATH" == *"mmcblk"* ]]; then
+        TARGET_PART4_PATH="${DISK_PATH}p4"
+    else
+        TARGET_PART4_PATH="${DISK_PATH}4"
+    fi
+    
+    # 2. EVALUATE SYSTEM SETUP STRATEGY
+    RUN_SELF_SETUP=false
+    
+    # PRE-FLIGHT: Check if a custom remote node configuration already exists to use as an autofill default
+    DEFAULT_NODE=""
+    if [ -f "$REMOTE_NODE_CFG" ]; then
+        # Read the file and strip any erratic whitespace
+        PRE_EXISTING_NODE=$(cat "$REMOTE_NODE_CFG" | tr -d '[:space:]')
+        if [ -n "$PRE_EXISTING_NODE" ]; then
+            DEFAULT_NODE="$PRE_EXISTING_NODE"
+            echo "Found existing remote node configuration ($DEFAULT_NODE) for autofill." >> "$LOG_FILE"
+        fi
+    fi
+    
+    # --- REMOVED AUTOMATIC BYPASSES: ALWAYS FORCE INTERACTIVE SETUP ---
+    sudo mkdir -p /mnt/external
+    
+    # Space Check on the raw parent block device to see if hosting a local node is viable
+    REQUIRED_BYTES=$((200 * 1024 * 1024 * 1024))
+    TOTAL_DISK_BYTES=$(lsblk -bno SIZE "$DISK_PATH" | head -n1 | xargs)
+    TOTAL_DISK_BYTES=${TOTAL_DISK_BYTES:-0}
+    
+    # SCENARIO A: STORAGE DEPRIVED (MUST MANUALLY INPUT REMOTE TARGET)
+    if [ "$TOTAL_DISK_BYTES" -lt "$REQUIRED_BYTES" ]; then
+    
+        MSG_LOW_SPACE="You do not have enough disk space (250GB+ required) to host a local node.\nYou must manually configure a custom remote node address to proceed or choose to shut down."
+    
+        # Use wrapper ONLY for the button choice box
+        if run_whiptail whiptail --title " Insufficient Space " \
+            --yesno "$MSG_LOW_SPACE" 15 50 --fb \
+            --yes-button "Continue" --no-button "Shutdown"; then
+    
+            RUN_SELF_SETUP=false
+    
+            while true; do
+                # Native descriptor redirection bypasses script wrapper bugs for input boxes
+                # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
+                USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
+                    "Enter remote node address (e.g., 123.45.67.89:18081 or onion:18081):" 12 50 \
+                    "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
+                
+                if [ $? -ne 0 ]; then
+                    sudo bash /usr/local/bin/os/safe_shutdown
+                    exit 0
+                fi
+                
+                # Strips EVERYTHING except alphanumeric characters, dots, colons, and hyphens
+                CLEAN_NODE=$(echo "$USER_NODE" | tr -cd '[:alnum:].:-')
+                
+                if [ -n "$CLEAN_NODE" ]; then
+                    if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
+                        echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
+                        break
+                    else
+                        whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                    fi
+                else
+                    whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+                fi
+            done
+    
+        else
+            sudo bash /usr/local/bin/os/safe_shutdown
+            exit 0
+        fi
+    
+    # SCENARIO B: SUFFICIENT SPACE AVAILABLE (PROMPT FOR SETUP TYPE)
+    else
+    
+        MSG_NODE="System storage is verified. Would you like to host your own node locally (Self-Sync) or connect to an external node?\n\nNote: Self-Sync provides absolute privacy but can take up to 1-3 days to sync"
+    
+        while true; do
+            # Flip the buttons: "Remote Node" is now the default (Yes-button)
+            if run_whiptail whiptail --title " Node Synchronization Engine " \
+                --yesno "$MSG_NODE" 15 50 --fb \
+                --yes-button "Remote Node" --no-button "Self-Sync"; then
+    
+                # If they press Enter (Default), it hits 'Yes' (Remote Node)
+                RUN_SELF_SETUP=false
+                
+                # Native descriptor redirection bypasses script wrapper bugs for input boxes
+                # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
+                USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
+                    "Enter remote node address (e.g., 123.45.67.89:18081 or onion:18081):" 12 50 \
+                    "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
+                
+                # If user presses CANCEL or ESC on the input box
+                if [ $? -ne 0 ]; then
+                    echo "User canceled remote node input. Looping back to menu." >> "$LOG_FILE"
+                    continue  # <--- This restarts the main loop, returning to the choice screen
+                fi
+                
+                # Strips EVERYTHING except alphanumeric characters, dots, colons, and hyphens
+                CLEAN_NODE=$(echo "$USER_NODE" | tr -cd '[:alnum:].:-')
+                
+                if [ -n "$CLEAN_NODE" ]; then
+                    if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
+                        echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
+                        break # Success! Break the main outer loop and proceed with the script
+                    else
+                        whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                    fi
+                else
+                    whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+                fi
+                
+            else
+                # If they navigate to 'Self-Sync', it hits 'No', triggering this block
+                RUN_SELF_SETUP=true
+                break # Break out of the loop to proceed with self-sync setup
+            fi
+        done
+    fi
+    
+    sleep 5
+    
+    
+    
+    
+    
+    # --- 3 & 4. PARTITIONING, FORMATTING, MOUNTING & SWAP ---
+    if [ "$RUN_SELF_SETUP" = true ]; then
+        # Determine partition path
+        if [[ "$DISK_PATH" == *"nvme"* || "$DISK_PATH" == *"mmcblk"* ]]; then
+            TARGET_PART_PATH="${DISK_PATH}p4"
+        else
+            TARGET_PART_PATH="${DISK_PATH}4"
+        fi
+    
+        # Single pass for partitioning and formatting
+        if [ ! -b "$TARGET_PART_PATH" ]; then
+            sudo umount "${DISK_PATH}"* > /dev/null 2>&1
+            
+            sudo fdisk -w always -W always "$DISK_PATH" <<EOF > /dev/null 2>&1
+n
+p
+4
+    
+    
+w
+EOF
+            # Force kernel to register the new layout
+            sudo blockdev --rereadpt "$DISK_PATH" > /dev/null 2>&1
+            sudo partx -u "$DISK_PATH" > /dev/null 2>&1
+            sudo udevadm settle
+            sleep 5
+            
+            if [ -b "$TARGET_PART_PATH" ]; then
+                sudo mkfs.ext4 -F "$TARGET_PART_PATH" > /dev/null 2>&1
+            else
+                echo "Failed to create partition"
+                exit 1
+            fi
+        fi
+    
+        # Final Mount
+        sudo mkdir -p /mnt/p4
+        sudo mount -o noatime,nodiratime,lazytime,commit=60 "$TARGET_PART_PATH" /mnt/p4
+        
+        sudo mkdir -p /mnt/p4/monero
+        sudo chown user:user /mnt/p4/monero
+    
+        # Setup Swap
+        if [ ! -f /mnt/p4/swapfile ]; then
+            sudo fallocate -l 8G /mnt/p4/swapfile > /dev/null 2>&1
+            sudo chmod 600 /mnt/p4/swapfile > /dev/null 2>&1
+            sudo mkswap /mnt/p4/swapfile > /dev/null 2>&1
+            sudo swapon /mnt/p4/swapfile > /dev/null 2>&1
+        fi
+        
+        sudo sysctl vm.swappiness=10 > /dev/null 2>&1
+        sudo bash /usr/local/bin/os/start_self_monero
+    fi
+    
+    
+    sudo bash /usr/local/bin/os/import_monero || true
+    sudo bash /usr/local/bin/os/start_monero_daemon || true
+    sudo bash /usr/local/bin/os/submit_monero || true
+fi
+
+
+
+
+echo "Getting Balances..."
+sudo bash /usr/local/bin/os/get_crypto_balances || true
+
+################################ Tor #########################################
+sudo bash /usr/local/bin/os/start_tor_server || true
+
+###############################################
+# --- 6. SWITCH BACK TO X11 FOR GUI ---
+###############################################
+
+# 1. Return to the graphical interface
+sudo chvt 7
+export DISPLAY=:0
+sleep 1 
+
+# 2. X11 Settings & Permissions
+xset -display :0 dpms force on
+xhost +local:root > /dev/null 2>&1
+xset s off s noblank -dpms
+pkill xscreensaver > /dev/null 2>&1 || true
+
+# 3. Launch Surf as the standard user
+sudo -u user DISPLAY=:0 nohup surf -K -F -N http://localhost > /dev/null 2>&1 &
+
+# 4. Wait for the Surf window to actually exist
+until wmctrl -l 2>/dev/null | grep -i "surf"; do
+    sleep 0.2
+done
+
+# 5. Force Fullscreen and Keep Above
+wmctrl -r "surf" -b add,fullscreen,above
+
+# 6. Hide the cursor in X11
+if command -v unclutter >/dev/null; then
+    nohup unclutter -idle 0.1 -root >/dev/null 2>&1 &
+fi
+
+# 7. Final Background Cleanup
+# Wipe TTY1 so no password residue remains in the scrollback console buffer
+sudo chvt 1
+clear
+setterm -cursor off
+sudo chvt 7
+
+clear
+echo "Interface Ready."
+sleep 10
+exit 0

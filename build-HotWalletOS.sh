@@ -5,7 +5,7 @@ set -e
 
 
 # Production version vs non-production
-PRODUCTION=true
+PRODUCTION=false
 MODS_DIR="$HOME/MonerOS_Project/admin_mods"
 BUILD_DIR="$HOME/MonerOS_Project/HotWalletOS"
 UFW_HOOK="01-outbound-only-ufw.chroot"
@@ -33,12 +33,12 @@ if [ "$PRODUCTION" = true ]; then
     fi
 
     # 4. Copy Production hwinit.desktop
-    sudo cp "$MODS_DIR/hwinit-desktop.production" "$HWINIT_DESK_DEST"
-    sudo chmod +x "$HWINIT_DESK_DEST"
+    #sudo cp "$MODS_DIR/hwinit-desktop.production" "$HWINIT_DESK_DEST"
+    #sudo chmod +x "$HWINIT_DESK_DEST"
     
     # 5. Copy Production hwinit
-    sudo cp "$MODS_DIR/hwinit_production" "$HWINIT_DEST"
-    sudo chmod +x "$HWINIT_DEST"
+    #sudo cp "$MODS_DIR/hwinit_production" "$HWINIT_DEST"
+    #sudo chmod +x "$HWINIT_DEST"
 
 else
     echo "[INFO] Configuring for DEV mode..."
@@ -57,12 +57,12 @@ else
     sudo rm -f "$BUILD_DIR/config/hooks/live/$UFW_HOOK"
     
     # 4. Copy Non-Production hwinit.desktop
-    sudo cp "$MODS_DIR/hwinit-desktop.non-production" "$HWINIT_DESK_DEST"
-    sudo chmod +x "$HWINIT_DESK_DEST"
+    #sudo cp "$MODS_DIR/hwinit-desktop.non-production" "$HWINIT_DESK_DEST"
+    #sudo chmod +x "$HWINIT_DESK_DEST"
 
     # 5. Copy Non-Production hwinit
-    sudo cp "$MODS_DIR/hwinit_non-production" "$HWINIT_DEST"
-    sudo chmod +x "$HWINIT_DEST"
+    #sudo cp "$MODS_DIR/hwinit_non-production" "$HWINIT_DEST"
+    #sudo chmod +x "$HWINIT_DEST"
 fi
 
 

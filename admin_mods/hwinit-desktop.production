@@ -1,5 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Hardware OS Unlock
-Exec=sudo /usr/local/bin/hwinit
-Terminal=false
