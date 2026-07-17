@@ -5,7 +5,7 @@ set -e
 
 
 # Production version vs non-production
-PRODUCTION=false
+PRODUCTION=true
 MODS_DIR="$HOME/MonerOS_Project/admin_mods"
 BUILD_DIR="$HOME/MonerOS_Project/HotWalletOS"
 UFW_HOOK="01-outbound-only-ufw.chroot"
