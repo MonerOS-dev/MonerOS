@@ -7,7 +7,8 @@ cd $BASE_DIR
 echo "[INFO] Starting UpdateOS build..."
 
 # copy splash
-convert $HOME/MonerOS_Project/admin_mods/ud_splash.png \
+#convert $HOME/MonerOS_Project/admin_mods/cwos_splash.png \
+convert $HOME/MonerOS_Project/admin_mods/generic_splash.png \
         -flip \
         -colors 14 \
         $HOME/MonerOS_Project/UpdateOS/config/includes.binary/boot/grub/splash.tga
@@ -42,7 +43,7 @@ lb config \
   --bootloaders "syslinux,grub-efi" \
   --debian-installer none \
   --apt-recommends false \
-  --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live live-media-label=UpdateOS live-media-path=/live"
+  --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live bootfrom=/dev/disk/by-partuuid/88888888-01 live-media-path=/up_sys"
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build
@@ -75,7 +76,11 @@ sudo mksquashfs "$TEMP_SQUASH" "$SQUASH_FILE" -comp zstd -Xcompression-level 22 
 # Cleanup
 sudo rm -rf "$TEMP_SQUASH"
 
+# --- 5.5. RENAME SYSTEM DIRECTORY & CREATE MARKER ---
+sudo mv ${BASE_DIR}/binary/live ${BASE_DIR}/binary/up_sys
 
+echo "[INFO] Creating UpdateOS marker file..."
+sudo touch "${BASE_DIR}/binary/up_sys/.marker-update"
 
 # --- 6. FINALIZE THE ISO ---
 sudo rm -f .build/binary_iso
@@ -87,7 +92,6 @@ NEW_ISO=$(ls -t ${BASE_DIR}/*.iso | head -n1)
 cp "$NEW_ISO" "$FINAL_IMG"
 
 # --- 7.5. PATCH THE ISO INTERNALS FIRST ---
-# Do this while the image still looks like a 'pure' ISO to xorriso
 echo "[INFO] Patching El Torito catalog for Dual-Arch UEFI..."
 sudo xorriso -dev "$FINAL_IMG" \
     -boot_image any next \
@@ -121,7 +125,8 @@ truncate -s $(( TOTAL_SECTORS * 512 )) "$FINAL_IMG"
 # Apply new MBR table
 sudo wipefs -a "$FINAL_IMG"
 sudo sfdisk "$FINAL_IMG" << EOF
-label: dos
+label: mbr
+label-id: 0x88888888
 unit: sectors
 
 $FINAL_IMG : start= 64, size= $P1_SIZE, type=07, bootable
@@ -138,7 +143,6 @@ sudo mkfs.vfat -F 32 -n "UD_BOOT" "${LOOPDEV}p2"
 
 echo "[INFO] Formatting Persistence (p3) as ext4..."
 sudo mkfs.ext4 -F -L UPDATE "${LOOPDEV}p3"
-
 
 # --- 9.5. POPULATE PERSISTENCE PARTITION (p3) ---
 echo "[INFO] Injecting update files into persistence partition..."
@@ -163,7 +167,6 @@ sudo mkdir -p /mnt/tmp_efi/EFI/BOOT
 sudo mkdir -p /mnt/tmp_efi/boot/grub
 
 # 2. Create the Friendly Name labels
-# We use BOOTX64.CSV because that matches the filename we use below
 echo "BOOTX64.EFI,UpdateOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
 echo "BOOTIA32.EFI,UpdateOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
 
@@ -175,14 +178,6 @@ sudo cp /usr/lib/grub/x86_64-efi/monolithic/grubx64.efi /mnt/tmp_efi/EFI/BOOT/BO
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
 
 sudo umount /mnt/tmp_efi
-
-# Fix permissions for the 'live' user (UID 1000)
-#mkdir -p /mnt/tmp_p3
-#sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
-#sudo chown 1000:1000 /mnt/tmp_p3
-#sudo umount /mnt/tmp_p3
-
-
 
 # --- 10. FINAL VERIFY AND REPORT ---
 echo "------------------------------------------------"
@@ -196,7 +191,6 @@ echo ""
 echo "------------------------------------------------"
 echo "[2/4] ATTACHING IMAGE & CHECKING LABELS"
 echo "------------------------------------------------"
-# Shows the structure and verifies the persistence label
 lsblk -no NAME,LABEL,FSTYPE,SIZE "$LOOPDEV"
 P3_LABEL=$(lsblk -no LABEL "${LOOPDEV}p3")
 
@@ -213,7 +207,6 @@ echo ""
 echo "------------------------------------------------"
 echo "[4/4] VERIFYING GRUB CONFIGS (BOTH PARTITIONS)"
 echo "------------------------------------------------"
-# Check Partition 2 (The EFI "Pointing" Fix)
 if [ -f "/mnt/verify_p2/boot/grub/grub.cfg" ]; then 
     echo "[OK] Found grub.cfg on Partition 2 (EFI Pointing Fix)."; 
 else
@@ -221,7 +214,6 @@ else
 fi
 sudo umount /mnt/verify_p2
 
-# Check Partition 1 (The OS/ISO Source)
 sudo mkdir -p /mnt/verify_p1
 if sudo mount -o ro -t iso9660 "${LOOPDEV}p1" /mnt/verify_p1 2>/dev/null; then
     if [ -f "/mnt/verify_p1/boot/grub/grub.cfg" ]; then
@@ -229,7 +221,6 @@ if sudo mount -o ro -t iso9660 "${LOOPDEV}p1" /mnt/verify_p1 2>/dev/null; then
     fi
     sudo umount /mnt/verify_p1
 else
-    # Fallback check for raw binary signature
     if grep -q "grub.cfg" "$FINAL_IMG"; then
         echo "[OK] Found grub.cfg signature on Partition 1 (Binary check).";
     fi
@@ -239,7 +230,6 @@ echo ""
 echo "------------------------------------------------"
 echo "[SUCCESS] UPDATE OS IMAGE READY"
 echo "------------------------------------------------"
-# Logical size (1.5G) vs Physical size (391M)
 LOGICAL_SIZE=$(ls -lh "$FINAL_IMG" | awk '{print $5}')
 PHYSICAL_SIZE=$(du -h "$FINAL_IMG" | awk '{print $1}')
 

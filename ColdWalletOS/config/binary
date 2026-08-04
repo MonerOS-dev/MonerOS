@@ -10,7 +10,7 @@ LB_BINARY_FILESYSTEM="fat32"
 LB_APT_INDICES="false"
 
 # Set boot parameters
-LB_BOOTAPPEND_LIVE="boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live live-media-label=ColdWalletOS live-media-path=/hw_sys"
+LB_BOOTAPPEND_LIVE="boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live bootfrom=/dev/disk/by-partuuid/11111111-01 live-media-path=/cw_sys"
 
 # Set boot parameters
 LB_BOOTAPPEND_INSTALL=""
