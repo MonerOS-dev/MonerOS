@@ -3,16 +3,12 @@
 export TERM=linux
 stty sane
 
-# 1. REMAP ANSI PALETTE
 if [ "$TERM" = "linux" ]; then
-    # Color 4 (Blue) -> Bright Red (#ff0000)
     echo -ne "\e]P4ff0000" 
-    # Color 7 (Lightgray) -> Pure White
     echo -ne "\e]P7ffffff" 
     clear
 fi
 
-# 2. ASSIGN NEWT COLORS
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -30,58 +26,102 @@ export NEWT_COLORS='
 
 WIFI_CFG="/mnt/external/wifi.cfg"
 
-# --- THE HARD LOCK LOOP ---
-while true; do
-    clear  # Keep the background clean
+WIFI_IF=$(ls /sys/class/net | grep -E '^wl' | head -n 1)
 
-    # 1. Try saved credentials first
-    if [ -f "$WIFI_CFG" ]; then
-        # Read Line 1 as SSID, Line 2 as PASS
-        SAVED_SSID=$(sed -n '1p' "$WIFI_CFG")
-        SAVED_PASS=$(sed -n '2p' "$WIFI_CFG")
+if [ -z "$WIFI_IF" ]; then
+    whiptail --title " Critical Error " --msgbox "No Wi-Fi interface detected." 8 50
+    exit 1
+fi
 
-        nmcli radio wifi on
-        
-        # RETRY LOOP: Try 3 times before giving up on saved credentials
-        SUCCESS=0
-        for attempt in {1..3}; do
-            # Removed the invalid '--ask no' flag
-            if [ -n "$SAVED_SSID" ] && nmcli dev wifi connect "$SAVED_SSID" password "$SAVED_PASS" >/dev/null 2>&1; then
-                
-                # Force connection to be system-wide to bypass user-level Polkit checks
-                nmcli connection modify "$SAVED_SSID" \
-                    connection.permissions "" \
-                    connection.autoconnect yes \
-                    connection.autoconnect-retries 0 \
-                    connection.autoconnect-priority 10 \
-                    ipv4.dhcp-timeout 30 \
-                    ipv4.may-fail no
-                SUCCESS=1
-                break
-            fi
-            sleep 3 
-        done
+attempt_connection() {
+    local ssid="$1"
+    local pass="$2"
 
-        if [ "$SUCCESS" -eq 1 ]; then
-            exit 0
+    systemctl stop NetworkManager 2>/dev/null
+    killall wpa_supplicant 2>/dev/null
+    killall dhclient 2>/dev/null
+    sleep 1
+
+    ip link set "$WIFI_IF" up
+    sleep 1
+
+    mkdir -p /run/wpa_supplicant
+    WPA_CONF="/tmp/live-wifi.conf"
+    echo "ctrl_interface=DIR=/run/wpa_supplicant" > "$WPA_CONF"
+    wpa_passphrase "$ssid" "$pass" >> "$WPA_CONF"
+
+    wpa_supplicant -B -i "$WIFI_IF" -c "$WPA_CONF" -f /tmp/wpa_error.log
+
+    local success=0
+    for i in {1..15}; do
+        if wpa_cli -i "$WIFI_IF" status 2>/dev/null | grep -q "wpa_state=COMPLETED"; then
+            success=1
+            break
         fi
-        
-        # If saved credentials consistently fail after 3 tries, remove file and alert user
-        rm -f "$WIFI_CFG"
-        whiptail --title " Connection Failed " --msgbox "Saved credentials in wifi.cfg failed consistently. Please select network manually." 0 0
+        sleep 1
+    done
+
+    if [ "$success" -eq 1 ]; then
+        if dhclient "$WIFI_IF"; then
+            return 0
+        fi
     fi
 
-    # 2. Scan for Networks
+    # --- CLEANUP ON FAILURE ---
+    # Kill the background daemon so it doesn't lock the interface for NetworkManager
+    killall wpa_supplicant dhclient 2>/dev/null
+    return 1
+}
+
+# --- 1. TRY SAVED CREDENTIALS (MAX 3 RETRIES) ---
+if [ -f "$WIFI_CFG" ]; then
+    SAVED_SSID=$(sed -n '1p' "$WIFI_CFG")
+    SAVED_PASS=$(sed -n '2p' "$WIFI_CFG")
+
+    if [ -n "$SAVED_SSID" ]; then
+        SAVED_SUCCESS=0
+        
+        # Try 3 times before giving up
+        for attempt in {1..3}; do
+            whiptail --title " Auto-Connecting " --infobox "Connecting to saved network: $SAVED_SSID\n(Attempt $attempt of 3)..." 8 50
+            
+            if attempt_connection "$SAVED_SSID" "$SAVED_PASS"; then
+                SAVED_SUCCESS=1
+                exit 0 # Success! Return to parent script
+            fi
+            
+            sleep 3
+        done
+
+        # If 3 attempts failed, remove stale config and notify user
+        if [ "$SAVED_SUCCESS" -eq 0 ]; then
+            rm -f "$WIFI_CFG"
+            whiptail --title " Saved Network Unavailable " --msgbox "Could not connect to '$SAVED_SSID'.\n\nPlease select a new network manually." 8 50
+        fi
+    fi
+fi
+
+# --- CLEANUP BEFORE INTERACTIVE SCAN ---
+# Kill wpa_supplicant so it releases the Wi-Fi card back to NetworkManager
+killall wpa_supplicant dhclient 2>/dev/null
+systemctl restart NetworkManager 2>/dev/null
+sleep 2
+
+# --- 2. INTERACTIVE SETUP (Runs if no saved config or if saved network failed) ---
+
+while true; do
+    clear
+    systemctl start NetworkManager 2>/dev/null
     nmcli radio wifi on
-    sleep 1
+    sleep 2
+    
     SSID_LIST=$(nmcli -t -f SSID dev wifi list | grep -v '^--' | grep -v '^$' | sort -u)
 
     if [ -z "$SSID_LIST" ]; then
-        whiptail --title " Error " --msgbox "No Wi-Fi networks found. Scanning again..." 0 0
+        whiptail --title " Error " --msgbox "No Wi-Fi networks found. Scanning again..." 8 50
         continue 
     fi
 
-    # 3. Build Menu
     WHIPTAIL_OPTIONS=()
     while IFS= read -r line; do
         WHIPTAIL_OPTIONS+=("$line" "")
@@ -91,41 +131,29 @@ while true; do
         --menu "\nChoose Network\n" 16 50 5 \
         "${WHIPTAIL_OPTIONS[@]}" 3>&1 1>&2 2>&3)
 
-    if [ -z "$CHOSEN_SSID" ]; then
-        continue
-    fi
-    
-    # 4. Get password
+    [ -z "$CHOSEN_SSID" ] && continue
+
     PASS=$(whiptail --fb --title " Authentication " \
         --passwordbox "Connecting to: $CHOSEN_SSID\n\nEnter Password:" 12 50 3>&1 1>&2 2>&3)
 
-    if [ -z "$PASS" ]; then
-        continue
-    fi
+    [ -z "$PASS" ] && continue
 
-    # 5. Attempt Connection & Apply Aggressive Persistence
-    # Removed the invalid '--ask no' flag
-    if nmcli dev wifi connect "$CHOSEN_SSID" password "$PASS"; then
-    
-        # connection.permissions "" makes this a global system connection, avoiding user prompts
-        nmcli connection modify "$CHOSEN_SSID" \
-            connection.permissions "" \
-            connection.autoconnect yes \
-            connection.autoconnect-retries 0 \
-            connection.autoconnect-priority 10 \
-            ipv4.dhcp-timeout 30 \
-            ipv4.may-fail no
-        
-        # Save using NEWLINES to wifi.cfg
+    whiptail --title " Connecting " --infobox "Authenticating with $CHOSEN_SSID..." 8 50
+
+    if attempt_connection "$CHOSEN_SSID" "$PASS"; then
+        # Save new credentials for next boot
         mkdir -p "$(dirname "$WIFI_CFG")"
-        {
-          echo "$CHOSEN_SSID"
-          echo "$PASS"
-        } > "$WIFI_CFG"
+        echo "$CHOSEN_SSID" > "$WIFI_CFG"
+        echo "$PASS" >> "$WIFI_CFG"
         chmod 600 "$WIFI_CFG"
         
-        exit 0
+        exit 0 # Success!
     else
-        whiptail --title " Failure " --msgbox "Connection failed. Check the password and try again." 0 0
+        whiptail --title " Connection Failed " --msgbox "Failed to connect. Please check password and try again." 8 50
+        
+        # Bring NetworkManager cleanly back to life before scanning again
+        systemctl restart NetworkManager 2>/dev/null
+        sleep 3
+        continue
     fi
 done

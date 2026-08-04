@@ -7,7 +7,8 @@ cd $BASE_DIR
 echo "[INFO] Starting ColdWalletOS build..."
 
 # copy splash
-convert $HOME/MonerOS_Project/admin_mods/cwos_splash.png \
+#convert $HOME/MonerOS_Project/admin_mods/cwos_splash.png \
+convert $HOME/MonerOS_Project/admin_mods/generic_splash.png \
         -flip \
         -colors 14 \
         $HOME/MonerOS_Project/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
@@ -42,7 +43,7 @@ lb config \
   --bootloaders "syslinux,grub-efi" \
   --debian-installer none \
   --apt-recommends false \
-  --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live live-media-label=ColdWalletOS live-media-path=/hw_sys"
+  --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live bootfrom=/dev/disk/by-partuuid/11111111-01 live-media-path=/cw_sys"
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build
@@ -75,12 +76,11 @@ sudo mksquashfs "$TEMP_SQUASH" "$SQUASH_FILE" -comp zstd -Xcompression-level 22 
 # Cleanup
 sudo rm -rf "$TEMP_SQUASH"
 
-
-
 # --- 5.5 Give iso a different name ---
 sudo mv ${BASE_DIR}/binary/live ${BASE_DIR}/binary/cw_sys
 
-
+echo "[INFO] Creating ColdWalletOS marker file..."
+sudo touch "${BASE_DIR}/binary/cw_sys/.marker-coldwallet"
 
 # --- 6. FINALIZE THE ISO ---
 sudo rm -f .build/binary_iso
@@ -139,7 +139,8 @@ truncate -s $(( TOTAL_SECTORS * 512 )) "$FINAL_IMG"
 # Apply new MBR table
 sudo wipefs -a "$FINAL_IMG"
 sudo sfdisk "$FINAL_IMG" << EOF
-label: dos
+label: mbr
+label-id: 0x11111111
 unit: sectors
 
 $FINAL_IMG : start= 64, size= $P1_SIZE, type=07, bootable

@@ -90,11 +90,15 @@ sudo mkdir -p "$EXT_MNT"
 sudo mount -t exfat -o uid=1000,gid=1000,fmask=0000,dmask=0000 "$TARGET_PART" "$EXT_MNT"
 
 # Setup internet
-sleep 2
-IP_ADDR=$(hostname -I)
-if [[ -z "${IP_ADDR// }" ]]; then
-    sudo bash /usr/local/bin/os/wifi-setup
-fi
+while true; do
+    sleep 2
+    IP_ADDR=$(hostname -I)
+    if [[ -z "${IP_ADDR// }" ]]; then
+        sudo bash /usr/local/bin/os/wifi-setup
+    else
+        break
+    fi
+done
 
 # Verify file exists
 if [ ! -f "$TARGET_FILE" ]; then

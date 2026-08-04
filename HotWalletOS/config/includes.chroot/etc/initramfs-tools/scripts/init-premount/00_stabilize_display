@@ -1,0 +1,12 @@
+#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+# Allow the kernel DRM and HDMI handshake to settle
+sleep 4
+
+# Force a clear and refresh on the active console to prevent signal loss
+clear > /dev/console 2>&1
+
+exit 0
