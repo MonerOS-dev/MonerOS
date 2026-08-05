@@ -6,8 +6,8 @@ set -e
 
 # Production version vs non-production
 PRODUCTION=true
-MODS_DIR="$HOME/MonerOS_Project/admin_mods"
-BUILD_DIR="$HOME/MonerOS_Project/HotWalletOS"
+MODS_DIR="$HOME/MonerOS/admin_mods"
+BUILD_DIR="$HOME/MonerOS/HotWalletOS"
 UFW_HOOK="01-outbound-only-ufw.chroot"
 SSH_HOOK="99-ssh-gen.chroot"
 SSH_PKG_LIST="$BUILD_DIR/config/package-lists/ssh.list.chroot"
@@ -70,20 +70,20 @@ fi
 
 
 
-BASE_DIR="$HOME/MonerOS_Project/HotWalletOS"
+BASE_DIR="$HOME/MonerOS/HotWalletOS"
 cd $BASE_DIR
 
 echo "[INFO] Starting HotWalletOS build..."
 
 # copy splash
-#convert $HOME/MonerOS_Project/admin_mods/cwos_splash.png \
-convert $HOME/MonerOS_Project/admin_mods/generic_splash.png \
+#convert $HOME/MonerOS/admin_mods/cwos_splash.png \
+convert $HOME/MonerOS/admin_mods/generic_splash.png \
         -flip \
         -colors 14 \
-        $HOME/MonerOS_Project/HotWalletOS/config/includes.binary/boot/grub/splash.tga
+        $HOME/MonerOS/HotWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
-FILE="$HOME/MonerOS_Project/HotWalletOS/config/includes.chroot/usr/local/bin/hwversion"
+FILE="$HOME/MonerOS/HotWalletOS/config/includes.chroot/usr/local/bin/hwversion"
 FULL_STRING=$(cat "$FILE" | tr -d '\r\n' | xargs)
 PREFIX=$(echo "$FULL_STRING" | sed -E 's/[0-9]+$//')
 VERSION_PART=$(echo "$FULL_STRING" | grep -oE '[0-9]+$')
