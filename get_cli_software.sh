@@ -3,8 +3,8 @@ set -e
 
 # Define both target directories
 TARGET_DIRS=(
-    "/root/MonerOS_Project/HotWalletOS/config/includes.chroot/usr/local/bin"
-    "/root/MonerOS_Project/ColdWalletOS/config/includes.chroot/usr/local/bin"
+    "/root/MonerOS/HotWalletOS/config/includes.chroot/usr/local/bin"
+    "/root/MonerOS/ColdWalletOS/config/includes.chroot/usr/local/bin"
 )
 
 echo "=== Initializing Target Directories ==="

@@ -1,20 +1,20 @@
 #!/bin/bash
 set -e
 
-BASE_DIR="$HOME/MonerOS_Project/UpdateOS/"
+BASE_DIR="$HOME/MonerOS/UpdateOS/"
 cd $BASE_DIR
 
 echo "[INFO] Starting UpdateOS build..."
 
 # copy splash
-#convert $HOME/MonerOS_Project/admin_mods/cwos_splash.png \
-convert $HOME/MonerOS_Project/admin_mods/generic_splash.png \
+#convert $HOME/MonerOS/admin_mods/cwos_splash.png \
+convert $HOME/MonerOS/admin_mods/generic_splash.png \
         -flip \
         -colors 14 \
-        $HOME/MonerOS_Project/UpdateOS/config/includes.binary/boot/grub/splash.tga
+        $HOME/MonerOS/UpdateOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
-FILE="$HOME/MonerOS_Project/UpdateOS/config/includes.chroot/usr/local/bin/udversion"
+FILE="$HOME/MonerOS/UpdateOS/config/includes.chroot/usr/local/bin/udversion"
 FULL_STRING=$(cat "$FILE" | tr -d '\r\n' | xargs)
 PREFIX=$(echo "$FULL_STRING" | sed -E 's/[0-9]+$//')
 VERSION_PART=$(echo "$FULL_STRING" | grep -oE '[0-9]+$')
