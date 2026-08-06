@@ -147,7 +147,7 @@ sudo mkfs.ext4 -F -L UPDATE "${LOOPDEV}p3"
 # --- 9.5. POPULATE PERSISTENCE PARTITION (p3) ---
 echo "[INFO] Injecting update files into persistence partition..."
 
-mkdir -p /mnt/tmp_p3
+sudo mkdir -p /mnt/tmp_p3
 sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
 
 sudo cp /root/ColdWalletOS.update /mnt/tmp_p3/
