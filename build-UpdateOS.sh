@@ -55,7 +55,7 @@ TEMP_SQUASH="${BASE_DIR}/temp_squash"
 
 # Fix the "already exists" error by ensuring the destination is empty
 sudo rm -rf "$TEMP_SQUASH"
-mkdir -p "$TEMP_SQUASH"
+sudo mkdir -p "$TEMP_SQUASH"
 
 # Extract with -f (force) to handle symlinks, but NO permission-altering flags
 sudo unsquashfs -f -d "$TEMP_SQUASH" "$SQUASH_FILE"
@@ -159,7 +159,7 @@ sudo chown 1000:1000 /mnt/tmp_p3/HotWalletOS.update
 sudo umount /mnt/tmp_p3
 
 echo "[INFO] Re-injecting bootloaders and config into FAT32 partition..."
-mkdir -p /mnt/tmp_efi
+sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
 # 1. Create the standard EFI folder structure

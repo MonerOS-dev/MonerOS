@@ -55,7 +55,7 @@ TEMP_SQUASH="${BASE_DIR}/temp_squash"
 
 # Fix the "already exists" error by ensuring the destination is empty
 sudo rm -rf "$TEMP_SQUASH"
-mkdir -p "$TEMP_SQUASH"
+sudo mkdir -p "$TEMP_SQUASH"
 
 # Extract with -f (force) to handle symlinks, but NO permission-altering flags
 sudo unsquashfs -f -d "$TEMP_SQUASH" "$SQUASH_FILE"
@@ -160,7 +160,7 @@ sudo mkfs.ext4 -F -L CWOS_VAULT "${LOOPDEV}p3"
 
 # --- 9.5. INJECT BOOT FILES INTO NEW EFI ---
 echo "[INFO] Re-injecting bootloaders and config into FAT32 partition..."
-mkdir -p /mnt/tmp_efi
+sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
 # 1. Create the standard EFI folder structure

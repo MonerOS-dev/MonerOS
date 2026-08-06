@@ -233,7 +233,7 @@ sudo mkfs.exfat -n "HWOS_SALLY" "${LOOPDEV}p3"
 
 # --- 9.5. INJECT BOOT FILES INTO NEW EFI ---
 echo "[INFO] Re-injecting bootloaders..."
-mkdir -p /mnt/tmp_efi
+sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
 sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub
