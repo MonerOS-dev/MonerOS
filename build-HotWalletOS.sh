@@ -232,16 +232,25 @@ echo "[INFO] Formatting Partition 3 (p3) as 2GB exFAT..."
 sudo mkfs.exfat -n "HWOS_SALLY" "${LOOPDEV}p3"
 
 # --- 9.5. INJECT BOOT FILES INTO NEW EFI ---
-echo "[INFO] Re-injecting bootloaders..."
+echo "[INFO] Re-injecting bootloaders from pure Debian chroot..."
 sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
-sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub
+# Create the standard boot structure PLUS the Debian-specific folder
+sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub /mnt/tmp_efi/EFI/debian
+
 echo "BOOTX64.EFI,HotWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
 echo "BOOTIA32.EFI,HotWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
-sudo cp /usr/lib/grub/i386-efi/monolithic/grubia32.efi /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
-sudo cp /usr/lib/grub/x86_64-efi/monolithic/grubx64.efi /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
+
+# CRITICAL FIX: Pull the binaries from Debian 12 chroot, NOT the host system
+sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
+sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
+
+# 1. Copy your actual config where it belongs
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
+
+# 2. Create the redirect stub for the Debian binary
+echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
 
 sudo umount /mnt/tmp_efi
 

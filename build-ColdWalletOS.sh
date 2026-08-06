@@ -159,25 +159,26 @@ echo "[INFO] Formatting Persistence (p3) as ext4..."
 sudo mkfs.ext4 -F -L CWOS_VAULT "${LOOPDEV}p3"
 
 # --- 9.5. INJECT BOOT FILES INTO NEW EFI ---
-echo "[INFO] Re-injecting bootloaders and config into FAT32 partition..."
+echo "[INFO] Re-injecting bootloaders and config into FAT32 partition from pure Debian chroot..."
 sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
-# 1. Create the standard EFI folder structure
-sudo mkdir -p /mnt/tmp_efi/EFI/BOOT
-sudo mkdir -p /mnt/tmp_efi/boot/grub
+# 1. Create the standard EFI folder structure PLUS the Debian stub folder
+sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub /mnt/tmp_efi/EFI/debian
 
 # 2. Create the Friendly Name labels
-# We use BOOTX64.CSV because that matches the filename we use below
 echo "BOOTX64.EFI,ColdWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
 echo "BOOTIA32.EFI,ColdWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
 
-# 3. Copy the binaries (Using the universal Removable paths)
-sudo cp /usr/lib/grub/i386-efi/monolithic/grubia32.efi /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
-sudo cp /usr/lib/grub/x86_64-efi/monolithic/grubx64.efi /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
+# 3. CRITICAL FIX: Pull the binaries from Debian 12 chroot, NOT the host system
+sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
+sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
 
-# 4. Copy the config
+# 4. Copy the config where it belongs
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
+
+# 5. Create the redirect stub for the Debian binary
+echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
 
 sudo umount /mnt/tmp_efi
 
