@@ -98,7 +98,6 @@ sudo xorriso -dev "$FINAL_IMG" \
     -boot_image any efi_path=boot/grub/efi.img \
     -boot_image any platform_id=0xef \
     -boot_image any emul_type=no_emulation \
-    -commit
 
 # --- 8. SMART DYNAMIC EXPAND AND RE-LAYOUT ---
 echo "[INFO] Calculating ISO size and re-partitioning..."
@@ -159,26 +158,24 @@ sudo chown 1000:1000 /mnt/tmp_p3/HotWalletOS.update
 
 sudo umount /mnt/tmp_p3
 
-echo "[INFO] Re-injecting bootloaders and config into FAT32 partition from pure Debian chroot..."
+echo "[INFO] Re-injecting bootloaders and config into FAT32 partition..."
 sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
-# 1. Create the standard EFI folder structure PLUS the Debian stub folder
-sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub /mnt/tmp_efi/EFI/debian
+# 1. Create the standard EFI folder structure
+sudo mkdir -p /mnt/tmp_efi/EFI/BOOT
+sudo mkdir -p /mnt/tmp_efi/boot/grub
 
 # 2. Create the Friendly Name labels
 echo "BOOTX64.EFI,UpdateOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
 echo "BOOTIA32.EFI,UpdateOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
 
-# 3. CRITICAL FIX: Pull the binaries from Debian 12 chroot, NOT the host system
-sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
-sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
+# 3. Copy the binaries (Using the universal Removable paths)
+sudo cp /usr/lib/grub/i386-efi/monolithic/grubia32.efi /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
+sudo cp /usr/lib/grub/x86_64-efi/monolithic/grubx64.efi /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
 
-# 4. Copy the config where it belongs
+# 4. Copy the config
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
-
-# 5. Create the redirect stub for the Debian binary
-echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
 
 sudo umount /mnt/tmp_efi
 

@@ -1,20 +1,20 @@
 #!/bin/bash
 set -e
 
-BASE_DIR="$HOME/MonerOS/UpdateOS/"
+BASE_DIR="$HOME/MonerOS/ColdWalletOS/"
 cd $BASE_DIR
 
-echo "[INFO] Starting UpdateOS build..."
+echo "[INFO] Starting ColdWalletOS build..."
 
 # copy splash
 #convert $HOME/MonerOS/admin_mods/cwos_splash.png \
 convert $HOME/MonerOS/admin_mods/generic_splash.png \
         -flip \
         -colors 14 \
-        $HOME/MonerOS/UpdateOS/config/includes.binary/boot/grub/splash.tga
+        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
-FILE="$HOME/MonerOS/UpdateOS/config/includes.chroot/usr/local/bin/udversion"
+FILE="$HOME/MonerOS/ColdWalletOS/config/includes.chroot/usr/local/bin/cwversion"
 FULL_STRING=$(cat "$FILE" | tr -d '\r\n' | xargs)
 PREFIX=$(echo "$FULL_STRING" | sed -E 's/[0-9]+$//')
 VERSION_PART=$(echo "$FULL_STRING" | grep -oE '[0-9]+$')
@@ -37,13 +37,13 @@ sudo fuser -kv ${BASE_DIR}/chroot 2>/dev/null || true
 # --- 3. CONFIGURE LIVE-BUILD ---
 lb config \
   --distribution bookworm \
-  --iso-volume "UpdateOS" \
+  --iso-volume "ColdWalletOS" \
   --archive-areas "main contrib non-free non-free-firmware" \
   --binary-images iso-hybrid \
   --bootloaders "syslinux,grub-efi" \
   --debian-installer none \
   --apt-recommends false \
-  --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live bootfrom=/dev/disk/by-partuuid/88888888-01 live-media-path=/up_sys"
+  --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live bootfrom=/dev/disk/by-partuuid/11111111-01 live-media-path=/cw_sys"
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build
@@ -76,22 +76,23 @@ sudo mksquashfs "$TEMP_SQUASH" "$SQUASH_FILE" -comp zstd -Xcompression-level 22 
 # Cleanup
 sudo rm -rf "$TEMP_SQUASH"
 
-# --- 5.5. RENAME SYSTEM DIRECTORY & CREATE MARKER ---
-sudo mv ${BASE_DIR}/binary/live ${BASE_DIR}/binary/up_sys
+# --- 5.5 Give iso a different name ---
+sudo mv ${BASE_DIR}/binary/live ${BASE_DIR}/binary/cw_sys
 
-echo "[INFO] Creating UpdateOS marker file..."
-sudo touch "${BASE_DIR}/binary/up_sys/.marker-update"
+echo "[INFO] Creating ColdWalletOS marker file..."
+sudo touch "${BASE_DIR}/binary/cw_sys/.marker-coldwallet"
 
 # --- 6. FINALIZE THE ISO ---
 sudo rm -f .build/binary_iso
 sudo lb binary_iso
 
 # --- 7. CREATE DISK IMAGE (.IMG) ---
-FINAL_IMG="$HOME/UpdateOS.img"
+FINAL_IMG="$HOME/ColdWalletOS.img"
 NEW_ISO=$(ls -t ${BASE_DIR}/*.iso | head -n1)
 cp "$NEW_ISO" "$FINAL_IMG"
 
 # --- 7.5. PATCH THE ISO INTERNALS FIRST ---
+# Do this while the image still looks like a 'pure' ISO to xorriso
 echo "[INFO] Patching El Torito catalog for Dual-Arch UEFI..."
 sudo xorriso -dev "$FINAL_IMG" \
     -boot_image any next \
@@ -99,6 +100,11 @@ sudo xorriso -dev "$FINAL_IMG" \
     -boot_image any platform_id=0xef \
     -boot_image any emul_type=no_emulation \
     -commit
+    
+# --- 7.6. EXPORT THE PATCHED ISO9660 UPDATE FILE ---
+UPDATE_FILE="$HOME/ColdWalletOS.update"
+echo "[INFO] Exporting the pure ISO9660 update file to $UPDATE_FILE..."
+cp "$FINAL_IMG" "$UPDATE_FILE"
 
 # --- 8. SMART DYNAMIC EXPAND AND RE-LAYOUT ---
 echo "[INFO] Calculating ISO size and re-partitioning..."
@@ -106,12 +112,19 @@ echo "[INFO] Calculating ISO size and re-partitioning..."
 # Get actual Partition 1 size in sectors using your original fdisk method
 ISO_SIZE=$(sudo fdisk -l "$FINAL_IMG" | grep "${FINAL_IMG}1" | awk '{print $4}')
 
-# Keep p1 the same size
-P1_SIZE=$ISO_SIZE
+# Set fixed 0.9GB target in sectors (900 MiB * 2048 sectors/MiB)
+P1_SIZE=$(( 900 * 2048 ))
+
+# CRITICAL FAIL GUARD: Stop if the real ISO size exceeds your 0.9GB limit
+if [ -n "$ISO_SIZE" ] && [ "$ISO_SIZE" -gt "$P1_SIZE" ]; then
+    echo "[CRITICAL ERROR] Built ISO ($ISO_SIZE sectors) is larger than the 0.9GB limit ($P1_SIZE sectors)!"
+    echo "Aborting build to prevent data corruption."
+    exit 1
+fi
 
 # Define our gaps (in sectors)
 EFI_SIZE=131072      # 64MB (Safe for FAT32)
-PERSIST_SIZE=6499072 # 3.1GB 
+PERSIST_SIZE=512000  # 250MB 
 
 # Calculate start points with clean 2048 alignment
 P2_START=$(( (64 + P1_SIZE + 2047) / 2048 * 2048 ))
@@ -127,7 +140,7 @@ truncate -s $(( TOTAL_SECTORS * 512 )) "$FINAL_IMG"
 sudo wipefs -a "$FINAL_IMG"
 sudo sfdisk "$FINAL_IMG" << EOF
 label: mbr
-label-id: 0x88888888
+label-id: 0x11111111
 unit: sectors
 
 $FINAL_IMG : start= 64, size= $P1_SIZE, type=07, bootable
@@ -140,47 +153,41 @@ LOOPDEV=$(sudo losetup -fP --show "$FINAL_IMG")
 sleep 2
 
 echo "[INFO] Formatting EFI (p2) as FAT32..."
-sudo mkfs.vfat -F 32 -n "UD_BOOT" "${LOOPDEV}p2"
+sudo mkfs.vfat -F 32 -n "CWOS_BOOT" "${LOOPDEV}p2"
 
 echo "[INFO] Formatting Persistence (p3) as ext4..."
-sudo mkfs.ext4 -F -L UPDATE "${LOOPDEV}p3"
+sudo mkfs.ext4 -F -L CWOS_VAULT "${LOOPDEV}p3"
 
-# --- 9.5. POPULATE PERSISTENCE PARTITION (p3) ---
-echo "[INFO] Injecting update files into persistence partition..."
-
-sudo mkdir -p /mnt/tmp_p3
-sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
-
-sudo cp $HOME/ColdWalletOS.update /mnt/tmp_p3/
-sudo cp $HOME/HotWalletOS.update /mnt/tmp_p3/
-
-sudo chown 1000:1000 /mnt/tmp_p3/ColdWalletOS.update
-sudo chown 1000:1000 /mnt/tmp_p3/HotWalletOS.update
-
-sudo umount /mnt/tmp_p3
-
-echo "[INFO] Re-injecting bootloaders and config into FAT32 partition from pure Debian chroot..."
+# --- 9.5. INJECT BOOT FILES INTO NEW EFI ---
+echo "[INFO] Re-injecting bootloaders and config into FAT32 partition..."
 sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
-# 1. Create the standard EFI folder structure PLUS the Debian stub folder
-sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub /mnt/tmp_efi/EFI/debian
+# 1. Create the standard EFI folder structure
+sudo mkdir -p /mnt/tmp_efi/EFI/BOOT
+sudo mkdir -p /mnt/tmp_efi/boot/grub
 
 # 2. Create the Friendly Name labels
-echo "BOOTX64.EFI,UpdateOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
-echo "BOOTIA32.EFI,UpdateOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
+# We use BOOTX64.CSV because that matches the filename we use below
+echo "BOOTX64.EFI,ColdWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
+echo "BOOTIA32.EFI,ColdWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
 
-# 3. CRITICAL FIX: Pull the binaries from Debian 12 chroot, NOT the host system
-sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
-sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
+# 3. Copy the binaries (Using the universal Removable paths)
+sudo cp /usr/lib/grub/i386-efi/monolithic/grubia32.efi /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
+sudo cp /usr/lib/grub/x86_64-efi/monolithic/grubx64.efi /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
 
-# 4. Copy the config where it belongs
+# 4. Copy the config
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
 
-# 5. Create the redirect stub for the Debian binary
-echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
-
 sudo umount /mnt/tmp_efi
+
+# Fix permissions for the 'live' user (UID 1000)
+sudo mkdir -p /mnt/tmp_p3
+sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
+sudo chown 1000:1000 /mnt/tmp_p3
+sudo umount /mnt/tmp_p3
+
+
 
 # --- 10. FINAL VERIFY AND REPORT ---
 echo "------------------------------------------------"
@@ -194,6 +201,7 @@ echo ""
 echo "------------------------------------------------"
 echo "[2/4] ATTACHING IMAGE & CHECKING LABELS"
 echo "------------------------------------------------"
+# Shows the structure and verifies the persistence label
 lsblk -no NAME,LABEL,FSTYPE,SIZE "$LOOPDEV"
 P3_LABEL=$(lsblk -no LABEL "${LOOPDEV}p3")
 
@@ -210,6 +218,7 @@ echo ""
 echo "------------------------------------------------"
 echo "[4/4] VERIFYING GRUB CONFIGS (BOTH PARTITIONS)"
 echo "------------------------------------------------"
+# Check Partition 2 (The EFI "Pointing" Fix)
 if [ -f "/mnt/verify_p2/boot/grub/grub.cfg" ]; then 
     echo "[OK] Found grub.cfg on Partition 2 (EFI Pointing Fix)."; 
 else
@@ -217,6 +226,7 @@ else
 fi
 sudo umount /mnt/verify_p2
 
+# Check Partition 1 (The OS/ISO Source)
 sudo mkdir -p /mnt/verify_p1
 if sudo mount -o ro -t iso9660 "${LOOPDEV}p1" /mnt/verify_p1 2>/dev/null; then
     if [ -f "/mnt/verify_p1/boot/grub/grub.cfg" ]; then
@@ -224,6 +234,7 @@ if sudo mount -o ro -t iso9660 "${LOOPDEV}p1" /mnt/verify_p1 2>/dev/null; then
     fi
     sudo umount /mnt/verify_p1
 else
+    # Fallback check for raw binary signature
     if grep -q "grub.cfg" "$FINAL_IMG"; then
         echo "[OK] Found grub.cfg signature on Partition 1 (Binary check).";
     fi
@@ -231,8 +242,9 @@ fi
 
 echo ""
 echo "------------------------------------------------"
-echo "[SUCCESS] UPDATE OS IMAGE READY"
+echo "[SUCCESS] COLD WALLET OS IMAGE READY"
 echo "------------------------------------------------"
+# Logical size (1.5G) vs Physical size (391M)
 LOGICAL_SIZE=$(ls -lh "$FINAL_IMG" | awk '{print $5}')
 PHYSICAL_SIZE=$(du -h "$FINAL_IMG" | awk '{print $1}')
 
