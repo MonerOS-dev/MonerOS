@@ -150,8 +150,8 @@ echo "[INFO] Injecting update files into persistence partition..."
 sudo mkdir -p /mnt/tmp_p3
 sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
 
-sudo cp /root/ColdWalletOS.update /mnt/tmp_p3/
-sudo cp /root/HotWalletOS.update /mnt/tmp_p3/
+sudo cp $HOME/ColdWalletOS.update /mnt/tmp_p3/
+sudo cp $HOME/HotWalletOS.update /mnt/tmp_p3/
 
 sudo chown 1000:1000 /mnt/tmp_p3/ColdWalletOS.update
 sudo chown 1000:1000 /mnt/tmp_p3/HotWalletOS.update
