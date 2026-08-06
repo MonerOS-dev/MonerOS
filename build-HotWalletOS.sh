@@ -246,7 +246,7 @@ sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
 sudo umount /mnt/tmp_efi
 
 # Final check for Partition 3
-mkdir -p /mnt/tmp_p3
+sudo mkdir -p /mnt/tmp_p3
 sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
 echo "[OK] Partition 3 (exFAT) is mountable."
 sudo umount /mnt/tmp_p3

@@ -182,7 +182,7 @@ sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
 sudo umount /mnt/tmp_efi
 
 # Fix permissions for the 'live' user (UID 1000)
-mkdir -p /mnt/tmp_p3
+sudo mkdir -p /mnt/tmp_p3
 sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
 sudo chown 1000:1000 /mnt/tmp_p3
 sudo umount /mnt/tmp_p3
