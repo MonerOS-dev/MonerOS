@@ -10,8 +10,8 @@ echo "[INFO] Starting UpdateOS build..."
 #convert $HOME/MonerOS/admin_mods/cwos_splash.png \
 convert $HOME/MonerOS/admin_mods/generic_splash.png \
         -flip \
-        -colors 14 \
-        $HOME/MonerOS/UpdateOS/config/includes.binary/boot/grub/splash.tga
+        -compress none \
+        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
 FILE="$HOME/MonerOS/UpdateOS/config/includes.chroot/usr/local/bin/udversion"
@@ -44,11 +44,6 @@ lb config \
   --debian-installer none \
   --apt-recommends false \
   --bootappend-live "boot=live components splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live bootfrom=/dev/disk/by-partuuid/88888888-01 live-media-path=/up_sys"
-
-# FORCE INSTALL OF BOTH EFI ARCHITECTURES IN THE CHROOT
-echo "[INFO] Forcing 32-bit and 64-bit GRUB binaries into the chroot..."
-sudo mkdir -p $BASE_DIR/config/package-lists
-echo "grub-efi-ia32-bin grub-efi-amd64-bin" | sudo tee $BASE_DIR/config/package-lists/grub-efi.list.chroot > /dev/null
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build
