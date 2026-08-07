@@ -179,7 +179,7 @@ sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt
 # 4. Copy the actual config and splash where they belong
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
 sudo cp "${BASE_DIR}/binary/boot/grub/splash.png" /mnt/tmp_efi/boot/grub/splash.png
-sudo cp "${BASE_DIR}/binary/boot/grub/fonts/unicode.pf2" /mnt/tmp_efi/boot/grub/fonts/unicode.pf2
+sudo cp -r "${BASE_DIR}/binary/boot/grub/fonts/" /mnt/tmp_efi/boot/grub
 
 # 5. Create the redirect stub for the Debian binary
 echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
