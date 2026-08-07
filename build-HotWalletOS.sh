@@ -77,12 +77,12 @@ echo "[INFO] Starting HotWalletOS build..."
 
 # copy splash
 #convert $HOME/MonerOS/admin_mods/cwos_splash.png \
-convert $HOME/MonerOS/admin_mods/generic_splash.png \
-        -resize 1920x1080\! \
-        -type TrueColor \
-        -compress none \
-        -flip \
-        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
+#convert $HOME/MonerOS/admin_mods/generic_splash.png \
+#        -resize 1920x1080\! \
+#        -type TrueColor \
+#        -compress none \
+#        -flip \
+#        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
 FILE="$HOME/MonerOS/HotWalletOS/config/includes.chroot/usr/local/bin/hwversion"
@@ -115,7 +115,7 @@ lb config \
   --bootloaders "syslinux,grub-efi" \
   --debian-installer none \
   --apt-recommends true \
-  --bootappend-live "boot=live components locales=en_US.UTF-8 bootfrom=/dev/disk/by-partuuid/22222222-01 live-media-path=/hw_sys"
+  --bootappend-live "boot=live components locales=en_US.UTF-8 splash autologin modprobe.blacklist=uvcvideo,bluetooth,btusb,rtw88_8821ce,iwlwifi,iwlmvm,snd_hda_intel,pcspkr,joydev ipv6.disable=1 net.ifnames=0 user-password=live bootfrom=/dev/disk/by-partuuid/22222222-01 live-media-path=/hw_sys"
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build
@@ -239,7 +239,7 @@ sudo mkdir -p /mnt/tmp_efi
 sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 
 # Create the standard boot structure PLUS the Debian-specific folder
-sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub /mnt/tmp_efi/EFI/debian
+sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub/fonts /mnt/tmp_efi/EFI/debian
 
 echo "BOOTX64.EFI,HotWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
 echo "BOOTIA32.EFI,HotWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
@@ -248,8 +248,10 @@ echo "BOOTIA32.EFI,HotWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
 
-# 1. Copy your actual config where it belongs
+# 1. Copy the actual config, splash and font where they belong
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
+sudo cp "${BASE_DIR}/binary/boot/grub/splash.png" /mnt/tmp_efi/boot/grub/splash.png
+sudo cp "${BASE_DIR}/binary/boot/grub/fonts/unicode.pf2" /mnt/tmp_efi/boot/grub/fonts/unicode.pf2
 
 # 2. Create the redirect stub for the Debian binary
 echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null

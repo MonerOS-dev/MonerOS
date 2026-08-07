@@ -8,12 +8,12 @@ echo "[INFO] Starting ColdWalletOS build..."
 
 # copy splash
 #convert $HOME/MonerOS/admin_mods/cwos_splash.png \
-convert $HOME/MonerOS/admin_mods/generic_splash.png \
-        -resize 1920x1080\! \
-        -type TrueColor \
-        -compress none \
-        -flip \
-        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
+#convert $HOME/MonerOS/admin_mods/generic_splash.png \
+#        -resize 1920x1080\! \
+#        -type TrueColor \
+#        -compress none \
+#        -flip \
+#        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
 FILE="$HOME/MonerOS/ColdWalletOS/config/includes.chroot/usr/local/bin/cwversion"
@@ -176,8 +176,10 @@ echo "BOOTIA32.EFI,ColdWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA3
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
 
-# 4. Copy the config where it belongs
+# 4. Copy the actual config and splash where they belong
 sudo cp "${BASE_DIR}/binary/boot/grub/grub.cfg" /mnt/tmp_efi/boot/grub/grub.cfg
+sudo cp "${BASE_DIR}/binary/boot/grub/splash.png" /mnt/tmp_efi/boot/grub/splash.png
+sudo cp "${BASE_DIR}/binary/boot/grub/fonts/unicode.pf2" /mnt/tmp_efi/boot/grub/fonts/unicode.pf2
 
 # 5. Create the redirect stub for the Debian binary
 echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
