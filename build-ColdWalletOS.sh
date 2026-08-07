@@ -9,8 +9,10 @@ echo "[INFO] Starting ColdWalletOS build..."
 # copy splash
 #convert $HOME/MonerOS/admin_mods/cwos_splash.png \
 convert $HOME/MonerOS/admin_mods/generic_splash.png \
-        -flip \
+        -resize 1920x1080\! \
+        -type TrueColor \
         -compress none \
+        -flip \
         $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
