@@ -114,6 +114,11 @@ lb config \
   --debian-installer none \
   --apt-recommends true \
   --bootappend-live "boot=live components locales=en_US.UTF-8 bootfrom=/dev/disk/by-partuuid/22222222-01 live-media-path=/hw_sys"
+  
+# FORCE INSTALL OF BOTH EFI ARCHITECTURES IN THE CHROOT
+echo "[INFO] Forcing 32-bit and 64-bit GRUB binaries into the chroot..."
+sudo mkdir -p $BASE_DIR/config/package-lists
+echo "grub-efi-ia32-bin grub-efi-amd64-bin" | sudo tee $BASE_DIR/config/package-lists/grub-efi.list.chroot > /dev/null
 
 # --- 4. BUILD THE BASE ISO ---
 sudo lb build
