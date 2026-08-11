@@ -20,7 +20,7 @@ sudo apt update && sudo apt install -y \
 git clone https://github.com/MonerOS-dev/MonerOS.git
 
 # Get updated monero binary (optional)
-bash $HOME/MonerOS/get_cli_software.sh
+bash $HOME/MonerOS/get_binaries.sh
 
 # Compile HotWalletOS
 bash $HOME/MonerOS/build-HotWalletOS.sh
@@ -33,3 +33,16 @@ bash $HOME/MonerOS/build-ColdWalletOS.sh
 # Compile UpdateOS (optional)
 bash $HOME/MonerOS/build-UpdateOS.sh
 # Compiled file will be at: $HOME/MonerOS_Output/UpdateOS.img
+
+
+
+# --- To save space, it's recommended to clean the build directory after after each compilation ---
+
+# Clean HotWalletOS
+cd $HOME/MonerOS/HotWalletOS/ && sudo lb clean --purge && cd
+
+# Clean ColdWalletOS
+cd $HOME/MonerOS/ColdWalletOS/ && sudo lb clean --purge && cd
+
+# Clean UpdateOS
+cd $HOME/MonerOS/UpdateOS/ && sudo lb clean --purge && cd
