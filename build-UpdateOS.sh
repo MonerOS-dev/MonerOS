@@ -14,7 +14,7 @@ for file in "$OUT_DIR/ColdWalletOS.p1" "$OUT_DIR/ColdWalletOS.p2" "$OUT_DIR/HotW
 done
 
 if [ ${#MISSING_FILES[@]} -gt 0 ]; then
-    ERR_MSG="ERROR: Both HotWalletOS and ColdWalletOS must be compiled before running UpdateOS.\n\n"
+    ERR_MSG="ERROR: Both HotWalletOS and ColdWalletOS must be compiled before compiling UpdateOS.\n\n"
     ERR_MSG+="The following required update files are missing:\n"
     for file in "${MISSING_FILES[@]}"; do
         ERR_MSG+=" - $file\n"
@@ -22,7 +22,7 @@ if [ ${#MISSING_FILES[@]} -gt 0 ]; then
     done
     
     echo ""
-    echo "ERROR: Both HotWalletOS and ColdWalletOS must be compiled before running UpdateOS."
+    echo "ERROR: Both HotWalletOS and ColdWalletOS must be compiled before compiling UpdateOS."
     
     #echo -e "$ERR_MSG" >&2
     exit 1
