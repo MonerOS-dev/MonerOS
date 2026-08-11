@@ -32,14 +32,6 @@ if [ "$PRODUCTION" = true ]; then
         sudo chmod +x "$BUILD_DIR/config/hooks/live/$UFW_HOOK"
     fi
 
-    # 4. Copy Production hwinit.desktop
-    #sudo cp "$MODS_DIR/hwinit-desktop.production" "$HWINIT_DESK_DEST"
-    #sudo chmod +x "$HWINIT_DESK_DEST"
-    
-    # 5. Copy Production hwinit
-    #sudo cp "$MODS_DIR/hwinit_production" "$HWINIT_DEST"
-    #sudo chmod +x "$HWINIT_DEST"
-
 else
     echo "[INFO] Configuring for DEV mode..."
 
@@ -55,20 +47,14 @@ else
     
     # 3. Ensure the production firewall hook is NOT present
     sudo rm -f "$BUILD_DIR/config/hooks/live/$UFW_HOOK"
-    
-    # 4. Copy Non-Production hwinit.desktop
-    #sudo cp "$MODS_DIR/hwinit-desktop.non-production" "$HWINIT_DESK_DEST"
-    #sudo chmod +x "$HWINIT_DESK_DEST"
-
-    # 5. Copy Non-Production hwinit
-    #sudo cp "$MODS_DIR/hwinit_non-production" "$HWINIT_DEST"
-    #sudo chmod +x "$HWINIT_DEST"
 fi
 
 
 
 
-
+OUT_DIR="$HOME/MonerOS_Output/"
+sudo mkdir -p "$OUT_DIR"
+sudo chown 1000:1000 -R "$OUT_DIR"
 
 BASE_DIR="$HOME/MonerOS/HotWalletOS"
 cd $BASE_DIR
@@ -160,7 +146,7 @@ sudo rm -f .build/binary_iso
 sudo lb binary_iso
 
 # --- 7. CREATE DISK IMAGE (.IMG) ---
-FINAL_IMG="$HOME/HotWalletOS.img"
+FINAL_IMG="$OUT_DIR/HotWalletOS.img"
 NEW_ISO=$(ls -t ${BASE_DIR}/*.iso | head -n1)
 cp "$NEW_ISO" "$FINAL_IMG"
 
@@ -175,7 +161,7 @@ sudo xorriso -dev "$FINAL_IMG" \
     -commit
     
 # --- 7.6. EXPORT THE PATCHED ISO9660 UPDATE FILE ---
-UPDATE_FILE="$HOME/HotWalletOS.update"
+UPDATE_FILE="$OUT_DIR/HotWalletOS.p1"
 echo "[INFO] Exporting the pure ISO9660 update file to $UPDATE_FILE..."
 cp "$FINAL_IMG" "$UPDATE_FILE"
 
@@ -257,6 +243,13 @@ sudo cp -r "${BASE_DIR}/binary/boot/grub/fonts/" /mnt/tmp_efi/boot/grub
 echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
 
 sudo umount /mnt/tmp_efi
+
+# --- 9.6. EXPORT THE EFI PARTITION UPDATE FILE ---
+EFI_FILE="$OUT_DIR/HotWalletOS.p2"
+echo "[INFO] Exporting the populated EFI partition to $EFI_FILE..."
+sudo dd if="${LOOPDEV}p2" of="$EFI_FILE" bs=4M status=progress
+# Fix permissions so it's owned by your user, not root
+sudo chown $USER:$USER "$EFI_FILE"
 
 # Final check for Partition 3
 sudo mkdir -p /mnt/tmp_p3
