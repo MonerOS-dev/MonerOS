@@ -5,6 +5,28 @@ OUT_DIR="$HOME/MonerOS_Output/"
 sudo mkdir -p "$OUT_DIR"
 sudo chown 1000:1000 -R "$OUT_DIR"
 
+# --- FILE PRESENCE CHECK ---
+MISSING_FILES=()
+for file in "$OUT_DIR/ColdWalletOS.p1" "$OUT_DIR/ColdWalletOS.p2" "$OUT_DIR/HotWalletOS.p1" "$OUT_DIR/HotWalletOS.p2"; do
+    if [ ! -f "$file" ]; then
+        MISSING_FILES+=("$file")
+    fi
+done
+
+if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+    ERR_MSG="ERROR: Both HotWalletOS and ColdWalletOS must be compiled before running UpdateOS.\n\n"
+    ERR_MSG+="The following required update files are missing:\n"
+    for file in "${MISSING_FILES[@]}"; do
+        ERR_MSG+=" - $file\n"
+        echo "ERROR: Required file missing: $file" >> "$FLASH_LOG"
+    done
+    
+    echo "ERROR: Both HotWalletOS and ColdWalletOS must be compiled before running UpdateOS." >> "$FLASH_LOG"
+    
+    echo -e "$ERR_MSG" >&2
+    exit 1
+fi
+
 BASE_DIR="$HOME/MonerOS/UpdateOS/"
 cd $BASE_DIR
 
