@@ -256,9 +256,5 @@ echo "------------------------------------------------"
 # Final Cleanup
 sudo losetup -d "$LOOPDEV"
 sudo rmdir /mnt/verify_p1 /mnt/verify_p2 2>/dev/null || true
-sudo rm $OUT_DIR/ColdWalletOS.p1
-sudo rm $OUT_DIR/ColdWalletOS.p2
-sudo rm $OUT_DIR/HotWalletOS.p1
-sudo rm $OUT_DIR/HotWalletOS.p2
 
 echo "Verification Complete. Ready to flash."
