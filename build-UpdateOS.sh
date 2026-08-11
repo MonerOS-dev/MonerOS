@@ -18,12 +18,13 @@ if [ ${#MISSING_FILES[@]} -gt 0 ]; then
     ERR_MSG+="The following required update files are missing:\n"
     for file in "${MISSING_FILES[@]}"; do
         ERR_MSG+=" - $file\n"
-        echo "ERROR: Required file missing: $file" >> "$FLASH_LOG"
+        echo "ERROR: Required file missing: $file"
     done
     
-    echo "ERROR: Both HotWalletOS and ColdWalletOS must be compiled before running UpdateOS." >> "$FLASH_LOG"
+    echo ""
+    echo "ERROR: Both HotWalletOS and ColdWalletOS must be compiled before running UpdateOS."
     
-    echo -e "$ERR_MSG" >&2
+    #echo -e "$ERR_MSG" >&2
     exit 1
 fi
 
