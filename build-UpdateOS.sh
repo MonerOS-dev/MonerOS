@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+OUT_DIR="$HOME/MonerOS_Output/"
+sudo mkdir -p "$OUT_DIR"
+sudo chown 1000:1000 -R "$OUT_DIR"
+
 BASE_DIR="$HOME/MonerOS/UpdateOS/"
 cd $BASE_DIR
 
@@ -89,7 +93,7 @@ sudo rm -f .build/binary_iso
 sudo lb binary_iso
 
 # --- 7. CREATE DISK IMAGE (.IMG) ---
-FINAL_IMG="$HOME/UpdateOS.img"
+FINAL_IMG="$OUT_DIR/UpdateOS.img"
 NEW_ISO=$(ls -t ${BASE_DIR}/*.iso | head -n1)
 cp "$NEW_ISO" "$FINAL_IMG"
 
@@ -113,7 +117,7 @@ P1_SIZE=$ISO_SIZE
 
 # Define our gaps (in sectors)
 EFI_SIZE=131072      # 64MB (Safe for FAT32)
-PERSIST_SIZE=6499072 # 3.1GB 
+PERSIST_SIZE=6250000 # 3.2GB
 
 # Calculate start points with clean 2048 alignment
 P2_START=$(( (64 + P1_SIZE + 2047) / 2048 * 2048 ))
@@ -153,11 +157,15 @@ echo "[INFO] Injecting update files into persistence partition..."
 sudo mkdir -p /mnt/tmp_p3
 sudo mount "${LOOPDEV}p3" /mnt/tmp_p3
 
-sudo cp $HOME/ColdWalletOS.update /mnt/tmp_p3/
-sudo cp $HOME/HotWalletOS.update /mnt/tmp_p3/
+sudo cp $OUT_DIR/ColdWalletOS.p1 /mnt/tmp_p3/
+sudo cp $OUT_DIR/ColdWalletOS.p2 /mnt/tmp_p3/
+sudo cp $OUT_DIR/HotWalletOS.p1 /mnt/tmp_p3/
+sudo cp $OUT_DIR/HotWalletOS.p2 /mnt/tmp_p3/
 
-sudo chown 1000:1000 /mnt/tmp_p3/ColdWalletOS.update
-sudo chown 1000:1000 /mnt/tmp_p3/HotWalletOS.update
+sudo chown 1000:1000 /mnt/tmp_p3/ColdWalletOS.p1
+sudo chown 1000:1000 /mnt/tmp_p3/ColdWalletOS.p2
+sudo chown 1000:1000 /mnt/tmp_p3/HotWalletOS.p1
+sudo chown 1000:1000 /mnt/tmp_p3/HotWalletOS.p2
 
 sudo umount /mnt/tmp_p3
 
@@ -248,5 +256,9 @@ echo "------------------------------------------------"
 # Final Cleanup
 sudo losetup -d "$LOOPDEV"
 sudo rmdir /mnt/verify_p1 /mnt/verify_p2 2>/dev/null || true
+sudo rm $OUT_DIR/ColdWalletOS.p1
+sudo rm $OUT_DIR/ColdWalletOS.p2
+sudo rm $OUT_DIR/HotWalletOS.p1
+sudo rm $OUT_DIR/HotWalletOS.p2
 
 echo "Verification Complete. Ready to flash."

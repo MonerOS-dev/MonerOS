@@ -265,63 +265,57 @@ EOF
         chown -R user:user .
         rm -f *.keys.lock
         
-        # --- RPC DAEMON SPIN-UP & HEALTH VERIFICATION LOOP ---
+        # --- RPC DAEMON SPIN-UP ---
+        if ! ss -tln | grep -q ":$RPC_PORT "; then
+            echo "Launching persistent RPC daemon on pre-assigned port $RPC_PORT..."
+            
+            RPC_PROXY_FLAG=""
+            if [[ "$REMOTE_NODE" == *".onion"* ]]; then
+                RPC_PROXY_FLAG="--proxy $PROXY"
+            fi
+            
+            sudo -u user PASSWORD="$PASSWORD" monero-wallet-rpc --detach \
+                --wallet-file "watchonly" \
+                --password "$PASSWORD" \
+                --rpc-bind-port "$RPC_PORT" \
+                --daemon-address "$REMOTE_NODE" \
+                $RPC_PROXY_FLAG \
+                --trusted-daemon \
+                --disable-rpc-login \
+                --shared-ringdb-dir /home/user/.shared-ringdb \
+                --log-file "rpc_daemon.log" &
+                
+            sleep 3
+        fi
+        
+        # Clear the variable from memory immediately for security
+        unset PASSWORD
+        
+        # --- HEALTH VERIFICATION LOOP ---
+        echo "Verifying Monero Wallet RPC initialization state..."
         RPC_READY=false
-
-        while [ "$RPC_READY" = false ]; do
+        MAX_RETRIES=300  # <--- Increased from 120 to 300 to give Tor breathing room
+        RETRY_COUNT=0
+        
+        while [ "$RPC_READY" = false ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$RPC_PORT/json_rpc)
             
-            # 1. Start the daemon if it is not currently listening
-            if ! ss -tln | grep -q ":$RPC_PORT "; then
-                echo "Launching persistent RPC daemon on pre-assigned port $RPC_PORT..."
-                
-                RPC_PROXY_FLAG=""
-                if [[ "$REMOTE_NODE" == *".onion"* ]]; then
-                    RPC_PROXY_FLAG="--proxy $PROXY"
-                fi
-                
-                sudo -u user PASSWORD="$PASSWORD" monero-wallet-rpc --detach \
-                    --wallet-file "watchonly" \
-                    --password "$PASSWORD" \
-                    --rpc-bind-port "$RPC_PORT" \
-                    --daemon-address "$REMOTE_NODE" \
-                    $RPC_PROXY_FLAG \
-                    --trusted-daemon \
-                    --disable-rpc-login \
-                    --shared-ringdb-dir /home/user/.shared-ringdb \
-                    --log-file "rpc_daemon.log" &
-                    
-                sleep 3
+            if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 401 ]; then
+                echo "RPC daemon confirmed active on port $RPC_PORT (HTTP status: $HTTP_STATUS)."
+                RPC_READY=true
+            else
+                ((RETRY_COUNT++))
+                sleep 1
             fi
-            
-            # 2. Health Verification Loop (1 minute maximum)
-            echo "Verifying Monero Wallet RPC initialization state..."
-            MAX_RETRIES=30  # Set to 30 seconds (1 minute)
-            RETRY_COUNT=0
-            
-            while [ "$RPC_READY" = false ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$RPC_PORT/json_rpc)
-                
-                if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 401 ]; then
-                    echo "RPC daemon confirmed active on port $RPC_PORT (HTTP status: $HTTP_STATUS)."
-                    RPC_READY=true
-                else
-                    ((RETRY_COUNT++))
-                    sleep 1
-                fi
-            done
-            
-            # 3. If it failed to start within 1 minute, kill it and let the loop restart it
-            if [ "$RPC_READY" = false ]; then
-                echo "[FAILED] Target port $RPC_PORT unresponsive for 30 seconds."
-                echo "Killing zombie RPC daemon and retrying immediately..."
-                
-                # Kill the specific process holding this port
-                fuser -k "$RPC_PORT/tcp" 2>/dev/null
-                rm -f *.keys.lock
-                sleep 2 # Brief pause to allow the OS to fully release the port binding
-            fi
-            
         done
+        
+        if [ "$RPC_READY" = false ]; then
+            echo "[FAILED] Target port $RPC_PORT dropped connections for $MAX_RETRIES seconds. Cleaning up..."
+            # Kill the specific process using this port so it doesn't become a zombie
+            fuser -k "$RPC_PORT/tcp" 2>/dev/null
+            rm -f *.keys.lock
+            continue
+        fi
 
         # --- UNIVERSAL SYNC LOOP ---
         echo "Synchronizing wallet with daemon..."
@@ -451,8 +445,6 @@ EOF
         sudo bash /usr/local/bin/os/generate_monero_tx_page "$ADDR"
     fi
 done
-
-unset PASSWORD
 
 shopt -u nullglob
 

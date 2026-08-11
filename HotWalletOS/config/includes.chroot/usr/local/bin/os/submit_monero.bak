@@ -37,21 +37,23 @@ while read -r TX_PATH; do
     echo "--------------------------------------------------"
     echo "Processing wallet: $ADDR_ID on Port $RPC_PORT"
 
-    # --- ADDED READINESS CHECK (INFINITE LOOP) ---
+    # --- ADDED READINESS CHECK ---
     echo "Checking daemon readiness..."
     READY=false
-    ATTEMPT=1
-    while [ "$READY" = false ]; do
+    for i in {1..15}; do
         if curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_balance"}' | grep -q "balance"; then
             READY=true
-            echo "Daemon is ready!"
             break
         fi
-        echo "Daemon busy or syncing... waiting 5s (Attempt $ATTEMPT)..."
+        echo "Daemon busy or syncing... waiting 3s (Attempt $i/15)..."
         sleep 5
-        ((ATTEMPT++))
     done
     
+    if [ "$READY" = false ]; then
+        echo "[FAILED] Daemon unresponsive after retries. Skipping..."
+        ((F_COUNT++))
+        continue
+    fi
     
     if [ ! -f "$TX_PATH" ]; then
         echo "[FAILED] $SIGNED_FILE ($ADDR_ID) - Transaction file missing or modified mid-process"

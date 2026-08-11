@@ -41,8 +41,10 @@ mkdir -p /tmp/logs
 echo "=== Flash Session Started: $(date) ===" > "$FLASH_LOG"
 
 MNT_POINT="/mnt/update"
-HOT_IMG="$MNT_POINT/HotWalletOS.update"
-COLD_IMG="$MNT_POINT/ColdWalletOS.update"
+HOT_IMG="$MNT_POINT/HotWalletOS.p1"
+HOT_EFI="$MNT_POINT/HotWalletOS.p2"
+COLD_IMG="$MNT_POINT/ColdWalletOS.p1"
+COLD_EFI="$MNT_POINT/ColdWalletOS.p2"
 
 UPDATED_HOT=false
 UPDATED_COLD=false
@@ -108,22 +110,60 @@ flash_with_progress() {
 }
 
 # --- 1. SCAN AND FLASH HOT WALLET OS ---
+#HOT_DEV=$(blkid -L "HotWalletOS" || true)
+#if [ -n "$HOT_DEV" ] && [ -f "$HOT_IMG" ]; then
+#    if flash_with_progress "$HOT_IMG" "$HOT_DEV" "HotWalletOS"; then
+#        UPDATED_HOT=true
+#    else
+#        echo "Update failed for HotWalletOS" >> "$FLASH_LOG"
+#    fi
+#fi
+# --- 1. SCAN AND FLASH HOT WALLET OS ---
 HOT_DEV=$(blkid -L "HotWalletOS" || true)
 if [ -n "$HOT_DEV" ] && [ -f "$HOT_IMG" ]; then
+    HOT_DEV_EFI="${HOT_DEV%1}2"
+
     if flash_with_progress "$HOT_IMG" "$HOT_DEV" "HotWalletOS"; then
-        UPDATED_HOT=true
+        if [ -f "$HOT_EFI" ] && [ -b "$HOT_DEV_EFI" ]; then
+            if flash_with_progress "$HOT_EFI" "$HOT_DEV_EFI" "HotWalletOS EFI"; then
+                UPDATED_HOT=true
+            else
+                echo "Update failed for HotWalletOS EFI partition" >> "$FLASH_LOG"
+            fi
+        else
+            echo "ERROR: HotWalletOS EFI image missing or target partition invalid" >> "$FLASH_LOG"
+        fi
     else
-        echo "Update failed for HotWalletOS" >> "$FLASH_LOG"
+        echo "Update failed for HotWalletOS Root partition" >> "$FLASH_LOG"
     fi
 fi
 
 # --- 2. SCAN AND FLASH COLD WALLET OS ---
+#COLD_DEV=$(blkid -L "ColdWalletOS" || true)
+#if [ -n "$COLD_DEV" ] && [ -f "$COLD_IMG" ]; then
+#    if flash_with_progress "$COLD_IMG" "$COLD_DEV" "ColdWalletOS"; then
+#        UPDATED_COLD=true
+#    else
+#        echo "Flash failed for ColdWalletOS" >> "$FLASH_LOG"
+#    fi
+#fi
+# --- 2. SCAN AND FLASH COLD WALLET OS ---
 COLD_DEV=$(blkid -L "ColdWalletOS" || true)
 if [ -n "$COLD_DEV" ] && [ -f "$COLD_IMG" ]; then
+    COLD_DEV_EFI="${COLD_DEV%1}2"
+
     if flash_with_progress "$COLD_IMG" "$COLD_DEV" "ColdWalletOS"; then
-        UPDATED_COLD=true
+        if [ -f "$COLD_EFI" ] && [ -b "$COLD_DEV_EFI" ]; then
+            if flash_with_progress "$COLD_EFI" "$COLD_DEV_EFI" "ColdWalletOS EFI"; then
+                UPDATED_COLD=true
+            else
+                echo "Flash failed for ColdWalletOS EFI partition" >> "$FLASH_LOG"
+            fi
+        else
+            echo "ERROR: ColdWalletOS EFI image missing or target partition invalid" >> "$FLASH_LOG"
+        fi
     else
-        echo "Flash failed for ColdWalletOS" >> "$FLASH_LOG"
+        echo "Flash failed for ColdWalletOS Root partition" >> "$FLASH_LOG"
     fi
 fi
 

@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+OUT_DIR="$HOME/MonerOS_Output/"
+sudo mkdir -p "$OUT_DIR"
+sudo chown 1000:1000 -R "$OUT_DIR"
+
 BASE_DIR="$HOME/MonerOS/ColdWalletOS/"
 cd $BASE_DIR
 
@@ -89,7 +93,7 @@ sudo rm -f .build/binary_iso
 sudo lb binary_iso
 
 # --- 7. CREATE DISK IMAGE (.IMG) ---
-FINAL_IMG="$HOME/ColdWalletOS.img"
+FINAL_IMG="$OUT_DIR/ColdWalletOS.img"
 NEW_ISO=$(ls -t ${BASE_DIR}/*.iso | head -n1)
 cp "$NEW_ISO" "$FINAL_IMG"
 
@@ -104,7 +108,7 @@ sudo xorriso -dev "$FINAL_IMG" \
     -commit
     
 # --- 7.6. EXPORT THE PATCHED ISO9660 UPDATE FILE ---
-UPDATE_FILE="$HOME/ColdWalletOS.update"
+UPDATE_FILE="$OUT_DIR/ColdWalletOS.p1"
 echo "[INFO] Exporting the pure ISO9660 update file to $UPDATE_FILE..."
 cp "$FINAL_IMG" "$UPDATE_FILE"
 
@@ -185,6 +189,13 @@ sudo cp -r "${BASE_DIR}/binary/boot/grub/fonts/" /mnt/tmp_efi/boot/grub
 echo "configfile /boot/grub/grub.cfg" | sudo tee /mnt/tmp_efi/EFI/debian/grub.cfg > /dev/null
 
 sudo umount /mnt/tmp_efi
+
+# --- 9.6. EXPORT THE EFI PARTITION UPDATE FILE ---
+EFI_FILE="$OUT_DIR/ColdWalletOS.p2"
+echo "[INFO] Exporting the populated EFI partition to $EFI_FILE..."
+sudo dd if="${LOOPDEV}p2" of="$EFI_FILE" bs=4M status=progress
+# Fix permissions so it's owned by your user, not root
+sudo chown $USER:$USER "$EFI_FILE"
 
 # Fix permissions for the 'live' user (UID 1000)
 sudo mkdir -p /mnt/tmp_p3
