@@ -5,6 +5,9 @@ set -e
 
 
 # Production version vs non-production
+
+# Do NOT change this to false unless you know what you're doing!
+# This will disable the firewall and allow ssh with username=user and password=live
 PRODUCTION=true
 MODS_DIR="$HOME/MonerOS/admin_mods"
 BUILD_DIR="$HOME/MonerOS/HotWalletOS"

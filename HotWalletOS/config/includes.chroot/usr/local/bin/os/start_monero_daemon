@@ -122,11 +122,15 @@ for dir in "$BASE_DIR"/*/; do
         echo "Launching persistent RPC for $ADDR_ID on port $CURRENT_PORT..."
         
         # Start the background daemon pointing dynamically to verified destination
-        monero-wallet-rpc --wallet-file "$WALLET_FILE" --password "$PASSWORD" \
-            --rpc-bind-port "$CURRENT_PORT" --disable-rpc-login \
+        sudo -u user monero-wallet-rpc \
+            --wallet-file "$WALLET_FILE" \
+            --password "$PASSWORD" \
+            --rpc-bind-port "$CURRENT_PORT" \
+            --disable-rpc-login \
             --daemon-address "$TARGET_NODE" \
             $RPC_PROXY_FLAG \
-            --trusted-daemon --detach --log-file "$LOG_FILE" > /dev/null 2>&1
+            --trusted-daemon \
+            --log-file "rpc_daemon.log" >/dev/null 2>&1 &
             
         # Store the assigned port in the folder for other scripts to read dynamically
         echo "$CURRENT_PORT" > "${dir}rpc_port.cfg"

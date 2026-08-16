@@ -1,0 +1,254 @@
+# Suppress kernel spam
+sudo dmesg -n 3
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    # Color 4 (Blue) -> Bright Red (#ff0000)
+    echo -ne "\e]P4ff0000" 
+    # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+MONERO_EXISTS=true
+BASE_DIR="/mnt/sallyport/watch_monero"
+
+# run whiptail in a way that allows arrow keys
+run_whiptail() {
+    local ecfile=$(mktemp)
+    script -q -c "$(printf '%q ' "$@"); echo \$? > $ecfile" /dev/null
+    local ec=$(cat "$ecfile")
+    rm -f "$ecfile"
+    return "$ec"
+}
+    
+# Restore proper keyboard mode
+sudo loadkeys us
+stty sane -ixon
+
+# 1. Verify the base directory actually exists
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Wallet directory does not exist"
+    MONERO_EXISTS=false
+fi
+
+# 2. Count only the subdirectories inside BASE_DIR (1 level deep)
+SUBDIR_COUNT=$(find "$BASE_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)
+
+if [ "$SUBDIR_COUNT" -eq 0 ]; then
+    echo "Wallet directory does not contain any addresses"
+    MONERO_EXISTS=false
+fi
+
+if [ "$MONERO_EXISTS" = true ]; then
+    if df -h | grep -qE '/run/live/medium|/usr/lib/live/mount/medium'; then
+        LIVE_DEV=$(df /run/live/medium 2>/dev/null | tail -n1 | awk '{print $1}')
+        BOOT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n1)
+    else
+        ROOT_DEV=$(df / | tail -n1 | awk '{print $1}')
+        BOOT_DISK=$(lsblk -no PKNAME "$ROOT_DEV" | head -n1)
+    fi
+    [ -z "$BOOT_DISK" ] && BOOT_DISK=$(lsblk -nro NAME,TYPE | grep 'disk' | head -n1 | awk '{print $1}')
+    DISK_PATH="/dev/$BOOT_DISK"
+    
+    # Launch backend infrastructure imports
+    REMOTE_NODE_CFG="/mnt/external/remote_node.cfg"
+    
+    # 1. EXPAND TARGET PARTITION PATH BASED ON ARCHITECTURE
+    if [[ "$DISK_PATH" == *"nvme"* || "$DISK_PATH" == *"mmcblk"* ]]; then
+        TARGET_PART4_PATH="${DISK_PATH}p4"
+    else
+        TARGET_PART4_PATH="${DISK_PATH}4"
+    fi
+    
+    # 2. EVALUATE SYSTEM SETUP STRATEGY
+    RUN_SELF_SETUP=false
+    
+    # PRE-FLIGHT: Check if a custom remote node configuration already exists to use as an autofill default
+    DEFAULT_NODE=""
+    if [ -f "$REMOTE_NODE_CFG" ]; then
+        # Read the file and strip any erratic whitespace
+        PRE_EXISTING_NODE=$(cat "$REMOTE_NODE_CFG" | tr -d '[:space:]')
+        if [ -n "$PRE_EXISTING_NODE" ]; then
+            DEFAULT_NODE="$PRE_EXISTING_NODE"
+            echo "Found existing remote node configuration ($DEFAULT_NODE) for autofill." >> "$LOG_FILE"
+        fi
+    fi
+    
+    # --- REMOVED AUTOMATIC BYPASSES: ALWAYS FORCE INTERACTIVE SETUP ---
+    sudo mkdir -p /mnt/external
+    
+    # Space Check on the raw parent block device to see if hosting a local node is viable
+    REQUIRED_BYTES=$((200 * 1024 * 1024 * 1024))
+    TOTAL_DISK_BYTES=$(lsblk -bno SIZE "$DISK_PATH" | head -n1 | xargs)
+    TOTAL_DISK_BYTES=${TOTAL_DISK_BYTES:-0}
+    
+    # SCENARIO A: STORAGE DEPRIVED (MUST MANUALLY INPUT REMOTE TARGET)
+    if [ "$TOTAL_DISK_BYTES" -lt "$REQUIRED_BYTES" ]; then
+    
+        MSG_LOW_SPACE="You do not have enough disk space (250GB+ required) to host a local node.\nYou must manually configure a custom remote node address to proceed or choose to shut down."
+    
+        # Use wrapper ONLY for the button choice box
+        if run_whiptail whiptail --title " Insufficient Space " \
+            --yesno "$MSG_LOW_SPACE" 15 50 --fb \
+            --yes-button "Continue" --no-button "Shutdown"; then
+    
+            RUN_SELF_SETUP=false
+    
+            while true; do
+                # Native descriptor redirection bypasses script wrapper bugs for input boxes
+                # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
+                USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
+                    "Enter remote node address (e.g., 123.45.67.89:18081 or onion:18081):" 12 50 \
+                    "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
+                
+                if [ $? -ne 0 ]; then
+                    sudo bash /usr/local/bin/os/safe_shutdown
+                    exit 0
+                fi
+                
+                
+                clear
+                
+                # Strips EVERYTHING except alphanumeric characters, dots, colons, and hyphens
+                CLEAN_NODE=$(echo "$USER_NODE" | tr -cd '[:alnum:].:-')
+                
+                if [ -n "$CLEAN_NODE" ]; then
+                    if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
+                        echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
+                        break
+                    else
+                        whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                    fi
+                else
+                    whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+                fi
+            done
+    
+        else
+            sudo bash /usr/local/bin/os/safe_shutdown
+            exit 0
+        fi
+    
+    # SCENARIO B: SUFFICIENT SPACE AVAILABLE (PROMPT FOR SETUP TYPE)
+    else
+    
+        MSG_NODE="System storage is verified. Would you like to host your own node locally (Self-Sync) or connect to an external node?\n\nNote: Self-Sync provides absolute privacy but can take up to 1-3 days to sync"
+    
+        while true; do
+            # Flip the buttons: "Remote Node" is now the default (Yes-button)
+            if run_whiptail whiptail --title " Node Synchronization Engine " \
+                --yesno "$MSG_NODE" 15 50 --fb \
+                --yes-button "Remote Node" --no-button "Self-Sync"; then
+    
+                # If they press Enter (Default), it hits 'Yes' (Remote Node)
+                RUN_SELF_SETUP=false
+                
+                # Native descriptor redirection bypasses script wrapper bugs for input boxes
+                # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
+                USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
+                    "Enter remote node address (e.g., 123.45.67.89:18081 or onion:18081):" 12 50 \
+                    "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
+                
+                # If user presses CANCEL or ESC on the input box
+                if [ $? -ne 0 ]; then
+                    echo "User canceled remote node input. Looping back to menu." >> "$LOG_FILE"
+                    continue  # <--- This restarts the main loop, returning to the choice screen
+                fi
+                
+                # Strips EVERYTHING except alphanumeric characters, dots, colons, and hyphens
+                CLEAN_NODE=$(echo "$USER_NODE" | tr -cd '[:alnum:].:-')
+                
+                if [ -n "$CLEAN_NODE" ]; then
+                    if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
+                        echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
+                        break # Success! Break the main outer loop and proceed with the script
+                    else
+                        whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                    fi
+                else
+                    whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+                fi
+                
+            else
+                # If they navigate to 'Self-Sync', it hits 'No', triggering this block
+                RUN_SELF_SETUP=true
+                break # Break out of the loop to proceed with self-sync setup
+            fi
+        done
+    fi
+    
+    sleep 5
+    
+    # --- 3 & 4. PARTITIONING, FORMATTING, MOUNTING & SWAP ---
+    if [ "$RUN_SELF_SETUP" = true ]; then
+        # Determine partition path
+        if [[ "$DISK_PATH" == *"nvme"* || "$DISK_PATH" == *"mmcblk"* ]]; then
+            TARGET_PART_PATH="${DISK_PATH}p4"
+        else
+            TARGET_PART_PATH="${DISK_PATH}4"
+        fi
+    
+        # Single pass for partitioning and formatting
+        if [ ! -b "$TARGET_PART_PATH" ]; then
+            sudo umount "${DISK_PATH}"* > /dev/null 2>&1
+            
+            sudo fdisk -w always -W always "$DISK_PATH" <<EOF > /dev/null 2>&1
+n
+p
+4
+    
+    
+w
+EOF
+            # Force kernel to register the new layout
+            sudo blockdev --rereadpt "$DISK_PATH" > /dev/null 2>&1
+            sudo partx -u "$DISK_PATH" > /dev/null 2>&1
+            sudo udevadm settle
+            sleep 5
+            
+            if [ -b "$TARGET_PART_PATH" ]; then
+                sudo mkfs.ext4 -F "$TARGET_PART_PATH" > /dev/null 2>&1
+            else
+                echo "Failed to create partition"
+                exit 1
+            fi
+        fi
+    
+        # Final Mount
+        sudo mkdir -p /mnt/p4
+        sudo mount -o noatime,nodiratime,lazytime,commit=60 "$TARGET_PART_PATH" /mnt/p4
+        
+        sudo mkdir -p /mnt/p4/monero
+        sudo chown user:user /mnt/p4/monero
+    
+        # Setup Swap
+        if [ ! -f /mnt/p4/swapfile ]; then
+            sudo fallocate -l 8G /mnt/p4/swapfile > /dev/null 2>&1
+            sudo chmod 600 /mnt/p4/swapfile > /dev/null 2>&1
+            sudo mkswap /mnt/p4/swapfile > /dev/null 2>&1
+            sudo swapon /mnt/p4/swapfile > /dev/null 2>&1
+        fi
+        
+        sudo sysctl vm.swappiness=10 > /dev/null 2>&1
+        sudo bash /usr/local/bin/os/start_self_monero
+    fi
+fi

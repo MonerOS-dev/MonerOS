@@ -6,6 +6,49 @@ BASE_DIR="/mnt/sallyport/watch_monero"
 BACKEND_DIR="/var/www/backend/Monero"
 sudo mkdir -p "$BACKEND_DIR"
 
+
+
+
+
+
+# --- PRE-FLIGHT MASTER NODE HEALTH CHECK ---
+NODE_CACHE_FILE="/home/user/monero_node.txt"
+PROXY="127.0.0.1:9050" # Adjust to your Tor proxy if different
+
+if [ -f "$NODE_CACHE_FILE" ]; then
+    ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+else
+    ACTIVE_NODE="127.0.0.1:18081"
+fi
+
+#echo "Verifying master node health before processing balances ($ACTIVE_NODE)..."
+
+if [[ "$ACTIVE_NODE" == "127.0.0.1"* ]] || [[ "$ACTIVE_NODE" == "localhost"* ]]; then
+    MASTER_CURL="curl -m 15 -s -f"
+elif [[ "$ACTIVE_NODE" == *".onion"* ]]; then
+    MASTER_CURL="curl -m 30 -s -f --socks5-hostname $PROXY"
+else
+    MASTER_CURL="curl -m 15 -s -f"
+fi
+
+if ! $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null; then
+    echo "[CRITICAL] Master node ($ACTIVE_NODE) is unreachable! Invoking recovery..."
+    whiptail --msgbox "Selected node appears to be down or address is incorrect. Please try again" 0 0 </dev/tty1 >/dev/tty1
+    sudo bash /usr/local/bin/os/reconfigure_monero
+    
+    # Re-read cache after recovery
+    [ -f "$NODE_CACHE_FILE" ] && ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+    
+    if ! $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null; then
+        echo "[FATAL] Recovery failed or node still down. Aborting balance run."
+        exit 1
+    fi
+fi
+
+
+
+
+
 echo "Querying Persistent Monero RPC Daemons..."
 
 for dir in "$BASE_DIR"/*/; do
