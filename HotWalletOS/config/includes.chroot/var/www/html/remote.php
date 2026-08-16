@@ -31,7 +31,7 @@ $href = (stripos($onion_addr, 'http') === 0) ? $onion_addr : "http://" . $onion_
             color: var(--silver-mid);
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             margin: 0;
-            padding: 20px 10px; /* Tightened padding */
+            padding: 20px 10px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -52,7 +52,7 @@ $href = (stripos($onion_addr, 'http') === 0) ? $onion_addr : "http://" . $onion_
         .update-tag {
             font-size: 0.8rem;
             color: var(--silver-dark);
-            margin-bottom: 20px; /* Reduced margin */
+            margin-bottom: 20px;
             letter-spacing: 2px;
             text-transform: uppercase;
         }

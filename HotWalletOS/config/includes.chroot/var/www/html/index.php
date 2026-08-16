@@ -82,7 +82,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             color: var(--silver-mid);
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             margin: 0;
-            padding: 20px 10px;
+            padding: 40px 0; /* Changed horizontal padding to 0 since we control width directly */
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -90,7 +90,8 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
         }
 
         h1 {
-            font-size: clamp(2.5rem, 10vw, 4rem); 
+            /* Slower scaling (4vw) so it stays normal on laptops, but reaches 7rem on big screens */
+            font-size: clamp(2rem, 4vw, 7rem); 
             margin: 0;
             letter-spacing: 8px;
             color: var(--silver-light);
@@ -117,9 +118,8 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             margin-bottom: 20px;
             position: relative;
             overflow: hidden;
-            width: 100%;
-            max-width: 1000px;
-            box-sizing: border-box;
+            width: 95vw; /* Always 95% of screen width */
+            box-sizing: border-box; /* Prevents padding from breaking the 95vw rule */
         }
 
         .total-container::before {
@@ -140,20 +140,21 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
         }
 
         .total-amount {
-            font-size: clamp(2.5rem, 10vw, 4rem);
+            /* Starts at a normal 2.5rem, scales slowly, but caps at a massive 10rem on TVs */
+            font-size: clamp(2.5rem, 5vw, 10rem); 
             color: #FFFFFF;
             font-weight: 700;
             text-shadow: 0 0 30px rgba(255,255,255,0.1);
         }
 
         .main-table {
-            width: 100%;
-            max-width: 1000px;
+            width: 95vw; /* Always 95% of screen width */
             background: rgba(255, 255, 255, 0.02);
             border: 2px solid #333;
             border-radius: 8px;
             overflow: hidden;
             border-spacing: 0;
+            box-sizing: border-box;
         }
 
         /* Balanced 4-column grid */
@@ -173,10 +174,11 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
         .th {
             padding: 15px;
             color: var(--silver-light);
-            font-size: 0.7rem;
+            /* Keeps headers normal on desktops, scales up to 2.2rem on big screens */
+            font-size: clamp(0.65rem, 1.3vw, 2.2rem); 
             text-transform: uppercase;
             letter-spacing: 1px;
-            text-align: center; /* Center Header Text */
+            text-align: center;
         }
 
         .tr-link {
@@ -189,12 +191,13 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
         }
 
         .td {
-            padding: 18px 10px;
+            padding: 18px 5px;
             display: flex;
             align-items: center;
-            justify-content: center; /* Center Column Content */
+            justify-content: center;
             color: var(--silver-mid);
-            font-size: 0.9rem;
+            /* Keeps table text readable on normal screens, scales up to 2.5rem on big screens */
+            font-size: clamp(0.75rem, 1.5vw, 2.5rem); 
             text-align: center;
         }
 
@@ -216,6 +219,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             flex-direction: column;
             gap: 10px;
             align-items: center;
+            width: 95vw;
         }
 
         .btn-cmd {
@@ -229,7 +233,9 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             text-transform: uppercase;
             border: 2px solid #444;
             text-align: center;
-            min-width: 320px;
+            width: 100%;
+            max-width: 320px; /* Prevents button from stretching entirely across huge TVs */
+            box-sizing: border-box;
         }
 
         .btn-remote { color: var(--silver-light); }
@@ -246,9 +252,6 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             border-color: #ff3333;
         }
 
-        @media (max-width: 600px) {
-            .th, .td { font-size: 0.65rem; padding: 15px 5px; }
-        }
     </style>
 </head>
 <body>

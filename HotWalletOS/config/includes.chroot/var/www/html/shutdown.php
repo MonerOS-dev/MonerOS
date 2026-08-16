@@ -6,7 +6,6 @@ $message = "";
 $shutdown_triggered = false;
 
 if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
-    // Reverted to background execution for reliability
     shell_exec('sudo bash /usr/local/bin/os/safe_shutdown > /dev/null 2>&1 &');
     $message = "SYSTEM IS SHUTTING DOWN...";
     $shutdown_triggered = true;
@@ -37,7 +36,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
             color: var(--silver-mid);
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             margin: 0;
-            padding: 20px 10px; /* Top-aligned industrial padding */
+            padding: 20px 10px;
             display: flex;
             flex-direction: column;
             align-items: center;

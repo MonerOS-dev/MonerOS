@@ -1,5 +1,0 @@
-monero-wallet-cli \
-    --wallet-file your_watchonly_file \
-    --daemon-address cky2cwjjqchgqebbuheikewr26wy54wg3x637e3wc63mo33p4hhsu4qd.onion:18081 \
-    --proxy 127.0.0.1:9050 \
-    --trusted-daemon

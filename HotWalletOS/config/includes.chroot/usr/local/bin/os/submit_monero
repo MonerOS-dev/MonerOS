@@ -132,3 +132,5 @@ if [ "$F_COUNT" -eq 0 ]; then
 else
     echo "SUMMARY_FAILURE: Execution finished with errors. Success Count: $S_COUNT, Failure Count: $F_COUNT"
 fi
+
+sleep 5
