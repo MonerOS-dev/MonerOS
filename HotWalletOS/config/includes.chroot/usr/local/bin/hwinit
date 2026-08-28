@@ -194,41 +194,88 @@ sudo bash /usr/local/bin/os/start_tor_server || true
 # --- 6. SWITCH BACK TO X11 FOR GUI ---
 ###############################################
 
-# 1. Return to the graphical interface
-sudo chvt 7
-export DISPLAY=:0
-sleep 1 
+echo "Starting GUI..."
+sleep 3
 
-# 2. X11 Settings & Permissions
-xset -display :0 dpms force on
+export DISPLAY=:0
 xhost +local:root > /dev/null 2>&1
-xset s off s noblank -dpms
 pkill xscreensaver > /dev/null 2>&1 || true
 
-# 3. Launch Surf as the standard user
-sudo -u user DISPLAY=:0 nohup surf -K -F -N http://localhost > /dev/null 2>&1 &
+# 1. Launch black xterm overlay
+xterm -fullscreen -bg black -fg black -e "sleep 30" > /dev/null 2>&1 &
+XTERM_PID=$!
 
-# 4. Wait for the Surf window to actually exist
-until wmctrl -l 2>/dev/null | grep -i "surf"; do
+# 2. Wait for xterm to exist and set initial fullscreen state
+until wmctrl -l -x 2>/dev/null | grep -i "xterm"; do
+    sleep 0.1
+done
+wmctrl -r "xterm" -b add,fullscreen,above
+
+# 3. Switch to VT7
+sudo chvt 7
+
+# 4. IMMEDIATELY FORCE XTERM TO FRONT AFTER VT SWITCH
+wmctrl -r "xterm" -b add,fullscreen,above 2>/dev/null
+wmctrl -a "xterm" 2>/dev/null
+
+# 5. Hide mouse cursor
+if command -v unclutter >/dev/null; then
+    # After (waits 3 seconds after mouse stops before hiding):
+    nohup unclutter -idle 3 -root >/dev/null 2>&1 &
+fi
+
+# 6. Launch Surf with GTK Dark Mode (Forces WebKit's blank canvas to draw black)
+sudo -u user DISPLAY=:0 GTK_THEME=Adwaita:dark nohup surf -K -F -N http://localhost > /dev/null 2>&1 &
+
+# 7. Wait for Surf window to map
+until wmctrl -l -x 2>/dev/null | grep -i "surf"; do
     sleep 0.2
 done
 
-# 5. Force Fullscreen and Keep Above
+# 8. Hold the curtain up for 8 seconds while WebKit renders in secret
+for i in $(seq 1 40); do
+    wmctrl -r "xterm" -b add,fullscreen,above 2>/dev/null
+    wmctrl -a "xterm" 2>/dev/null
+    sleep 0.2
+done
+
+# 9. Promote Surf to top and drop the xterm curtain
 wmctrl -r "surf" -b add,fullscreen,above
+kill $XTERM_PID 2>/dev/null || true
 
-# 6. Hide the cursor in X11
-if command -v unclutter >/dev/null; then
-    nohup unclutter -idle 0.1 -root >/dev/null 2>&1 &
-fi
 
-# 7. Final Background Cleanup
-# Wipe TTY1 so no password residue remains in the scrollback console buffer
-sudo chvt 1
-clear
-setterm -cursor off
-sudo chvt 7
 
-clear
-echo "Interface Ready."
-sleep 10
+
+
+# --- Inject the Systemd Service ---
+    sudo tee /etc/systemd/system/monero-node-monitor.service > /dev/null << 'EOF'
+[Unit]
+Description=Monero Master Node Health Monitor
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/os/monero_node_monitor
+Restart=always
+RestartSec=10
+
+# Bind service to TTY for whiptail interaction
+StandardInput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=no
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    # --- Reload and Enable ---
+    sudo chmod +x /usr/local/bin/os/monero_node_monitor
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now monero-node-monitor.service
+    echo -e "${WHITE}[*] Node Monitor injected and started successfully.${NC}"
+    
+    
+    
+
 exit 0

@@ -89,7 +89,7 @@ if [ "$MONERO_EXISTS" = true ]; then
         PRE_EXISTING_NODE=$(cat "$REMOTE_NODE_CFG" | tr -d '[:space:]')
         if [ -n "$PRE_EXISTING_NODE" ]; then
             DEFAULT_NODE="$PRE_EXISTING_NODE"
-            echo "Found existing remote node configuration ($DEFAULT_NODE) for autofill." >> "$LOG_FILE"
+            echo "Found existing remote node configuration ($DEFAULT_NODE) for autofill."
         fi
     fi
     
@@ -167,7 +167,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                 
                 # If user presses CANCEL or ESC on the input box
                 if [ $? -ne 0 ]; then
-                    echo "User canceled remote node input. Looping back to menu." >> "$LOG_FILE"
+                    echo "User canceled remote node input. Looping back to menu."
                     continue  # <--- This restarts the main loop, returning to the choice screen
                 fi
                 
@@ -186,7 +186,11 @@ if [ "$MONERO_EXISTS" = true ]; then
                 fi
                 
             else
-                # If they navigate to 'Self-Sync', it hits 'No', triggering this block
+                # if self sync selected
+                NODE_CACHE_FILE="/home/user/monero_node.txt"
+                echo "127.0.0.1:18081" > "$NODE_CACHE_FILE"
+                sudo chown user:user "$NODE_CACHE_FILE"
+                
                 RUN_SELF_SETUP=true
                 break # Break out of the loop to proceed with self-sync setup
             fi
@@ -233,6 +237,9 @@ EOF
                 exit 1
             fi
         fi
+        
+        # Ensure it's unmounted before our clean mount attempt (prevents 'already mounted' errors)
+        #sudo umount "$TARGET_PART_PATH" > /dev/null 2>&1
     
         # Final Mount
         sudo mkdir -p /mnt/p4
@@ -257,4 +264,5 @@ EOF
     sudo bash /usr/local/bin/os/import_monero || true
     sudo bash /usr/local/bin/os/start_monero_daemon || true
     sudo bash /usr/local/bin/os/submit_monero || true
+
 fi

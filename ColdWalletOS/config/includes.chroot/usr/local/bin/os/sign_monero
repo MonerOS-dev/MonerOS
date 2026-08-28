@@ -15,18 +15,18 @@ if [ "$TERM" = "linux" ]; then
 fi
 
 export NEWT_COLORS='
-  root=black,black
-  window=blue,black
-  shadow=black,black
-  border=blue,black
-  title=blue,black
-  textbox=white,black
-  label=white,black
-  listbox=white,black
-  actlistbox=black,blue
-  button=white,black
-  actbutton=black,white
-  entry=white,black
+    root=black,black
+    window=blue,black
+    shadow=black,black
+    border=blue,black
+    title=blue,black
+    textbox=white,black
+    label=white,black
+    listbox=white,black
+    actlistbox=black,blue
+    button=white,black
+    actbutton=black,white
+    entry=white,black
 '
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -114,7 +114,7 @@ sign_tx_rpc() {
     else
         log "ERROR: sign_transfer failed — keeping unsigned tx"
         stop_rpc "$WALLET_PORT"
-        return
+        return 1
     fi
 
     # 3. Export key images (RPC JSON format)
@@ -135,43 +135,70 @@ sign_tx_rpc() {
         log "Deleted processed unsigned tx."
     else
         log "CRITICAL: Missing signed tx or key images — preserving unsigned tx."
+        stop_rpc "$WALLET_PORT"
+        return 1
     fi
 
     stop_rpc "$WALLET_PORT"
     rm -f "$OUTDIR/signed_resp.json" "$OUTDIR/ki_resp.json"
+    return 0
 }
 
 # --- Loop over unsigned transactions ---
-{
-    for HEX_PATH in "${UNSIGNED_LIST[@]}"; do
-        SUB_DIR=$(basename "$(dirname "$HEX_PATH")")
-        OUTDIR="$WATCH_DIR/$SUB_DIR"
-        REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
-        HEX_FILE=$(basename "$HEX_PATH")
-        PORT_FILE="${OUTDIR}/rpc_port.cfg"
+for HEX_PATH in "${UNSIGNED_LIST[@]}"; do
+    SUB_DIR=$(basename "$(dirname "$HEX_PATH")")
+    OUTDIR="$WATCH_DIR/$SUB_DIR"
+    REAL_WALLET="$VAULT_DIR/$SUB_DIR/wallet"
+    HEX_FILE=$(basename "$HEX_PATH")
+    PORT_FILE="${OUTDIR}/rpc_port.cfg"
 
-        if [ ! -f "$PORT_FILE" ]; then
-            log "ERROR: $HEX_FILE ($SUB_DIR) - No rpc_port.cfg found. Skipping."
-            continue
-        fi
+    ID_PART="${HEX_FILE#unsigned_tx_}"
+    RECORD_FILE="$OUTDIR/unsigned_record_${ID_PART}"
+    SIGNED_RECORD_FILE="$OUTDIR/signed_record_${ID_PART}"
 
-        PERCENT=$(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
-        echo "XXX"
-        echo "$PERCENT"
-        echo "Signing: $SUB_DIR"
-        echo "XXX"
+    if [ ! -f "$PORT_FILE" ]; then
+        log "ERROR: $HEX_FILE ($SUB_DIR) - No rpc_port.cfg found. Skipping."
+        continue
+    fi
 
-        RPC_PORT=$(tr -d '\n\r ' < "$PORT_FILE")
-        log "Processing $HEX_FILE for $SUB_DIR on Port $RPC_PORT"
-        sign_tx_rpc "$OUTDIR" "$REAL_WALLET" "$HEX_FILE" "$RPC_PORT"
+    # Read record content if it exists, otherwise provide fallback text
+    if [ -f "$RECORD_FILE" ]; then
+        RECORD_CONTENT=$(cat "$RECORD_FILE")
+    else
+        RECORD_CONTENT="No record details found for ID: $ID_PART"
+    fi
+    
+    # Prompt user with whiptail (Yes = Sign, No = Deny)
+    whiptail --title " Review Transaction " \
+             --fb \
+             --yes-button "Approve" \
+             --no-button "Deny" \
+             --yesno "$RECORD_CONTENT" 14 50
+    CHOice=$?
 
+    if [ $CHOice -eq 1 ]; then
+        # User selected 'Delete' (No)
+        log "User chose to DELETE transaction $ID_PART for $SUB_DIR"
+        rm -f "$OUTDIR/$HEX_FILE" "$RECORD_FILE"
         CURRENT_COUNT=$((CURRENT_COUNT + 1))
-    done
+        continue
+    fi
 
-    echo "XXX"
-    echo "100"
-    echo "Signing Complete"
-    echo "XXX"
-} | whiptail --title " RPC Transaction Signing " --gauge "Starting..." 6 50 0
+    # User selected 'Sign' (Yes)
+    PERCENT=$(( (CURRENT_COUNT * 100) / TOTAL_FILES ))
+    
+    RPC_PORT=$(tr -d '\n\r ' < "$PORT_FILE")
+    log "Processing $HEX_FILE for $SUB_DIR on Port $RPC_PORT"
+    
+    if sign_tx_rpc "$OUTDIR" "$REAL_WALLET" "$HEX_FILE" "$RPC_PORT"; then
+        # If signing was successful, rename record file to signed_record_{timestamp}
+        if [ -f "$RECORD_FILE" ]; then
+            mv "$RECORD_FILE" "$SIGNED_RECORD_FILE"
+            log "Renamed record to signed_record_${ID_PART}"
+        fi
+    fi
+
+    CURRENT_COUNT=$((CURRENT_COUNT + 1))
+done
 
 log "--- RPC Signing Session Complete ---"

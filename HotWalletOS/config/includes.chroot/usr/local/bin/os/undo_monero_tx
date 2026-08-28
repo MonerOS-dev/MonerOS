@@ -1,0 +1,33 @@
+#!/bin/bash
+
+TARGET_DIR=$1
+
+# 1. Ensure a directory path was provided
+if [ -z "$TARGET_DIR" ]; then
+    echo "Error: No target directory specified."
+    exit 1
+fi
+
+# 2. Safety check: Ensure the path is actually inside the watch_monero base directory
+BASE_DIR="/mnt/sallyport/watch_monero"
+if [[ "$TARGET_DIR" != "$BASE_DIR"* ]]; then
+    echo "Error: Invalid path security bounds."
+    exit 1
+fi
+
+# 3. Check for root/sudo privileges (needed to delete root-owned files)
+if [[ $EUID -ne 0 ]]; then
+   echo "Error: Please run with sudo"
+   exit 1
+fi
+
+# 4. Find and delete the pending transaction artifacts safely
+if [ -d "$TARGET_DIR" ]; then
+    rm -f "$TARGET_DIR"/unsigned_tx_*
+    rm -f "$TARGET_DIR"/unsigned_record_*
+    rm -f "$TARGET_DIR"/tip.log
+    echo "SUCCESS: Transaction artifacts purged."
+else
+    echo "Error: Directory does not exist."
+    exit 1
+fi

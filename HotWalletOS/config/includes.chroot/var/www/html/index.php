@@ -251,6 +251,21 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             color: #fff;
             border-color: #ff3333;
         }
+        
+        .tag-warning {
+            font-size: 0.8rem;
+            color: black;
+            background-color: yellow;
+            padding: 8px 12px;
+            margin: 0 auto 20px auto;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            text-align: center;
+            width: 95vw;
+            max-width: 95vw;
+            box-sizing: border-box;
+            border-radius: 4px;
+        }                
 
     </style>
 </head>
@@ -258,6 +273,10 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
 
     <h1>HotWalletOS</h1>
     <div class="update-tag">BALANCE UPDATED EVERY 10-20 MINUTES</div>
+    
+    <?php if (file_exists('/var/www/html/monero.down')): ?>
+        <div class="tag-warning">Monero node appears to be down - balance may not be accurate</div>
+    <?php endif; ?>
 
     <div class="total-container">
         <span class="total-label">Current Net Balance</span>

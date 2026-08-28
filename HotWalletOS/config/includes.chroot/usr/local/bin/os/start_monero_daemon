@@ -8,31 +8,10 @@ NODE_CACHE_FILE="/home/user/monero_node.txt"
 TOR_PROXY="127.0.0.1:9050"
 LOCAL_TOR_NODE="127.0.0.1:18081"
 
-# --- MASTER NODE SELECTION (SMART LOCAL DETECTION) ---
-if ss -tln | grep -q ":18081 "; then
-    echo "[*] Local Monero node detected active on 18081. Enforcing Self-Sync."
-    TARGET_NODE="$LOCAL_TOR_NODE"
-    RPC_PROXY_FLAG=""
-# Otherwise, fall back to the remote config if it exists
-elif [ -f "$CUSTOM_REMOTE_PATH" ] && [ -n "$(cat "$CUSTOM_REMOTE_PATH" | tr -d '[:space:]')" ]; then
-    TARGET_NODE=$(cat "$CUSTOM_REMOTE_PATH" | tr -d '\n\r ')
-    echo "[*] Custom remote configuration found: $TARGET_NODE"
-    
-    RPC_PROXY_FLAG=""
-    if [[ "$TARGET_NODE" == *".onion"* ]]; then
-        echo "[*] Tor onion node detected. Enabling proxy flag."
-        RPC_PROXY_FLAG="--proxy $TOR_PROXY"
-    else
-        echo "[!] Clearnet host detected. Bypassing proxy flag."
-    fi
-else
-    # Fallback to cache tracking file or hardcoded localhost
-    echo "[!] No custom config or active local node detected. Falling back to cache settings."
-    if [ -f "$NODE_CACHE_FILE" ]; then
-        TARGET_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
-    else
-        TARGET_NODE="$LOCAL_TOR_NODE"
-    fi
+# Priority 1: Check cache file first
+if [ -f "$NODE_CACHE_FILE" ] && [ -n "$(tr -d '[:space:]' < "$NODE_CACHE_FILE")" ]; then
+    TARGET_NODE=$(tr -d '\n\r ' < "$NODE_CACHE_FILE")
+    echo "[*] Local cache file found. Using cached node: $TARGET_NODE"
     
     RPC_PROXY_FLAG=""
     if [[ "$TARGET_NODE" == *".onion"* ]]; then
@@ -43,6 +22,31 @@ else
     else
         echo "[!] Remote Clearnet node detected from cache. Bypassing Tor proxy flag."
     fi
+
+# Priority 2: Fall back to custom remote path if cache doesn't exist
+elif [ -f "$CUSTOM_REMOTE_PATH" ] && [ -n "$(tr -d '[:space:]' < "$CUSTOM_REMOTE_PATH")" ]; then
+    TARGET_NODE=$(tr -d '\n\r ' < "$CUSTOM_REMOTE_PATH")
+    echo "[!] No cache found. Custom remote configuration found: $TARGET_NODE"
+    
+    RPC_PROXY_FLAG=""
+    if [[ "$TARGET_NODE" == *".onion"* ]]; then
+        echo "[*] Tor onion node detected. Enabling proxy flag."
+        RPC_PROXY_FLAG="--proxy $TOR_PROXY"
+    else
+        echo "[!] Clearnet host detected. Bypassing proxy flag."
+    fi
+    
+    # Save custom remote selection to cache
+    echo "$TARGET_NODE" > "$NODE_CACHE_FILE"
+fi
+
+# --- WAIT INDEFINITELY FOR LOCAL NODE IF TARGET IS LOCAL ---
+if [[ "$TARGET_NODE" == "127.0.0.1"* ]] || [[ "$TARGET_NODE" == "localhost"* ]]; then
+    echo "[*] Local node target detected. Waiting for port 18081 to become active..."
+    while ! ss -tln | grep -qE ":18081\b"; do
+        sleep 2
+    done
+    echo "[+] Local node detected on 18081. Proceeding..."
 fi
 
 # 1. REMAP ANSI PALETTE
@@ -104,9 +108,33 @@ done
 
 clear
 
-# Clean up any lingering states first (SIGINT -2 is graceful for LMDB)
-sudo killall -2 monero-wallet-rpc 2>/dev/null
-sleep 2
+# =====================================================================
+# ROBUST TEARDOWN LOGIC
+# Ensure all previous RPCs are fully dead before trying to re-bind ports
+# =====================================================================
+if pgrep -f "monero-wallet-rpc" > /dev/null; then
+    echo "[*] Stopping existing RPC daemons gracefully to release ports..."
+    sudo pkill -2 -f "monero-wallet-rpc" 2>/dev/null
+    
+    # Wait up to 12 seconds for graceful shutdown to finish saving LMDB state
+    for i in {1..12}; do
+        if ! pgrep -f "monero-wallet-rpc" > /dev/null; then
+            break
+        fi
+        sleep 1
+    done
+
+    # Force kill if any are hung so the script can proceed safely
+    if pgrep -f "monero-wallet-rpc" > /dev/null; then
+        echo "[!] Force killing lingering daemons..."
+        sudo pkill -9 -f "monero-wallet-rpc" 2>/dev/null
+        sleep 1
+    fi
+fi
+
+# Buffer to allow OS socket stack to clear TCP port bindings (TIME_WAIT state)
+sleep 1
+# =====================================================================
 
 CURRENT_PORT=$START_PORT
 
@@ -119,7 +147,7 @@ for dir in "$BASE_DIR"/*/; do
         ADDR_ID=$(basename "$dir")
         LOG_FILE="${dir}rpc_daemon.log"
         
-        echo "Launching persistent RPC for $ADDR_ID on port $CURRENT_PORT..."
+        echo "[*] Launching persistent RPC for $ADDR_ID on port $CURRENT_PORT -> Target: $TARGET_NODE"
         
         # Start the background daemon pointing dynamically to verified destination
         sudo -u user monero-wallet-rpc \
@@ -136,6 +164,9 @@ for dir in "$BASE_DIR"/*/; do
         echo "$CURRENT_PORT" > "${dir}rpc_port.cfg"
         
         CURRENT_PORT=$((CURRENT_PORT + 1))
+        
+        # Stagger startup to prevent disk I/O thrashing and CPU spikes
+        sleep 0.5
     fi
 done
 
@@ -143,4 +174,4 @@ done
 unset PASSWORD
 
 shopt -u nullglob
-echo "All RPC daemons initiated."
+echo "[+] All RPC daemons initiated and pointing to $TARGET_NODE."

@@ -1,0 +1,86 @@
+#!/bin/bash
+# --- /usr/local/bin/os/monero_node_monitor.sh ---
+export PATH=/usr/bin:/bin:/usr/local/bin
+
+NODE_CACHE_FILE="/home/user/monero_node.txt"
+PROXY="127.0.0.1:9050"
+
+while true; do
+    if [ -f "$NODE_CACHE_FILE" ]; then
+        ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+    else
+        ACTIVE_NODE="127.0.0.1:18081"
+    fi
+
+    if [[ "$ACTIVE_NODE" == "127.0.0.1"* ]] || [[ "$ACTIVE_NODE" == "localhost"* ]]; then
+        MASTER_CURL="curl -m 15 -s -f"
+    elif [[ "$ACTIVE_NODE" == *".onion"* ]]; then
+        MASTER_CURL="curl -m 30 -s -f --socks5-hostname $PROXY"
+    else
+        MASTER_CURL="curl -m 15 -s -f"
+    fi
+
+    # If REMOTE node is down
+    if ! $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null && [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
+        
+        # Drop a marker file to indicate the node is down for the web frontend
+        sudo touch /var/www/html/monero.down && sudo chown www-data:www-data /var/www/html/monero.down
+
+        # HARDENED CONCURRENCY LOCK
+        # Use file descriptor 9 to open a lock. If it succeeds, run the check.
+        exec 9>/run/lock/monero_reconfigure.lock
+        if flock -n 9; then
+            if ! pgrep -f "reconfigure_monero" > /dev/null; then
+                
+                # ENCAPSULATE TTY HIJACKING IN A SUBSHELL
+                # This ensures the daemon's main stdout isn't permanently redirected to TTY1
+                (
+                    sudo chvt 1
+                    exec < /dev/tty1 > /dev/tty1 2>&1
+                    export TERM=linux
+                    
+                    if [ "$TERM" = "linux" ]; then
+                        echo -ne "\e]P4ff0000" 
+                        echo -ne "\e]P7ffffff" 
+                        clear
+                    fi
+                    
+                    export NEWT_COLORS='
+                      root=black,black
+                      window=blue,black
+                      shadow=black,black
+                      border=blue,black
+                      title=blue,black
+                      textbox=white,black
+                      label=white,black
+                      listbox=white,black
+                      actlistbox=black,blue
+                      button=white,black
+                      actbutton=black,white
+                      entry=white,black
+                    '
+                    
+                    whiptail --title " Node Error " --msgbox "Selected node appears to be down or address is incorrect. Please try again." 0 0
+                    clear
+
+                    sudo bash /usr/local/bin/os/reconfigure_monero
+                    clear
+                    sudo chvt 7
+                )
+            fi
+        fi
+        # Release the lock for the next cycle
+        exec 9>&-
+
+    elif $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null || [ "$ACTIVE_NODE" = "127.0.0.1:18081" ]; then
+        if [ -f /var/www/html/monero.down ]; then
+            sudo rm -f /var/www/html/monero.down
+            if [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
+                sudo chvt 7
+            fi
+        fi
+    fi
+
+    # Poll every 15 seconds
+    sleep 15
+done

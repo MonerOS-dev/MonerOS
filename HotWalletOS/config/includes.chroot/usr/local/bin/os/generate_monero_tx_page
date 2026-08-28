@@ -244,6 +244,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-color: #ff3333;
         }
         
+        .btn-sign {
+            color: var(--glow-green);
+            border-color: var(--glow-green);
+            margin-top: 10px;
+        }
+        .btn-sign:hover {
+            background: var(--glow-green);
+            color: #000;
+        }
+
+        .btn-undo {
+            color: #ff3333;
+            border-color: #ff3333;
+            margin-top: 10px;
+        }
+        .btn-undo:hover {
+            background: #ff3333;
+            color: #fff;
+        }
+        
         select {
             appearance: none;
             -webkit-appearance: none;
@@ -305,19 +325,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <button type="submit" class="btn-cmd btn-action" style="border-color: #ff3333; color: #fff; background: rgba(255,0,0,0.2);">OVERWRITE AND PROCEED</button>
             </form>
             <a href="index.php" class="btn-cmd btn-cancel">CANCEL AND GO BACK</a>
-
         <?php elseif ($message): ?>
-            <div class="response <?php echo $status_class; ?>">
-                <?php if ($status_class === "success"): ?>
-                    <p style="letter-spacing:1px; color: var(--glow-green); font-size: 0.75rem; font-weight: bold; margin-bottom: 10px;">GENERATE UNSIGNED XMR:</p>
+            <?php 
+            // Check if the message starts with "Transfer Address"
+            $is_success = str_starts_with($message, "Transfer Address");
+            ?>
+            
+            <div class="response <?php echo $is_success ? 'success' : $status_class; ?>">
+                <?php if ($is_success): ?>
+                    <p style="letter-spacing:1px; color: var(--glow-green); font-size: 0.75rem; font-weight: bold; margin-bottom: 10px;">Unsigned Transaction Created</p>
                     <pre><?php echo htmlspecialchars($message); ?></pre>
-                    <p style="font-size: 0.7rem; color: var(--silver-dark); margin-top: 10px; text-transform: uppercase;">Unsigned tx file saved. Transfer to Offline device.</p>
+                    <p style="font-size: 0.7rem; color: #ffffff; margin-top: 10px; text-transform: uppercase;">Unsigned Transaction Saved. Transfer to Offline device.</p>
                 <?php else: ?>
                     <p style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem;"><?php echo nl2br(htmlspecialchars($message)); ?></p>
                 <?php endif; ?>
             </div>
-            <a href="index.php" class="btn-cmd btn-action" style="margin-top:20px;">RETURN TO DASHBOARD</a>
             
+            <?php if ($is_success): ?>
+                <form action="undo.php" method="POST" style="margin-top: 10px;">
+                    <input type="hidden" name="address" value="<?php echo htmlspecialchars($address); ?>">
+                    <button type="submit" class="btn-cmd btn-undo">UNDO TRANSACTION</button>
+                </form>
+                
+                <a href="shutdown.php" class="btn-cmd btn-sign">SHUTDOWN TO SIGN</a>
+            <?php else: ?>
+                <a href="index.php" class="btn-cmd btn-action" style="margin-top:20px;">RETURN TO DASHBOARD</a>
+            <?php endif; ?>
         <?php else: ?>
             <form method="POST" autocomplete="off">
                 <div class="form-group">
@@ -341,11 +374,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="form-group">
                     <label>Development Contribution</label>
                     <select name="tip_percent">
-                        <option value="0.40">0.40% (Recommended)</option>
-                        <option value="0.30">0.30%</option>
-                        <option value="0.20">0.20%</option>
-                        <option value="0.10">0.10%</option>
-                        <option value="0">0.00% (No Contribution)</option>
+                        <option value="1.00">1.00% (Transaction Amount * 0.0100)</option>
+                        <option value="0.75">0.75% (Transaction Amount * 0.0075)</option>
+                        <option value="0.50">0.50% (Transaction Amount * 0.0050)</option>
+                        <option value="0.25">0.25% (Transaction Amount * 0.0025)</option>
+                        <option value="0">0.00% (No Development Contribution)</option>
                     </select>
                 </div>
                 <div class="form-group">

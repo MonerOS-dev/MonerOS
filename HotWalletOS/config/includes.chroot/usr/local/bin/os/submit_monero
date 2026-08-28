@@ -1,5 +1,30 @@
 #!/bin/bash
 
+# --- 1. REMAP ANSI PALETTE & WHIPTAIL COLORS ---
+export TERM=linux
+if [ "$TERM" = "linux" ]; then
+    # Color 4 (Blue) -> Bright Red (#ff0000)
+    echo -ne "\e]P4ff0000" 
+    # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+export NEWT_COLORS='
+  root=black,black
+  window=red,black
+  shadow=black,black
+  border=red,black
+  title=red,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,red
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
 BASE_DIR="/mnt/sallyport/watch_monero"
 S_COUNT=0
 F_COUNT=0
@@ -18,7 +43,9 @@ while read -r TX_PATH; do
     
     DIR=$(dirname "$TX_PATH")
     SIGNED_FILE=$(basename "$TX_PATH")
-    UNSIGNED_FILE=$(echo "$SIGNED_FILE" | sed 's/signed_tx_/unsigned_tx_/')
+    ID_PART="${SIGNED_FILE#signed_tx_}"
+    UNSIGNED_FILE="unsigned_tx_${ID_PART}"
+    SIGNED_RECORD_FILE="${DIR}/signed_record_${ID_PART}"
     ADDR_ID=$(basename "$DIR")
     PORT_FILE="${DIR}/rpc_port.cfg"
     KEY_IMAGE_FILE="${DIR}/key_images.json"
@@ -82,9 +109,22 @@ while read -r TX_PATH; do
         echo "Calculated TXID: <$TX_HASH>"
         ((S_COUNT++))
 
+        # --- UI POPUP: Show Record Data & TXID ---
+        if [ -f "$SIGNED_RECORD_FILE" ]; then
+            RECORD_CONTENT=$(cat "$SIGNED_RECORD_FILE")
+        else
+            RECORD_CONTENT="No saved record details found for this transaction."
+        fi
+
+        whiptail --title " Broadcast Successful " \
+                 --msgbox "Transaction Submitted to Network!\n\nTXID: $TX_HASH\n\n$RECORD_CONTENT" 0 0
+        clear
+
         echo "Executing post-execution house-cleaning loops..."
-        echo "Clearing out residual log stacks and transient runtime binaries..."
-        rm -f "${DIR}/monero-wallet-cli.log" "${DIR}/rpc_daemon.log" "${DIR}/tip.log" "${DIR}/signed_monero_tx" "$TX_PATH"
+        echo "Clearing out residual log stacks, transient runtime binaries, and receipt records..."
+        
+        # ADDED SIGNED_RECORD_FILE TO CLEANUP
+        rm -f "${DIR}/monero-wallet-cli.log" "${DIR}/rpc_daemon.log" "${DIR}/tip.log" "${DIR}/signed_monero_tx" "$TX_PATH" "$SIGNED_RECORD_FILE"
         
         if [ -f "${DIR}/${UNSIGNED_FILE}" ]; then
             echo "Matching raw unsigned source frame detected. Removing: ${UNSIGNED_FILE}"
@@ -120,7 +160,7 @@ while read -r TX_PATH; do
         fi
         
         ((F_COUNT++))
-        echo "Preserving raw signed file blocks for debug inspection. Removing volatile locks..."
+        echo "Preserving raw signed file blocks and records for debug inspection. Removing volatile locks..."
         rm -f "${DIR}/signed_monero_tx"
     fi
 done < <(find "$BASE_DIR" -type f -name "signed_tx_*" | sort -t '_' -k3 -n)
