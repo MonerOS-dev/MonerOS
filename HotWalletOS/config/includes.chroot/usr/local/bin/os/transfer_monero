@@ -60,6 +60,13 @@ TIP_PERCENT_CLEAN=$(echo "$TIP_PERCENT" | tr -cd '0-9.')
 # Precompute AMT_ATOMIC if numeric transfer
 if [[ "$COMMAND_OR_AMOUNT" =~ ^[0-9.]+$ ]]; then
     AMT_ATOMIC=$(echo "$COMMAND_OR_AMOUNT * 1000000000000" | bc | cut -d. -f1)
+    
+    # PRE-CHECK: Prevent sending more than total balance instantly
+    if [ "$(echo "$AMT_ATOMIC > $BALANCE_RAW" | bc)" -eq 1 ]; then
+        exec 1>&3 2>&4
+        echo "FAILURE: Amount requested ($COMMAND_OR_AMOUNT XMR) exceeds your available wallet balance."
+        exit 1
+    fi
 else
     AMT_ATOMIC=0
 fi
@@ -192,9 +199,60 @@ if [ -n "$TX_SET_HEX" ] && [ -f "outputs.hex" ]; then
     # 1. Allow PHP to list files and check existence in this wallet directory
     sudo setfacl -m g:www-data:rx "$OUTDIR"
     
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] STATUS: SUCCESS generated tx file." >> "$TIP_LOG"
+    # Parse total fees safely (Handles both sweep_all array 'fee_list' and transfer object 'fee')
+    TOTAL_FEE_ATOMIC=$(jq 'if .result.fee_list then (.result.fee_list | add) elif .result.fee then .result.fee else 0 end' "response.json")
+    
+    # FORCE 0 TIP IF AMOUNT IS BELOW THRESHOLD (< 0.005 XMR)
+    if [ "$CMD_LOWER" != "sweep_all" ] && [ "$(echo "$AMT_ATOMIC <= 5000000000" | bc)" -eq 1 ]; then
+        TIP_ATOMIC=0
+    fi
+    
+    # Determine accurate destination amount based on the command used
+    if [ "$CMD_LOWER" == "sweep_all" ]; then
+        if [ "${TIP_ATOMIC:-0}" -gt 0 ]; then
+            # Calculated earlier in the iterative split loop
+            ACTUAL_DEST_ATOMIC=$DEST_AMOUNT
+        else
+            # Native sweep_all: total balance minus network fees
+            ACTUAL_DEST_ATOMIC=$(echo "$BALANCE_RAW - $TOTAL_FEE_ATOMIC" | bc)
+        fi
+    else
+        # Fixed amount transfer
+        ACTUAL_DEST_ATOMIC=$AMT_ATOMIC
+    fi
+
+    # Calculate Total Amount in atomic units
+    TOTAL_ATOMIC=$(echo "$ACTUAL_DEST_ATOMIC + ${TIP_ATOMIC:-0} + $TOTAL_FEE_ATOMIC" | bc)
+
+    # Convert atomic units (piconeros) to readable XMR (8 decimal places)
+    XMR_DEST=$(awk -v amt="$ACTUAL_DEST_ATOMIC" 'BEGIN { printf "%.8f", amt / 1000000000000 }')
+    XMR_TIP=$(awk -v amt="${TIP_ATOMIC:-0}" 'BEGIN { printf "%.8f", amt / 1000000000000 }')
+    XMR_FEE=$(awk -v amt="$TOTAL_FEE_ATOMIC" 'BEGIN { printf "%.8f", amt / 1000000000000 }')
+    XMR_TOTAL=$(awk -v amt="$TOTAL_ATOMIC" 'BEGIN { printf "%.8f", amt / 1000000000000 }')
+
+    # Truncate the destination address for a cleaner display
+    SHORT_DEST="${DEST:0:8}...${DEST: -8}"
+
+    # Create the record file with ONLY the transaction data
+    RECORD_FILE="unsigned_record_${TIMESTAMP}"
+    cat <<EOF > "$RECORD_FILE"
+Transfer Address: $SHORT_DEST
+Transfer Amount: $XMR_DEST XMR
+Development Contribution: $XMR_TIP XMR
+Processing Fees: $XMR_FEE XMR
+Total Amount: $XMR_TOTAL XMR
+EOF
+
+    # Ensure PHP can read this new file
+    sudo setfacl -m u:www-data:r "$RECORD_FILE" 2>/dev/null || true
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] STATUS: SUCCESS generated tx file and $RECORD_FILE." >> "$TIP_LOG"
     rm -f "response.json" "$LOG_FILE"
-    msg "SUCCESS: Created unsigned_tx_${TIMESTAMP}"
+    
+    # Echo back to the PHP page: First the success message, a blank line, then the file contents
+    #msg "Unsigned Transaction Created"
+    #msg ""
+    msg "$(cat "$RECORD_FILE")"
 else
     msg "FAILURE: Final output validation checks encountered errors."
     cat "$LOG_FILE"

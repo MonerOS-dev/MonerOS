@@ -125,6 +125,10 @@ while true; do
         fi
         
         whiptail --title " Success " --msgbox "Vault restored and Sallyport mapped." 8 45
+        
+        # resync
+        sudo bash /usr/local/bin/os/refresh_monero
+        
         break
     else
         if ! whiptail --title " Error " --fb --yesno "Decryption failed. Header might be corrupt or password wrong. Try again?" 10 50; then

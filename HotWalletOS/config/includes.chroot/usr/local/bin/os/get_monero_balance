@@ -8,20 +8,17 @@ sudo mkdir -p "$BACKEND_DIR"
 
 
 
-
-
+# make this a standalone script
+: << 'COMMENT'
 
 # --- PRE-FLIGHT MASTER NODE HEALTH CHECK ---
 NODE_CACHE_FILE="/home/user/monero_node.txt"
-PROXY="127.0.0.1:9050" # Adjust to your Tor proxy if different
-
+PROXY="127.0.0.1:9050"
 if [ -f "$NODE_CACHE_FILE" ]; then
     ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
 else
     ACTIVE_NODE="127.0.0.1:18081"
 fi
-
-#echo "Verifying master node health before processing balances ($ACTIVE_NODE)..."
 
 if [[ "$ACTIVE_NODE" == "127.0.0.1"* ]] || [[ "$ACTIVE_NODE" == "localhost"* ]]; then
     MASTER_CURL="curl -m 15 -s -f"
@@ -31,19 +28,66 @@ else
     MASTER_CURL="curl -m 15 -s -f"
 fi
 
-if ! $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null; then
-    echo "[CRITICAL] Master node ($ACTIVE_NODE) is unreachable! Invoking recovery..."
-    whiptail --msgbox "Selected node appears to be down or address is incorrect. Please try again" 0 0 </dev/tty1 >/dev/tty1
-    sudo bash /usr/local/bin/os/reconfigure_monero
+# if REMOTE node is down
+if ! $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null && [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
     
-    # Re-read cache after recovery
-    [ -f "$NODE_CACHE_FILE" ] && ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
-    
-    if ! $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null; then
-        echo "[FATAL] Recovery failed or node still down. Aborting balance run."
-        exit 1
+    # 0. Drop a marker file to indicate the node is down for the web frontend
+    sudo touch /var/www/html/monero.down && sudo chown www-data:www-data /var/www/html/monero.down
+
+    # Run reconfigure wizard if not already running
+    if ! pgrep -f "reconfigure_monero" > /dev/null; then
+        
+        # 1. Switch the monitor to TTY1
+        sudo chvt 1
+        
+        # 2. Hijack TTY1 for input/output
+        exec < /dev/tty1 > /dev/tty1 2>&1
+        
+        # 3. Ensure terminal type is explicitly declared for newt/whiptail
+        export TERM=linux
+        
+        # 4. REMAP ANSI PALETTE
+        if [ "$TERM" = "linux" ]; then
+            echo -ne "\e]P4ff0000" 
+            echo -ne "\e]P7ffffff" 
+            clear
+        fi
+        
+        # 5. ASSIGN NEWT COLORS
+        export NEWT_COLORS='
+          root=black,black
+          window=blue,black
+          shadow=black,black
+          border=blue,black
+          title=blue,black
+          textbox=white,black
+          label=white,black
+          listbox=white,black
+          actlistbox=black,blue
+          button=white,black
+          actbutton=black,white
+          entry=white,black
+        '
+        
+        # 6. Display message box cleanly
+        whiptail --title " Node Error " --msgbox "Selected node appears to be down or address is incorrect. Please try again." 0 0
+        clear
+
+        sudo bash /usr/local/bin/os/reconfigure_monero
+        clear
+        
+        # Force the screen back to the GUI (TTY7)
+        sudo chvt 7
+    fi
+elif $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null || [ "$ACTIVE_NODE" = "127.0.0.1:18081" ]; then
+    if [ -f /var/www/html/monero.down ]; then
+        sudo rm -f /var/www/html/monero.down
+        if [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
+            sudo chvt 7
+        fi
     fi
 fi
+COMMENT
 
 
 
