@@ -16,6 +16,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Push to SourceForge
         env:
@@ -32,4 +33,5 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"
 
           git remote add sourceforge ssh://cryptowalletos@git.code.sourceforge.net/p/moneros/MonerOS.git
-          git push sourceforge --mirror
+          git push sourceforge --all --force
+          git push sourceforge --tags --force
