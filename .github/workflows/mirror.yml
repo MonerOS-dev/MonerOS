@@ -1,0 +1,35 @@
+name: Mirror to SourceForge
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+_  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to SourceForge
+        env:
+          SF_KEY: ${{ secrets.SF_SSH_PRIVATE_KEY }}
+        run: |
+          git config --global user.name "GitHub Actions Mirror"
+          git config --global user.email "actions@github.com"
+
+          mkdir -p ~/.ssh
+          echo "$SF_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan git.code.sourceforge.net >> ~/.ssh/known_hosts
+          
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+
+          git remote add sourceforge ssh://cryptowalletos@git.code.sourceforge.net/p/moneros/MonerOS.git
+          git push sourceforge --mirror
