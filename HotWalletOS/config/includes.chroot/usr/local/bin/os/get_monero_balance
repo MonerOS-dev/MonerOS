@@ -12,7 +12,7 @@ sudo mkdir -p "$BACKEND_DIR"
 : << 'COMMENT'
 
 # --- PRE-FLIGHT MASTER NODE HEALTH CHECK ---
-NODE_CACHE_FILE="/home/user/monero_node.txt"
+NODE_CACHE_FILE="/home/user/monero_node.cfg"
 PROXY="127.0.0.1:9050"
 if [ -f "$NODE_CACHE_FILE" ]; then
     ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')

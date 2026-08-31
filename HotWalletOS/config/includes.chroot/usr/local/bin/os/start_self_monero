@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 CONF_FILE="/home/user/monerod-tor.conf"
 CLEARNET_CONF="/home/user/monerod-clearnet.conf"
 LOG_FILE="/mnt/p4/monero/monerod.log"
-NODE_CACHE_FILE="/home/user/monero_node.txt"
+NODE_CACHE_FILE="/home/user/monero_node.cfg"
 MONERO_DIR="/mnt/p4/monero"
 MONERO_PATH=$(command -v monerod)
 
