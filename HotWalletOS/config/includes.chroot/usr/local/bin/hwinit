@@ -224,8 +224,10 @@ if command -v unclutter >/dev/null; then
     nohup unclutter -idle 3 -root >/dev/null 2>&1 &
 fi
 
-# 6. Launch Surf with GTK Dark Mode (Forces WebKit's blank canvas to draw black)
-sudo -u user DISPLAY=:0 GTK_THEME=Adwaita:dark nohup surf -K -F -N http://localhost > /dev/null 2>&1 &
+# 6. Launch Surf 
+sudo -u user DISPLAY=:0 WEBKIT_DISABLE_COMPOSITING_MODE=1 nohup surf -K -F -N http://localhost > /dev/null 2>&1 &
+# Old way to launch surf
+#sudo -u user DISPLAY=:0 nohup surf -K -F -N http://localhost > /dev/null 2>&1 &
 
 # 7. Wait for Surf window to map
 until wmctrl -l -x 2>/dev/null | grep -i "surf"; do
@@ -247,33 +249,29 @@ kill $XTERM_PID 2>/dev/null || true
 
 
 
-# --- Inject the Systemd Service ---
-    sudo tee /etc/systemd/system/monero-node-monitor.service > /dev/null << 'EOF'
+sudo tee /etc/systemd/system/monero-node-monitor.service > /dev/null << 'EOF'
 [Unit]
 Description=Monero Master Node Health Monitor
-After=network.target
+After=network.target tor.service local-fs.target
+Wants=network-online.target tor.service
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/os/monero_node_monitor
 Restart=always
-RestartSec=10
-
-# Bind service to TTY for whiptail interaction
-StandardInput=tty
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=no
+RestartSec=5
+KillMode=control-group
 User=root
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    # --- Reload and Enable ---
-    sudo chmod +x /usr/local/bin/os/monero_node_monitor
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now monero-node-monitor.service
-    echo -e "${WHITE}[*] Node Monitor injected and started successfully.${NC}"
+
+# --- Reload and Enable ---
+sudo chmod +x /usr/local/bin/os/monero_node_monitor
+sudo systemctl daemon-reload
+sudo systemctl enable --now monero-node-monitor.service
+echo -e "${WHITE}[*] Node Monitor injected and started successfully.${NC}"
     
     
     

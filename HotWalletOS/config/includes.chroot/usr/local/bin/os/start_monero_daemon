@@ -3,12 +3,11 @@
 
 BASE_DIR="/mnt/sallyport/watch_monero"
 START_PORT=18084
-CUSTOM_REMOTE_PATH="/mnt/external/remote_node.cfg"
-NODE_CACHE_FILE="/home/user/monero_node.txt"
+NODE_CACHE_FILE="/home/user/monero_node.cfg"
 TOR_PROXY="127.0.0.1:9050"
 LOCAL_TOR_NODE="127.0.0.1:18081"
 
-# Priority 1: Check cache file first
+# Check cache file
 if [ -f "$NODE_CACHE_FILE" ] && [ -n "$(tr -d '[:space:]' < "$NODE_CACHE_FILE")" ]; then
     TARGET_NODE=$(tr -d '\n\r ' < "$NODE_CACHE_FILE")
     echo "[*] Local cache file found. Using cached node: $TARGET_NODE"
@@ -22,22 +21,6 @@ if [ -f "$NODE_CACHE_FILE" ] && [ -n "$(tr -d '[:space:]' < "$NODE_CACHE_FILE")"
     else
         echo "[!] Remote Clearnet node detected from cache. Bypassing Tor proxy flag."
     fi
-
-# Priority 2: Fall back to custom remote path if cache doesn't exist
-elif [ -f "$CUSTOM_REMOTE_PATH" ] && [ -n "$(tr -d '[:space:]' < "$CUSTOM_REMOTE_PATH")" ]; then
-    TARGET_NODE=$(tr -d '\n\r ' < "$CUSTOM_REMOTE_PATH")
-    echo "[!] No cache found. Custom remote configuration found: $TARGET_NODE"
-    
-    RPC_PROXY_FLAG=""
-    if [[ "$TARGET_NODE" == *".onion"* ]]; then
-        echo "[*] Tor onion node detected. Enabling proxy flag."
-        RPC_PROXY_FLAG="--proxy $TOR_PROXY"
-    else
-        echo "[!] Clearnet host detected. Bypassing proxy flag."
-    fi
-    
-    # Save custom remote selection to cache
-    echo "$TARGET_NODE" > "$NODE_CACHE_FILE"
 fi
 
 # --- WAIT INDEFINITELY FOR LOCAL NODE IF TARGET IS LOCAL ---
@@ -149,16 +132,26 @@ for dir in "$BASE_DIR"/*/; do
         
         echo "[*] Launching persistent RPC for $ADDR_ID on port $CURRENT_PORT -> Target: $TARGET_NODE"
         
+        # 1. Create a secure temporary file
+        PASS_FILE=$(mktemp)
+        echo -n "$PASSWORD" > "$PASS_FILE"
+        
+        # 2. Give the 'user' account permission to read it
+        chown user:user "$PASS_FILE"
+        chmod 600 "$PASS_FILE"
+        
         # Start the background daemon pointing dynamically to verified destination
         sudo -u user monero-wallet-rpc \
             --wallet-file "$WALLET_FILE" \
-            --password "$PASSWORD" \
+            --password-file "$PASS_FILE" \
             --rpc-bind-port "$CURRENT_PORT" \
             --disable-rpc-login \
             --daemon-address "$TARGET_NODE" \
             $RPC_PROXY_FLAG \
             --trusted-daemon \
             --log-file "rpc_daemon.log" >/dev/null 2>&1 &
+            
+        sleep 3
             
         # Store the assigned port in the folder for other scripts to read dynamically
         echo "$CURRENT_PORT" > "${dir}rpc_port.cfg"
@@ -172,6 +165,7 @@ done
 
 # Clear the variable from memory immediately for security
 unset PASSWORD
+rm -f "$PASS_FILE"
 
 shopt -u nullglob
 echo "[+] All RPC daemons initiated and pointing to $TARGET_NODE."

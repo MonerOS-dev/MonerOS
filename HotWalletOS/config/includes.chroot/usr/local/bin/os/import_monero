@@ -112,24 +112,20 @@ echo "Port mapping complete. Proceeding to node selection..."
 
 # --- MASTER NODE SELECTION (SMART LOCAL DETECTION) ---
 LOCAL_TOR_NODE="127.0.0.1:18081"
-CUSTOM_REMOTE_PATH="/mnt/external/remote_node.cfg"
+NODE_CACHE_FILE="/home/user/monero_node.cfg"
 
 # Check if a local Monero daemon is actively listening on port 18081
 if ss -tln | grep -q ":18081 "; then
     echo "[*] Local Monero node detected active on 18081. Defaulting to Self-Sync."
     REMOTE_NODE="$LOCAL_TOR_NODE"
 # Otherwise, fall back to the remote config if it exists
-elif [ -f "$CUSTOM_REMOTE_PATH" ] && [ -n "$(cat "$CUSTOM_REMOTE_PATH" | tr -d '[:space:]')" ]; then
-    REMOTE_NODE=$(cat "$CUSTOM_REMOTE_PATH" | tr -d '\n\r ')
+elif [ -f "$NODE_CACHE_FILE" ] && [ -n "$(cat "$NODE_CACHE_FILE" | tr -d '[:space:]')" ]; then
+    REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
     echo "[*] Remote node configuration found: $REMOTE_NODE"
 else
     echo "[!] No local node active and no remote config found. Defaulting to: $LOCAL_TOR_NODE"
     REMOTE_NODE="$LOCAL_TOR_NODE"
 fi
-
-# Keep the cache file in sync for downstream script dependencies
-NODE_CACHE_FILE="/home/user/monero_node.txt"
-echo "$REMOTE_NODE" > "$NODE_CACHE_FILE"
 
 # Final verification
 echo "Active Node: $REMOTE_NODE"
@@ -179,12 +175,11 @@ while [ "$CONNECTED" = false ]; do
              # Re-run Master Node Selection in case recovery changed the node/config
              if ss -tln | grep -q ":18081 "; then
                  REMOTE_NODE="$LOCAL_TOR_NODE"
-             elif [ -f "$CUSTOM_REMOTE_PATH" ] && [ -n "$(cat "$CUSTOM_REMOTE_PATH" | tr -d '[:space:]')" ]; then
-                 REMOTE_NODE=$(cat "$CUSTOM_REMOTE_PATH" | tr -d '\n\r ')
+             elif [ -f "$NODE_CACHE_FILE" ] && [ -n "$(cat "$NODE_CACHE_FILE" | tr -d '[:space:]')" ]; then
+                 REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
              else
                  REMOTE_NODE="$LOCAL_TOR_NODE"
              fi
-             echo "$REMOTE_NODE" > "$NODE_CACHE_FILE"
 
              # Reset state to restart from the beginning
              ATTEMPT=0
@@ -312,9 +307,17 @@ EOF
             # Give Tor a brief moment to ensure circuit readiness
             sleep 2
             
+            # 1. Create a secure temporary file
+            PASS_FILE=$(mktemp)
+            echo -n "$PASSWORD" > "$PASS_FILE"
+            
+            # 2. Give the 'user' account permission to read it
+            chown user:user "$PASS_FILE"
+            chmod 600 "$PASS_FILE"
+            
             sudo -u user PASSWORD="$PASSWORD" monero-wallet-rpc \
                 --wallet-file "watchonly" \
-                --password "$PASSWORD" \
+                --password-file "$PASS_FILE" \
                 --rpc-bind-port "$RPC_PORT" \
                 --daemon-address "$REMOTE_NODE" \
                 $RPC_PROXY_FLAG \
@@ -323,7 +326,9 @@ EOF
                 --shared-ringdb-dir /home/user/.shared-ringdb \
                 --log-file "rpc_daemon.log" >/dev/null 2>&1 &
                 
+                
             sleep 3
+            
             
             # Optimized Health Verification Loop (Polling HTTP API directly)
             echo "Verifying Monero Wallet RPC initialization state..."
@@ -490,6 +495,7 @@ EOF
 done
 
 unset PASSWORD
+rm -f "$PASS_FILE"
 
 shopt -u nullglob
 

@@ -2,7 +2,7 @@
 # --- /usr/local/bin/os/monero_node_monitor.sh ---
 export PATH=/usr/bin:/bin:/usr/local/bin
 
-NODE_CACHE_FILE="/home/user/monero_node.txt"
+NODE_CACHE_FILE="/home/user/monero_node.cfg"
 PROXY="127.0.0.1:9050"
 
 while true; do
@@ -20,32 +20,36 @@ while true; do
         MASTER_CURL="curl -m 15 -s -f"
     fi
 
-    # If REMOTE node is down
-    if ! $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null && [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
+    # Check node status
+    if $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null || [ "$ACTIVE_NODE" = "127.0.0.1:18081" ]; then
+        NODE_UP=true
+    else
+        NODE_UP=false
+    fi
+
+    # If node is DOWN
+    if [ "$NODE_UP" = false ]; then
         
-        # Drop a marker file to indicate the node is down for the web frontend
+        # Drop frontend marker
         sudo touch /var/www/html/monero.down && sudo chown www-data:www-data /var/www/html/monero.down
 
-        # HARDENED CONCURRENCY LOCK
-        # Use file descriptor 9 to open a lock. If it succeeds, run the check.
-        exec 9>/run/lock/monero_reconfigure.lock
-        if flock -n 9; then
-            if ! pgrep -f "reconfigure_monero" > /dev/null; then
-                
-                # ENCAPSULATE TTY HIJACKING IN A SUBSHELL
-                # This ensures the daemon's main stdout isn't permanently redirected to TTY1
-                (
-                    sudo chvt 1
-                    exec < /dev/tty1 > /dev/tty1 2>&1
+        # If neither reconfigure nor whiptail is running, clear any stale flags from past runs
+        if ! pgrep -f "reconfigure_monero" > /dev/null && ! pgrep -f "whiptail" > /dev/null; then
+            sudo rm -f /run/lock/monero_user_intervened.flag
+            sudo rm -f /run/lock/monero_reconfigure.lock
+
+            # HARDENED CONCURRENCY LOCK
+            exec 9>/run/lock/monero_reconfigure.lock
+            if flock -n 9; then
+                sudo openvt -c 1 -s -f -- bash -c '
                     export TERM=linux
-                    
                     if [ "$TERM" = "linux" ]; then
                         echo -ne "\e]P4ff0000" 
                         echo -ne "\e]P7ffffff" 
                         clear
                     fi
                     
-                    export NEWT_COLORS='
+                    export NEWT_COLORS="
                       root=black,black
                       window=blue,black
                       shadow=black,black
@@ -58,29 +62,51 @@ while true; do
                       button=white,black
                       actbutton=black,white
                       entry=white,black
-                    '
+                    "
                     
-                    whiptail --title " Node Error " --msgbox "Selected node appears to be down or address is incorrect. Please try again." 0 0
+                    # Show initial error popup
+                    whiptail --title " Node Error " --msgbox "Selected node appears to be down or address is incorrect. Please try again." 0 0 || exit 1
+                    
+                    # TRACKER: User pressed Enter/OK past the initial error box
+                    sudo touch /run/lock/monero_user_intervened.flag
                     clear
 
-                    sudo bash /usr/local/bin/os/reconfigure_monero
+                    sudo bash /usr/local/bin/os/reconfigure_monero || exit 1
                     clear
-                    sudo chvt 7
-                )
+                    chvt 7
+                ' &
             fi
+            exec 9>&-
         fi
-        # Release the lock for the next cycle
-        exec 9>&-
 
-    elif $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null || [ "$ACTIVE_NODE" = "127.0.0.1:18081" ]; then
+    # If node is UP (RECOVERY)
+    elif [ "$NODE_UP" = true ]; then
         if [ -f /var/www/html/monero.down ]; then
             sudo rm -f /var/www/html/monero.down
-            if [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
-                sudo chvt 7
+        fi
+
+        # If user never passed the initial whiptail prompt, node came back on its own
+        if [ -f /run/lock/monero_user_intervened.flag ]; then
+            # User is actively inside reconfigure_monero, leave them alone
+            true
+        else
+            # Node recovered on its own while sitting at the whiptail prompt
+            if pgrep -f "whiptail" > /dev/null; then
+                sudo pkill -9 -f "whiptail" 2>/dev/null || true
             fi
+            if ! pgrep -f "reconfigure_monero" > /dev/null; then
+                if [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
+                    sudo chvt 7 </dev/tty1 &>/dev/null || true
+                fi
+            fi
+        fi
+
+        # Clean up locks and flags once completely idle
+        if ! pgrep -f "reconfigure_monero" > /dev/null && ! pgrep -f "whiptail" > /dev/null; then
+            sudo rm -f /run/lock/monero_reconfigure.lock
+            sudo rm -f /run/lock/monero_user_intervened.flag
         fi
     fi
 
-    # Poll every 15 seconds
     sleep 15
 done
