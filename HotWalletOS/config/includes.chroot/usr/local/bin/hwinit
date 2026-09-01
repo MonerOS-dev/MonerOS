@@ -1,4 +1,4 @@
-#!/bin/bash
+-#!/bin/bash
 
 ######################### This page should be edited in hwos_mods ###########################
 
@@ -249,29 +249,29 @@ kill $XTERM_PID 2>/dev/null || true
 
 
 
-sudo tee /etc/systemd/system/monero-node-monitor.service > /dev/null << 'EOF'
-[Unit]
-Description=Monero Master Node Health Monitor
-After=network.target tor.service local-fs.target
-Wants=network-online.target tor.service
+#sudo tee /etc/systemd/system/monero-node-monitor.service > /dev/null << 'EOF'
+#[Unit]
+#Description=Monero Master Node Health Monitor
+#After=network.target tor.service local-fs.target
+#Wants=network-online.target tor.service
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/os/monero_node_monitor
-Restart=always
-RestartSec=5
-KillMode=control-group
-User=root
+#[Service]
+#Type=simple
+#ExecStart=/usr/local/bin/os/monero_node_monitor
+#Restart=always
+#RestartSec=5
+#KillMode=control-group
+#User=root
 
-[Install]
-WantedBy=multi-user.target
-EOF
+#[Install]
+#WantedBy=multi-user.target
+#EOF
 
 # --- Reload and Enable ---
-sudo chmod +x /usr/local/bin/os/monero_node_monitor
-sudo systemctl daemon-reload
-sudo systemctl enable --now monero-node-monitor.service
-echo -e "${WHITE}[*] Node Monitor injected and started successfully.${NC}"
+#sudo chmod +x /usr/local/bin/os/monero_node_monitor
+#sudo systemctl daemon-reload
+#sudo systemctl enable --now monero-node-monitor.service
+#echo -e "${WHITE}[*] Node Monitor injected and started successfully.${NC}"
     
     
     
