@@ -9,9 +9,23 @@ You don't need to be an expert to setup your own security and privacy focused wa
 
 ---
 
-## Installation and User Manual
-* **[Read the Installation Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_Installation_Manual.pdf?format=raw)**
-* **[Read the User Manual](https://sourceforge.net/p/moneros/code/ci/main/tree/MonerOS_User_Manual.pdf?format=raw)**
+## Demonstration Video (3x speed)
+> **Note:** The only way to capture this process is via a capture card, which significantly reduces screen resolution. Actual system clarity is much better.
+
+There are three things happening in this video:
+
+1. Creating an unsigned transaction with HotWalletOS and shutting the system down.
+2. Booting ColdWalletOS, signing the unsigned transaction, and shutting the system down.
+3. Booting HotWalletOS again and submitting the signed transaction.
+
+![MonerOS Demo](https://raw.githubusercontent.com/MonerOS-dev/MonerOS/main/MonerOS_demo.gif)
+
+---
+
+## Installation, User and Update Manuals
+* **[Read the Installation Manual](https://github.com/MonerOS-dev/MonerOS/blob/main/Installation_Manual.pdf)**
+* **[Read the User Manual](https://github.com/MonerOS-dev/MonerOS/blob/main/User_Manual.pdf)**
+* **[Read the Update Manual](https://github.com/MonerOS-dev/MonerOS/blob/main/Update_Manual.pdf)**
 
 ## **The Power of Two: How It Works**
 
@@ -60,7 +74,7 @@ Bitcoin support is coming soon but will not be implemented until Monero has been
 
 ## **Hardware Requirements**
 
-**MonerOS** is designed to be lightweight and efficient. It can be deployed on most amd64 (64-bit) hardware, from older laptops to modern workstations. Self-Sync Nodes are best for maximum privacy but require significantly better hardware than Remote Nodes. Self-Sync Nodes also take days to be ready for use, whereas Remote Nodes are ready immediately.
+**MonerOS** is designed to be lightweight and efficient. It can be deployed on most amd64 (64-bit) hardware, from older laptops to modern workstations. Self-Sync Nodes are best for maximum privacy but require significantly better hardware than Remote Nodes. Self-Sync Nodes also take days to be ready for use, whereas Remote Nodes are ready almost immediately.
 
 ### **1. ColdWalletOS (The Vault)**
 * **CPU:** 2+ Cores
@@ -79,3 +93,83 @@ Bitcoin support is coming soon but will not be implemented until Monero has been
 | **Storage Media** | Any (Flash/HDD/SSD) | **SSD ONLY** |
 
 > **Note on Self-Sync:** A Solid State Drive (SSD) is strictly required for the Self-Sync option. Traditional Hard Drives (HDDs) cannot handle the I/O demands of blockchain synchronization.
+
+---
+
+## **Risks by node type**
+<table>
+  <tr>
+    <th style="background-color: #000000; color: #ffffff; padding: 8px; border: 1px solid #ccc;">Data Point / Metadata Risk</th>
+    <th style="background-color: #000000; color: #ffffff; padding: 8px; border: 1px solid #ccc;">Clearnet Node<br>(IP or .com address)</th>
+    <th style="background-color: #000000; color: #ffffff; padding: 8px; border: 1px solid #ccc;">Tor Node<br>(.onion address)</th>
+    <th style="background-color: #000000; color: #ffffff; padding: 8px; border: 1px solid #ccc;">Self-Sync<br>(Local node)</th>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFF00; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Your Real IP Address</b></td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Exposed</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFFFF; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>View Key & Private Keys</b></td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFFFF; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Imported Key Image Database</b></td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFFFF; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Balances & Tx Amounts</b></td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFFFF; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Sender & Receiver Addresses</b></td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFF00; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Wallet Age / Restore Height</b></td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Exposed</td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Exposed</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFF00; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Sync Schedule & Uptime</b></td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Exposed</td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Exposed</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFF00; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Transaction Origin (IP Linkage)</b></td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Exposed</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">Hidden</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFF00; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Block Withholding Risk (Eclipse)</b></td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Vulnerable</td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Vulnerable</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">None</td>
+  </tr>
+  <tr>
+    <td style="background-color: #FFFF00; color: #000000; padding: 8px; border: 1px solid #ccc;"><b>Transaction Censorship Risk</b></td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Vulnerable</td>
+    <td style="background-color: #EE0000; color: #000000; padding: 8px; border: 1px solid #ccc;">Vulnerable</td>
+    <td style="background-color: #47D459; color: #000000; padding: 8px; border: 1px solid #ccc;">None</td>
+  </tr>
+</table>
+
+---
+
+## **Coming Soon**
+
+- Bitcoin Support
+- Atomic Swap Support (XMR-BTC & BTC-XMR)
+- arm64 support (including rpi4 & rpi5)

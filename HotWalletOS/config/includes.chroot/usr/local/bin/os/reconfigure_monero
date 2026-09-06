@@ -108,8 +108,8 @@ if [ "$MONERO_EXISTS" = true ]; then
     
     # SCENARIO A: STORAGE DEPRIVED (MUST MANUALLY INPUT REMOTE TARGET)
     if [ "$TOTAL_DISK_BYTES" -lt "$REQUIRED_BYTES" ]; then
-    
-        MSG_LOW_SPACE="You do not have enough disk space (250GB+ required) to host a local node.\nYou must manually configure a custom remote node address to proceed or choose to shut down. Using a remote node can be a SERIOUS privacy risk unless you FULLY trust it."
+        
+        MSG_LOW_SPACE="You do not have enough disk space (250GB+ required) to host a local node.\nYou must manually configure a custom remote node address to proceed or choose to shut down. Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details."
     
         # Use wrapper ONLY for the button choice box
         if run_whiptail whiptail --title " Insufficient Space " \
@@ -122,7 +122,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                 # Native descriptor redirection bypasses script wrapper bugs for input boxes
                 # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
                 USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
-                    "Enter remote node address (e.g., 123.45.67.89:18081 or onion:18081):" 12 50 \
+                    "Enter remote node address (e.g., 123.45.67.89:18081 or xyz.com:18081 or xyz.onion:18081):" 12 50 \
                     "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
                 
                 if [ $? -ne 0 ]; then
@@ -156,8 +156,8 @@ if [ "$MONERO_EXISTS" = true ]; then
     
     # SCENARIO B: SUFFICIENT SPACE AVAILABLE (PROMPT FOR SETUP TYPE)
     else
-    
-        MSG_NODE="System storage is verified. Would you like to host your own node locally (Self-Sync) or connect to an remote node? Using a remote node can be a SERIOUS privacy risk unless you FULLY trust it. Self-Sync provides absolute privacy but can take up to 1-3 days to sync."
+        
+        MSG_NODE="System storage is verified. Would you like to host your own node locally (Self-Sync) or connect to an remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy but can take up to 1-3 days to sync."
     
         while true; do
             # Flip the buttons: "Remote Node" is now the default (Yes-button)
@@ -171,7 +171,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                 # Native descriptor redirection bypasses script wrapper bugs for input boxes
                 # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
                 USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
-                    "Enter remote node address (e.g., 123.45.67.89:18081 or onion:18081):" 12 50 \
+                    "Enter remote node address (e.g., 123.45.67.89:18081 or xyz.com:18081 or xyz.onion:18081):" 12 50 \
                     "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
                 
                 # If user presses CANCEL or ESC on the input box

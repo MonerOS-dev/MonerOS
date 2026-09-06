@@ -110,7 +110,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
 
         .total-container {
             background: linear-gradient(145deg, #1a1a1a, #050505);
-            border: 2px solid #444;
+            border: 3px solid #444;
             padding: 30px;
             border-radius: 4px;
             text-align: center;
@@ -126,7 +126,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             content: "";
             position: absolute;
             top: 0; left: 0; right: 0;
-            height: 2px;
+            height: 3px;
             background: linear-gradient(to right, transparent, var(--silver-mid), transparent);
         }
 
@@ -150,25 +150,39 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
         .main-table {
             width: 95vw; /* Always 95% of screen width */
             background: rgba(255, 255, 255, 0.02);
-            border: 2px solid #333;
+            border: 3px solid #333;
             border-radius: 8px;
             overflow: hidden;
             border-spacing: 0;
             box-sizing: border-box;
+            position: relative;
+        }
+
+        .main-table::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(to right, transparent, var(--silver-mid), transparent);
+            z-index: 1; /* Ensures the strip stays on top of background layers */
         }
 
         /* Balanced 4-column grid */
         .th-row, .tr-link {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr 1fr; 
-            border-bottom: 2px solid #222;
+            border-bottom: 3px solid #333;
             text-decoration: none;
             color: inherit;
         }
 
+        .tr-link:last-child {
+            border-bottom: none;
+        }
+
         .th-row {
             background: linear-gradient(to bottom, #333 0%, #111 100%);
-            border-bottom: 2px solid #444;
+            border-bottom: 3px solid #444;
         }
 
         .th {
@@ -231,7 +245,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             letter-spacing: 2px;
             transition: 0.3s;
             text-transform: uppercase;
-            border: 2px solid #444;
+            border: 3px solid #444;
             text-align: center;
             width: 100%;
             max-width: 320px; /* Prevents button from stretching entirely across huge TVs */
