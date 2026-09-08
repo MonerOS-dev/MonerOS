@@ -170,6 +170,4 @@ Bitcoin support is coming soon but will not be implemented until Monero has been
 
 ## **Coming Soon**
 
-- Bitcoin Support
-- Atomic Swap Support (XMR-BTC & BTC-XMR)
 - arm64 support (including rpi4 & rpi5)

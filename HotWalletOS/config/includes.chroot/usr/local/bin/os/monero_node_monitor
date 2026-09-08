@@ -24,7 +24,15 @@ while true; do
     if $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null || [ "$ACTIVE_NODE" = "127.0.0.1:18081" ]; then
         NODE_UP=true
     else
-        NODE_UP=false
+        # Pause 10 seconds to account for network spikes/quirks
+        sleep 10
+        
+        # Confirmation check: only flag as down if it fails twice
+        if $MASTER_CURL "http://$ACTIVE_NODE/get_info" > /dev/null; then
+            NODE_UP=true
+        else
+            NODE_UP=false
+        fi
     fi
 
     # If node is DOWN
