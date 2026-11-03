@@ -14,6 +14,21 @@ BACKEND_DIR="/var/www/backend/Bitcoin"
 # Ensure the backend directory exists
 sudo mkdir -p "$BACKEND_DIR"
 
+# Force electrum to use TOR
+electrum setconfig proxy socks5:127.0.0.1:9050
+
+# Check if local Fulcrum server is active and listening on port 50001
+if ss -tln | grep -q ":50001" || nc -z 127.0.0.1 50001 2>/dev/null; then
+    echo "=== Local Fulcrum server detected! Configuring Electrum to use local backend ==="
+    electrum setconfig oneserver true
+    electrum setconfig server 127.0.0.1:50001:t
+else
+    echo "=== Local Fulcrum server not running. Falling back to public servers over Tor ==="
+    electrum setconfig oneserver false
+    # Clear any previous local server pinning if it exists
+    electrum setconfig server "" 2>/dev/null || true
+fi
+
 # Ensure Electrum daemon is running
 if ! electrum daemon status > /dev/null 2>&1; then
     echo "Starting Electrum daemon..."
@@ -77,3 +92,4 @@ done
 
 echo "--------------------------------------------------"
 echo "All Bitcoin balances updated."
+sleep 1

@@ -1,0 +1,513 @@
+{% include 'header.html' %}
+{% from 'style.html' import input_arrow_down_svg, filter_apply_svg, circle_plus_svg, page_forwards_svg, page_back_svg %}
+{% from 'macros.html' import breadcrumb %}
+<div class="container mx-auto">
+ <section class="p-5 mt-5">
+  <div class="flex flex-wrap items-center -m-2">
+   <div class="w-full md:w-1/2 p-2">
+    {{ breadcrumb([
+      {'text': 'Home', 'url': '/'},
+      {'text': 'SMSG Addresses', 'url': '/smsgaddresses'}
+    ]) }}
+   </div>
+  </div>
+ </section>
+ <section class="py-4">
+  <div class="container px-4 mx-auto">
+   <div class="relative py-11 px-16 bg-coolGray-900 dark:bg-blue-500 rounded-md overflow-hidden">
+    <img class="absolute z-10 left-4 top-4" src="/static/images/elements/dots-red.svg" alt="">
+    <img class="absolute z-10 right-4 bottom-4" src="/static/images/elements/dots-red.svg" alt="">
+    <img class="absolute h-64 left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 object-cover" src="/static/images/elements/wave.svg" alt="">
+    <div class="relative z-20 flex flex-wrap items-center -m-3">
+     <div class="w-full md:w-1/2 p-3">
+      <h2 class="mb-6 text-4xl font-bold text-white tracking-tighter">Active SMSG Addresses</h2>
+      <p class="font-normal text-coolGray-200 dark:text-white">Check your SMSG address history and add new addresses.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+ </section>
+ {% include 'inc_messages.html' %}
+ <form method="post">
+{% if data.edit_address %}
+  <input type="hidden" name="edit_address_id" value="{{ data.addr_data.id }}">
+  <input type="hidden" name="edit_address" value="{{ data.addr_data.addr }}">
+  <section class="p-6 bg-body dark:bg-gray-700">
+   <div class="flex flex-wrap items-center">
+    <div class="w-full">
+     <h4 class="text-black dark:text-white text-2xl"><span class="bold">Edit Address:</span><span class="monospace"> {{ data.addr_data.addr }}</span></h4>
+    </div>
+   </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden">
+    <div class="border-coolGray-100">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mt-5 mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+         <div class="px-6">
+          <div class="w-full mt-6 pb-6 overflow-x-auto">
+           <table class="w-full min-w-max text-sm">
+            <thead class="uppercase">
+             <tr class="text-left">
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Settings</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Value</span>
+               </div>
+              </th>
+             </tr>
+            </thead>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6 monospace bold">Pubkey</td>
+             <td class="py-3 px-6 select-all monospace">{{ data.addr_data.pubkey }}</td>
+            </tr>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6">Active</td>
+             <td class="py-3 px-6">
+              <div class="relative">
+                {{ input_arrow_down_svg| safe }} 
+               <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="active_ind">
+                <option value="1" {% if data.addr_data.active_ind==1 %} selected{% endif %}>True</option>
+                <option value="0" {% if data.addr_data.active_ind==0 %} selected{% endif %}>False</option>
+               </select>
+              </div>
+             </td>
+            </tr>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6">Note</td>
+             <td class="py-3 px-6">
+              <input class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="addressnote" type="text" value="{{ data.addr_data.note }}" maxlength="30">
+             </td>
+            </tr>
+           </table>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden ">
+    <div class="pb-6 ">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 border-t border-gray-100 dark:border-gray-400 dark:bg-gray-500 rounded-bl-xl rounded-br-xl">
+         <div class="px-6">
+          <div class="flex flex-wrap justify-end">
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="saveaddr" value="Save Address" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Save Address</button>
+           </div>
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="cancel" value="Cancel" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Back</button>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  {% elif data.new_address %}
+  <section class="p-6 bg-body dark:bg-gray-700">
+   <div class="flex flex-wrap items-center">
+    <div class="w-full">
+     <h4 class="font-semibold text-black dark:text-white text-2xl">New Receiving Address</h4>
+    </div>
+   </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden">
+    <div class="border-coolGray-100">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mt-5 mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+         <div class="px-6">
+          <div class="w-full mt-6 pb-6 overflow-x-auto">
+           <table class="w-full min-w-max text-sm">
+            <thead class="uppercase">
+             <tr class="text-left">
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Details</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold py-3 px-6"></span>
+               </div>
+              </th>
+             </tr>
+            </thead>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6 bold">Note</td>
+             <td class="py-3 px-6">
+              <input class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="addressnote" type="text" value="" maxlength="30">
+             </td>
+            </tr>
+           </table>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden ">
+    <div class="pb-6 ">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 border-t border-gray-100 dark:border-gray-400 dark:bg-gray-500 rounded-bl-xl rounded-br-xl">
+         <div class="px-6">
+          <div class="flex flex-wrap justify-end">
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="createnewaddr" value="Create Address" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Create Address</button>
+           </div>
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="cancel" value="Cancel" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Back</button>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  {% elif data.new_send_address %}
+  <section class="p-6 bg-body dark:bg-gray-700">
+   <div class="flex flex-wrap items-center">
+    <div class="w-full">
+     <h4 class="font-semibold text-black dark:text-white text-2xl">Add Sending Address</h4>
+    </div>
+   </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden">
+    <div class="border-coolGray-100">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mt-5 mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+         <div class="px-6">
+          <div class="w-full mt-6 pb-6 overflow-x-auto">
+           <table class="w-full min-w-max text-sm">
+            <thead class="uppercase">
+             <tr class="text-left">
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Settings</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Value</span>
+               </div>
+              </th>
+             </tr>
+            </thead>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6 bold">Pubkey</td>
+             <td class="py-3 px-6">
+              <input class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0 monospace" name="addresspubkey" type="text" value="" maxlength="66">
+             </td>
+            </tr>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6 bold">Note</td>
+             <td class="py-3 px-6">
+              <input class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="addressnote" type="text" value="" maxlength="30">
+             </td>
+            </tr>
+           </table>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden ">
+    <div class="pb-6 ">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 border-t border-gray-100 dark:border-gray-400 dark:bg-gray-500 rounded-bl-xl rounded-br-xl">
+         <div class="px-6">
+          <div class="flex flex-wrap justify-end">
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="createnewsendaddr" value="Add Address" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Create Address</button>
+           </div>
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="cancel" value="Cancel" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Back</button>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  {% else %}
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden">
+    <div class="border-coolGray-100">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mt-5 mx-auto">
+        <div class="pt-6 pb-8 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+         <div class="px-6">
+          <div class="w-full mt-6 pb-6 overflow-x-auto">
+           <table class="w-full min-w-max text-sm">
+            <thead class="uppercase">
+             <tr class="text-left">
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Filters</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold py-3 px-6"></span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold py-3 px-6"></span>
+               </div>
+              </th>
+             </tr>
+            </thead>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6 bold"> Sort by: </td>
+             <td class="py-3 px-6">
+              <div class="relative">
+                {{ input_arrow_down_svg| safe }} 
+              <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="sort_by">
+               <option value="created_at" {% if filters.sort_by=='created_at' %} selected{% endif %}>Created At</option>
+              </select>
+            </div>
+             </td>
+             <td class="py-3 px-6">
+             <div class="relative">
+                {{ input_arrow_down_svg| safe }} 
+              <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="sort_dir">
+               <option value="asc" {% if filters.sort_dir=='asc' %} selected{% endif %}>Ascending</option>
+               <option value="desc" {% if filters.sort_dir=='desc' %} selected{% endif %}>Descending</option>
+              </select>
+                </div>
+             </td>
+            </tr>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6">Note</td>
+             <td class="py-3 px-6">
+              <input class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="filter_addressnote" type="text" value="{{ filters.addressnote }}" maxlength="30">
+             </td>
+             <td class="py-3 px-6"></td>
+            </tr>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6">Type</td>
+             <td class="py-3 px-6">
+             <div class="relative">
+                {{ input_arrow_down_svg| safe }}                 
+              <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="filter_addr_type">
+               <option{% if filters.addr_type=="-1" %} selected{% endif %} value="-1">Any</option>
+                {% for a in page_data.addr_types %}
+                <option{% if filters.addr_type==a[0] %} selected{% endif %} value="{{ a[0] }}">{{ a[1] }}</option>
+                {% endfor %}
+              </select>
+            </div>
+             </td>
+             <td class="py-4 pr-5"></td>
+            </tr>
+           </table>
+           </table>
+          </div>
+         </div>
+        </div>
+       </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden ">
+    <div class="pb-6 ">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 border-t border-gray-100 dark:border-gray-400 dark:bg-gray-500 rounded-bl-xl rounded-br-xl">
+         <div class="px-6">
+          <div class="flex flex-wrap justify-end">
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="clearfilters" value="Clear Filters" class="flex flex-wrap justify-center w-full px-4 py-2.5 font-medium text-sm hover:text-white dark:text-white dark:bg-gray-500 bg-coolGray-200 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-coolGray-200 dark:border-gray-400 rounded-md shadow-button focus:ring-0 focus:outline-none">Clear</button>
+           </div>
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="applyfilters" value="Submit" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            {{ filter_apply_svg | safe }}
+            Apply Filters</button>
+           </div>
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="shownewaddr" value="New Address" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            {{ circle_plus_svg | safe }}
+            New Address</button>
+           </div>
+           <div class="w-full md:w-auto p-1.5 ml-2">
+            <button name="showaddaddr" value="Add Sending Address" type="submit" class="flex flex-wrap justify-center w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            {{ circle_plus_svg | safe }}
+            Add Sending Address</button>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden">
+    <div class="border-coolGray-100">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mt-5 mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+         <div class="px-6">
+          <div class="w-full mt-6 pb-6 overflow-x-auto">
+           <table class="w-full min-w-max text-sm">
+            <thead class="uppercase">
+             <tr class="text-left">
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Address</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Type</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Active</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Created At</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Note</span>
+               </div>
+              </th>
+              <th class="p-0">
+               <div class="py-3 px-6 rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+                <span class="text-xs text-gray-600 dark:text-gray-300 font-semibold">Action</span>
+               </div>
+              </th>
+             </tr>
+            </thead>
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100">
+             <td class="py-3 px-6 bold monospace text-blue-500">{{ page_data.network_addr }}</td>
+             <td class="py-3 px-6 bold text-blue-500">NETWORK ADDRESS
+              <td />
+            </tr>
+            {% for sa in smsgaddresses %}
+            <tr class="opacity-100 text-gray-500 dark:text-gray-100 hover:bg-coolGray-200 dark:hover:bg-gray-600">
+             <td class="py-3 px-6 monospace bold select-all">{{ sa.addr }}</td>
+             <td class="py-3 px-6">{{ sa.type }}</td>
+             <td class="py-3 px-6">{{ sa.active_ind }}</td>
+             <td class="py-3 px-6 flex items-center px-46 whitespace-nowrap">
+              <svg alt="" class="w-5 h-5 rounded-full" xmlns="http://www.w3.org/2000/svg" height="20" width="20" viewBox="0 0 24 24">
+               <g stroke-linecap="round" stroke-width="2" fill="none" stroke="#6b7280" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="11"></circle>
+                <polyline points=" 12,6 12,12 18,12 " stroke="#6b7280"></polyline>
+               </g>
+              </svg>
+              <div class="py-3 pl-2">
+               {{ sa.created_at | formatts }}
+              </div>
+             </td>
+             <td class="py-3 px-6">{{ sa.note }}</td>
+             <td class="py-3 px-6">
+              <input class="inline-block w-20 py-1 px-2 font-medium text-center text-sm rounded-md bg-blue-500 text-white border border-blue-500 hover:bg-blue-600 transition duration-200" type="submit" name="editaddr_{{ sa.id }}" value="Edit">
+             </td>
+            </tr>
+            {% endfor %}
+           </table>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+  </section>
+  <section>
+   <div class="pl-6 pr-6 pt-0 pb-0 h-full overflow-hidden ">
+    <div class="pb-6 ">
+     <div class="flex flex-wrap items-center justify-between -m-2">
+      <div class="w-full pt-2">
+       <div class="container mx-auto">
+        <div class="pt-6 pb-6 bg-coolGray-100 border-t border-gray-100 dark:border-gray-400 dark:bg-gray-500 rounded-bl-xl rounded-br-xl">
+         <div class="px-6">
+          <div class="flex flex-wrap justify-end">
+           <div class="w-full md:w-auto p-1.5">
+            <button type="submit" name='pageback' value="Page Back" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-blue-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+             {{ page_back_svg| safe }}
+             <span>Previous</span>
+            </button>
+           </div>
+           <div class="flex items-center">
+            <div class="w-full md:w-auto p-1.5">
+             <p class="text-sm font-heading dark:text-white">Page: {{ filters.page_no }}</p>
+            </div>
+           </div>
+           <div class="w-full md:w-auto p-1.5">
+            <button type="submit" name='pageforwards' value="Page Forwards" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-blue-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+             <span>Next</span>
+            {{ page_forwards_svg| safe }}
+            </button>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </section>
+  <input type="hidden" name="pageno" value="{{ filters.page_no }}">
+  {% endif %}
+  <input type="hidden" name="formid" value="{{ form_id }}">
+ </form>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+{% include 'footer.html' %}
+</div>
+</body>
+</html>

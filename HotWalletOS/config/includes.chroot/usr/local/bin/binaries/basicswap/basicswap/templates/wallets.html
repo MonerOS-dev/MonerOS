@@ -1,0 +1,268 @@
+{% include 'header.html' %}
+{% from 'style.html' import circular_arrows_svg, withdraw_svg, utxo_groups_svg, create_utxo_svg, lock_svg, eye_show_svg %}
+
+<section class="py-3 px-4 mt-6">
+  <div class="lg:container mx-auto">
+   <div class="relative py-8 px-8 bg-coolGray-900 dark:bg-blue-500 rounded-md overflow-hidden">
+      <img class="absolute z-10 left-4 top-4" src="/static/images/elements/dots-red.svg" alt="dots-red">
+      <img class="absolute z-10 right-4 bottom-4" src="/static/images/elements/dots-red.svg" alt="dots-red">
+      <img class="absolute h-64 left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 object-cover" src="/static/images/elements/wave.svg" alt="wave">
+    <div class="relative z-20 flex flex-wrap items-center -m-3">
+     <div class="w-full md:w-1/2 p-3 h-48">
+      <h2 class="text-4xl font-bold text-white tracking-tighter">Wallets</h2>
+      <div class="flex items-center">
+        <h2 class="text-lg font-bold text-white tracking-tighter mr-2">Total Assets:</h2>
+        <button id="hide-usd-amount-toggle" class="flex items-center justify-center p-1 focus:ring-0 focus:outline-none">{{ eye_show_svg | safe }}</button>
+      </div>
+      <div class="flex items-baseline mt-2">
+        <div id="total-usd-value" class="text-5xl font-bold text-white"></div>
+        <div id="usd-text" class="text-sm text-white ml-1">USD</div>
+      </div>
+        <div id="total-btc-value" class="text-sm text-white mt-2"></div>
+     </div>
+      <div class="w-full md:w-1/2 p-3 p-6 container flex flex-wrap items-center justify-end items-center mx-auto">
+        <a class="rounded-full flex flex-wrap justify-center px-5 py-3 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border dark:bg-gray-500 dark:hover:bg-gray-700 border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none" href="/changepassword">{{ lock_svg | safe }}<span>Change/Set Password</span></a>
+     </div>
+    </div>
+   </div>
+  </div>
+ </section>
+ 
+ {% include 'inc_messages.html' %}
+
+ <section class="py-4">
+  <div class="container mx-auto">
+   <div class="flex flex-wrap -m-4">
+    {% for w in wallets %}
+    {% if w.havedata %}
+    {% if w.error %}<p>Error: {{ w.error }}</p>
+    {% else %}
+    <div class="w-full lg:w-1/3 p-4">
+     <div class="bg-gray-50 rounded overflow-hidden dark:bg-gray-500">
+      <div class="pt-6 px-6 mb-10 flex justify-between items-center">
+       <span class="inline-flex items-center justify-center w-9 h-10 bg-white-50 rounded">
+        <img class="h-9" src="/static/images/coins/{{ w.name }}.png" alt="{{ w.name }}">
+       </span>
+       <a class="py-2 px-3 bg-blue-500 text-xs text-white rounded-full hover:bg-blue-600" href="/wallet/{{ w.ticker }}">Manage Wallet</a>
+      </div>
+      <div class="px-6 mb-6">
+       <h4 class="text-xl font-bold dark:text-white">{{ w.name }}
+        <span class="inline-block font-medium text-xs text-gray-500 dark:text-white">({{ w.ticker }})</span>
+        {% if w.connection_type == 'electrum' %}
+        <span class="inline-block py-1 px-2 rounded-full bg-yellow-100 text-xs text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">Light Wallet (Electrum)</span>
+        {% else %}
+        <span class="inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-700 dark:bg-green-900 dark:text-green-300">Full Node</span>
+        {% endif %}
+        {% if use_tor %}
+        <span class="inline-block py-1 px-2 rounded-full bg-purple-100 text-xs text-purple-700 dark:bg-purple-900 dark:text-purple-300">TOR</span>
+        {% endif %}
+       </h4>
+       <p class="pt-2 text-xs text-gray-500 dark:text-gray-200">Version: <span class="electrum-version" data-coin="{{ w.name }}">{{ w.version }}</span> {% if w.updating %} <span class="hidden inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-700 dark:hover:bg-gray-700">Updating..</span>{% endif %}</p>
+       {% if w.electrum_server %}
+       <p class="text-xs text-gray-500 dark:text-gray-200">Server: <span class="electrum-server" data-coin="{{ w.name }}">{{ w.electrum_server }}</span></p>
+       {% endif %}
+      </div>
+      <div class="p-6 bg-coolGray-100 dark:bg-gray-600">
+          <div class="flex mb-2 justify-between items-center">
+              <h4 class="text-xs font-medium dark:text-white">Balance:</h4>
+              <div class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 coinname-value" data-coinname="{{ w.name }}" data-balance-type="balance">{{ w.balance }} {{ w.ticker }}</div>
+          </div>
+          <div class="flex mb-2 justify-between items-center">
+              <h4 class="text-xs font-medium dark:text-white ">{{ w.ticker }} USD value:</h4>
+              <div class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 usd-value" data-coinname="{{ w.name }}"></div>
+          </div>
+        {% if w.pending %}
+         <div class="flex mb-2 justify-between items-center">
+           <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Pending:</h4>
+           <span class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 coinname-value" data-coinname="{{ w.name }}">+{{ w.pending }} {{ w.ticker }}</span>
+          </div>
+         <div class="flex mb-2 justify-between items-center">
+           <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Pending USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 usd-value"></div>
+         </div>
+       {% endif %}
+       {% if w.pending_out %}
+         <div class="flex mb-2 justify-between items-center">
+           <h4 class="text-xs font-bold text-yellow-600 dark:text-yellow-400">Unconfirmed:</h4>
+           <span class="bold inline-block py-1 px-2 rounded-full bg-yellow-100 text-xs text-yellow-600 dark:bg-gray-500 dark:text-yellow-400 coinname-value" data-coinname="{{ w.name }}">-{{ w.pending_out }} {{ w.ticker }}</span>
+          </div>
+       {% endif %}
+       {% if w.cid == '1' %} {# PART #}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Blind Balance:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 coinname-value" data-coinname="{{ w.name }}" data-balance-type="blind_balance">{{ w.blind_balance }} {{ w.ticker }}</span>
+       </div>
+        <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-medium dark:text-white">Blind USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 usd-value"></div>
+        </div>
+       {% if w.blind_unconfirmed %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Blind Unconfirmed:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 coinname-value" data-coinname="{{ w.name }}" >+{{ w.blind_unconfirmed }} {{ w.ticker }}</span>
+       </div>
+      <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Blind Unconfirmed USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 usd-value"></div>
+        </div>
+       {% endif %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Anon Balance:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 coinname-value"  data-coinname="{{ w.name }}" data-balance-type="anon_balance">{{ w.anon_balance }} {{ w.ticker }}</span>
+       </div>
+        <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-medium dark:text-white">Anon USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 usd-value"></div>
+        </div>
+       {% if w.anon_pending %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Anon Pending:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 coinname-value" data-coinname="{{ w.name }}">
+        +{{ w.anon_pending }} {{ w.ticker }}</span>
+       </div>
+        <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Anon Pending USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 usd-value"></div>
+        </div>
+       {% endif %}
+       {% endif %} {# / PART #}
+       {% if w.cid == '3' and w.connection_type != 'electrum' %} {# LTC - MWEB not available in electrum mode #}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">MWEB Balance:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 coinname-value" data-coinname="{{ w.name }}" data-balance-type="mweb_balance">{{ w.mweb_balance }} {{ w.ticker }}</span>
+       </div>
+        <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-medium dark:text-white">MWEB USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 usd-value"></div>
+        </div>
+        {% if w.mweb_pending %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-bold text-green-500 dark:text-green-500">MWEB Pending:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 coinname-value"  data-coinname="{{ w.name }}">
+        +{{ w.mweb_pending }} {{ w.ticker }}</span>
+       </div>
+        <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-bold text-green-500 dark:text-green-500">MWEB Pending USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 usd-value"></div>
+        </div>
+       {% endif %}
+       {% endif %}
+       {# / LTC #}
+       {% if w.cid == '13' %} {# FIRO #}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Spark Balance:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 coinname-value" data-coinname="{{ w.name }}" data-balance-type="spark_balance">{{ w.spark_balance }} {{ w.ticker }}</span>
+       </div>
+        <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-medium dark:text-white">Spark USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200 usd-value"></div>
+        </div>
+        {% if w.spark_pending %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Spark Pending:</h4>
+        <span class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 coinname-value"  data-coinname="{{ w.name }}">
+        +{{ w.spark_pending }} {{ w.ticker }}</span>
+       </div>
+        <div class="flex mb-2 justify-between items-center">
+          <h4 class="text-xs font-bold text-green-500 dark:text-green-500">Spark Pending USD value:</h4>
+          <div class="bold inline-block py-1 px-2 rounded-full bg-green-100 text-xs text-green-500 dark:bg-gray-500 dark:text-green-500 usd-value"></div>
+        </div>
+       {% endif %}
+       {% endif %}
+       {# / FIRO #}
+       <hr class="border-t border-gray-100 dark:border-gray-500 my-5">
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Blocks:</h4>
+        <span class="inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200">{{ w.blocks }}{% if w.known_block_count %} / {{ w.known_block_count }}
+        {% endif %}
+      </span>
+       </div>
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Last Updated:</h4>
+        <span class="inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200">{{ w.lastupdated }}</span>
+       </div>
+       {% if w.bootstrapping %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Bootstrapping:</h4>
+        <span class="inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200">{{ w.bootstrapping }}</span>
+       </div>
+       {% endif %}
+       {% if w.encrypted %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Locked:</h4>
+        <span class="inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200">{{ w.locked }}</span>
+       </div>
+       {% endif %}
+       <div class="flex mb-2 justify-between items-center">
+        <h4 class="text-xs font-medium dark:text-white">Expected Seed:</h4>
+        <span class="inline-block py-1 px-2 rounded-full bg-blue-100 text-xs text-black-500 dark:bg-gray-500 dark:text-gray-200">{{ w.expected_seed }}</span>
+       </div>
+       {% if w.connection_type == 'electrum' %}
+       <div class="scan-status mt-10 p-2 rounded" data-coin="{{ w.name }}">
+        {% if w.scan_status and w.scan_status.in_progress %}
+        <div class="bg-blue-50 dark:bg-gray-500 p-2 rounded">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-blue-600 dark:text-blue-300">
+              <svg class="inline-block w-3 h-3 mr-1 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Scanning {{ w.scan_status.status }}
+            </span>
+            <span class="text-blue-500 dark:text-blue-200 font-medium">{{ w.scan_status.progress }}%</span>
+          </div>
+          <div class="w-full bg-blue-200 dark:bg-gray-700 rounded-full h-1 mt-1">
+            <div class="bg-blue-600 dark:bg-blue-400 h-1 rounded-full" style="width: {{ w.scan_status.progress }}%"></div>
+          </div>
+        </div>
+        {% elif w.electrum_synced %}
+        <div class="bg-green-50 dark:bg-gray-500 p-2 rounded">
+          <div class="flex items-center text-xs text-green-600 dark:text-green-400">
+            Electrum Wallet Synced ({{ w.electrum_height }})
+          </div>
+        </div>
+        {% else %}
+        <div class="bg-yellow-50 dark:bg-gray-500 p-2 rounded">
+          <div class="flex items-center text-xs text-yellow-600 dark:text-yellow-400">
+            Waiting for Electrum Server...
+          </div>
+        </div>
+        {% endif %}
+       </div>
+       {% else %}
+       <div class="flex justify-between mb-1 mt-10">
+        <span class="text-xs font-medium dark:text-gray-200">Blockchain</span>
+        <span class="text-xs font-medium dark:text-gray-200">{{ w.synced }}%</span>
+       </div>
+       <div class="w-full bg-gray-200 rounded-full h-1 " data-tooltip-target="tooltip-blocks{{loop.index}}">
+        <div class="{% if w.synced | float < 100 %} bg-red-500 sync-bar-color-change {% else %} bg-blue-500 {% endif %} h-1 rounded-full" style="width: {{ w.synced }}%;"></div>
+       </div>
+        <div class="flex justify-between mb-1 mt-5">
+        <span class="text-xs font-medium dark:text-gray-200">
+    <script>
+        if ({{ w.synced }} !== 100) {
+            document.write("<p class='bg-gray-50 rounded overflow-hidden dark:bg-gray-500 p-2.5 dark:text-white'>The order book/blockchain is currently syncing, offers will only display once the network has fully <b>100%</b> synced. Please wait until the process completes.</p>");
+        }
+    </script>
+      <div id="tooltip-blocks{{loop.index}}" role="tooltip" class="inline-block absolute invisible z-10 py-2 px-3 text-xs text-white {% if w.synced | float < 100 %} bg-red-500 sync-bar-color-change {% else %} bg-blue-500 {% endif %} rounded-lg shadow-sm opacity-0 transition-opacity duration-300 tooltip">
+      <div><span class="bold">Blocks: {{ w.blocks }}{% if w.known_block_count %} / {{ w.known_block_count }} {% endif %}</div>
+      <div class="tooltip-arrow pl-1" data-popper-arrow></div>
+      </div>
+        </span>
+       </div>
+       {% endif %}
+      </div>
+     </div>
+     {% endif %}
+     {% endif %}
+    </div>
+    {% endfor %}
+   </div>
+ </section>
+
+{% include 'footer.html' %}
+
+<script src="/static/js/pages/wallets-page.js"></script>
+
+</body>
+</html>

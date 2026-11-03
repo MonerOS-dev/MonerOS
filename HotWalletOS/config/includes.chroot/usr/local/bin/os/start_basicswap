@@ -1,0 +1,479 @@
+#!/bin/bash
+
+# Suppress kernel spam
+sudo dmesg -n 3
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P4ff0000" 
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+export NEWT_COLORS='
+    root=black,black
+    window=blue,black
+    shadow=black,black
+    border=blue,black
+    title=blue,black
+    textbox=white,black
+    label=white,black
+    listbox=white,black
+    actlistbox=black,blue
+    button=white,black
+    actbutton=black,white
+    entry=white,black
+'
+
+# Restore proper keyboard mode
+sudo loadkeys us 2>/dev/null || true
+stty sane -ixon
+
+# Determine boot disk path
+if df -h | grep -qE '/run/live/medium|/usr/lib/live/mount/medium'; then
+    LIVE_DEV=$(df /run/live/medium 2>/dev/null | tail -n1 | awk '{print $1}')
+    BOOT_DISK=$(lsblk -no PKNAME "$LIVE_DEV" | head -n1)
+else
+    ROOT_DEV=$(df / | tail -n1 | awk '{print $1}')
+    BOOT_DISK=$(lsblk -no PKNAME "$ROOT_DEV" | head -n1)
+fi
+[ -z "$BOOT_DISK" ] && BOOT_DISK=$(lsblk -nro NAME,TYPE | grep 'disk' | head -n1 | awk '{print $1}')
+DISK_PATH="/dev/$BOOT_DISK"
+
+# Expand target partition path
+if [[ "$DISK_PATH" == *"nvme"* || "$DISK_PATH" == *"mmcblk"* ]]; then
+    TARGET_PART4_PATH="${DISK_PATH}p4"
+else
+    TARGET_PART4_PATH="${DISK_PATH}4"
+fi
+
+# run whiptail in a way that allows arrow keys
+run_whiptail() {
+    local ecfile=$(mktemp)
+    script -q -c "$(printf '%q ' "$@"); echo \$? > $ecfile" /dev/null
+    local ec=$(cat "$ecfile")
+    rm -f "$ecfile"
+    return "$ec"
+}
+
+
+# Space Check on raw parent block device (32GB decimal required for basicswap)
+REQUIRED_BYTES=$((30 * 1000 * 1000 * 1000))
+TOTAL_DISK_BYTES=$(lsblk -bno SIZE "$DISK_PATH" | head -n1 | xargs)
+TOTAL_DISK_BYTES=${TOTAL_DISK_BYTES:-0}
+
+if [ "$TOTAL_DISK_BYTES" -lt "$REQUIRED_BYTES" ]; then
+    whiptail --fb --msgbox "You do not have enough disk space (32GB+ required) to enable Atomic Swaps." 12 50
+    exit 1
+fi
+
+if [ ! -f /mnt/sallyport/config/basicswap.en ]; then
+    # Ask the user if they want to enable atomic swaps since they have enough space
+    MSG_ENABLE_SWAPS="Would you like to setup BasicSwap? The initial setup typically takes up to 12 hours to complete on the average hardware, but allows you to convert Bitcoin to Monero and Monero to Bitcoin."
+    BTN_TEXT="Setup Swaps"
+else
+    # We've already synced so warn about enabling
+    MSG_ENABLE_SWAPS="Would you like to start BasicSwap? If not using an SSD, it is recommended to only start occasionally to keep synced and/or when planning on doing an atomic swap. If using an SSD, disk wear is not a concern and it's recommended to start BasicSwap on every boot."
+    BTN_TEXT="Start Swaps"
+fi
+
+if run_whiptail whiptail --title " Enable Atomic Swaps " \
+    --yesno "$MSG_ENABLE_SWAPS" 15 50 --fb \
+    --defaultno \
+    --yes-button "$BTN_TEXT" --no-button "Not Now"; then
+    echo "Proceeding with Atomic Swaps setup..."
+else
+    echo "Atomic Swaps setup declined by user. Exiting."
+    exit 0
+fi
+
+# Auto-create partition 4 if it doesn't exist yet
+if [ ! -b "$TARGET_PART4_PATH" ]; then
+    echo "Partition 4 not found. Creating partition..."
+    sudo umount "${DISK_PATH}"* > /dev/null 2>&1
+    
+    sudo fdisk -w always -W always "$DISK_PATH" <<EOF > /dev/null 2>&1
+n
+p
+4
+
+
+w
+EOF
+    sudo blockdev --rereadpt "$DISK_PATH" > /dev/null 2>&1
+    sudo partx -u "$DISK_PATH" > /dev/null 2>&1
+    sudo udevadm settle
+    sleep 5
+    
+    if [ -b "$TARGET_PART4_PATH" ]; then
+        sudo mkfs.ext4 -F "$TARGET_PART4_PATH" > /dev/null 2>&1
+    else
+        whiptail --fb --msgbox "Error: Failed to create partition 4 automatically." 10 50
+        exit 1
+    fi
+fi
+
+# Mount Partition 4
+sudo mkdir -p /mnt/p4
+if ! mountpoint -q /mnt/p4; then
+    sudo mount -o noatime,nodiratime,lazytime,commit=60 "$TARGET_PART4_PATH" /mnt/p4
+fi
+
+
+
+
+
+# ---------------------------------------------------------------------
+# ENCRYPTED CONTAINER SETUP (coinswaps.bin -> /mnt/coinswaps)
+# ---------------------------------------------------------------------
+SWAP_CONTAINER="/mnt/p4/coinswaps.bin"
+SWAP_MAPPER="swap_unlocked"
+SWAP_DATADIR="/mnt/coinswaps"
+
+# Safe cleanup of any stale mappings/mounts
+sudo umount "$SWAP_DATADIR" 2>/dev/null || true
+sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null || true
+
+
+if [ ! -f "$SWAP_CONTAINER" ]; then
+    while true; do
+        PASS1=$(whiptail --title " Atomic Swaps Vault Setup " --fb --nocancel --passwordbox "\nEnter Master Password for Your Atomic Swaps Container:\n " 11 50 3>&1 1>&2 2>&3)
+        
+        if [ -z "$PASS1" ]; then
+            whiptail --title " Error " --fb --msgbox "\nPassword cannot be empty! " 10 45
+            continue
+        fi
+
+        PASS2=$(whiptail --title " Verification " --fb --nocancel --passwordbox "\nPlease confirm your password:\n " 11 50 3>&1 1>&2 2>&3)
+        
+        if [ "$PASS1" == "$PASS2" ]; then
+            clear
+            echo
+            echo "Initializing Atomic Swaps Container..."
+            echo
+            
+            sudo dd if=/dev/zero of="$SWAP_CONTAINER" bs=1M count=20000 >/dev/null 2>&1 &
+            DD_PID=$!
+            
+            while kill -0 "$DD_PID" 2>/dev/null; do
+                CURRENT_SIZE=$(stat -c%s "$SWAP_CONTAINER" 2>/dev/null)
+                CURRENT_SIZE=${CURRENT_SIZE:-0}
+            
+                PCT=$(( CURRENT_SIZE * 100 / 20971520000 ))
+            
+                [ "$PCT" -gt 99 ] && PCT=99
+            
+                FILLED=$(( PCT * 33 / 100 ))
+                EMPTY=$(( 33 - FILLED ))
+            
+                BAR="$(printf '%*s' "$FILLED" '' | tr ' ' '#')"
+                BAR="$BAR$(printf '%*s' "$EMPTY" '' | tr ' ' '-')"
+            
+                printf "\r[%-33s] %3d%%" "$BAR" "$PCT"
+            
+                sleep 1
+            done
+            
+            wait "$DD_PID"
+            
+            printf "\r[#################################] 100%%\n"
+            echo
+
+            # Run setup steps silently after the write progress bar closes
+            printf "%s" "$PASS1" | sudo cryptsetup luksFormat --type luks2 "$SWAP_CONTAINER" -d - > /dev/null 2>&1
+            printf "%s" "$PASS1" | sudo cryptsetup open "$SWAP_CONTAINER" "$SWAP_MAPPER" -d - > /dev/null 2>&1
+            sudo mkfs.ext4 -q -F -L coinswaps "/dev/mapper/$SWAP_MAPPER" > /dev/null 2>&1
+            sudo mkdir -p "$SWAP_DATADIR"
+            sudo mount "/dev/mapper/$SWAP_MAPPER" "$SWAP_DATADIR"
+            sudo chown -R user:user "$SWAP_DATADIR"
+            break
+        else
+            whiptail --title " Error " --fb --msgbox "\nPasswords do not match. Try again. " 10 45
+        fi
+    done
+else
+    while true; do
+        PASS=$(whiptail --title " Unlock Atomic Swaps " --fb --nocancel --passwordbox "\nEnter Master Password:\n " 11 50 3>&1 1>&2 2>&3)
+        
+        sudo umount "$SWAP_DATADIR" > /dev/null 2>&1
+        sudo cryptsetup close "$SWAP_MAPPER" > /dev/null 2>&1
+
+        # Ensure mount directory exists BEFORE attempting to mount
+        sudo mkdir -p "$SWAP_DATADIR"
+
+        # Use printf -- to safely handle passwords with special characters without interpreting flags
+        if printf -- '%s' "$PASS" | sudo cryptsetup open "$SWAP_CONTAINER" "$SWAP_MAPPER" -d - > /dev/null 2>&1; then
+            if sudo mount "/dev/mapper/$SWAP_MAPPER" "$SWAP_DATADIR"; then
+                sudo chown -R user:user "$SWAP_DATADIR"
+                unset PASS
+                break
+            else
+                sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null
+                whiptail --title " Error " --fb --msgbox "\nFailed to mount encrypted container." 12 50
+            fi
+        else
+            whiptail --title " Error " --fb --msgbox "\nIncorrect password or decryption error." 12 40
+        fi
+    done
+fi
+
+sudo mkdir -p "$SWAP_DATADIR"
+sudo chown -R user:user "$SWAP_DATADIR"
+
+
+# ---------------------------------------------------------------------
+# PARSE MONERO NODE CONFIG & SETUP SOCAT TUNNEL (IF EXTERNAL/TOR)
+# ---------------------------------------------------------------------
+MONERO_CFG_FILE="/home/user/monero_node.cfg"
+
+if [ -f "$MONERO_CFG_FILE" ]; then
+    RAW_MONERO_NODE=$(cat "$MONERO_CFG_FILE" | tr -d '[:space:]')
+else
+    RAW_MONERO_NODE="127.0.0.1:18081" # Default fallback
+fi
+
+CLEAN_NODE="${RAW_MONERO_NODE#*://}"
+if [[ "$CLEAN_NODE" == *:* ]]; then
+    XMR_HOST="${CLEAN_NODE%%:*}"
+    XMR_PORT="${CLEAN_NODE##*:}"
+else
+    XMR_HOST="$CLEAN_NODE"
+    XMR_PORT="18081"
+fi
+
+# Kill any stale socat listeners on port 18081 first
+sudo pkill -f "socat.*18081" 2>/dev/null || true
+
+# Check if we need a socat proxy tunnel (i.e., not local)
+if [ "$XMR_HOST" != "127.0.0.1" ] && [ "$XMR_HOST" != "localhost" ]; then
+    echo "[*] External Monero node detected ($XMR_HOST:$XMR_PORT). Setting up local socat bridge..."
+
+    if [[ "$XMR_HOST" == *.onion ]]; then
+        # Option A: Tor Onion Address via SOCKS5 proxy
+        socat TCP-LISTEN:18081,bind=127.0.0.1,fork SOCKS4A:127.0.0.1:$XMR_HOST:$XMR_PORT,socksport=9050 &
+        CURL_PROXY_ARG="--socks5-hostname 127.0.0.1:9050"
+    else
+        # Option B: Public Clearnet Node (e.g., Cakewallet)
+        socat TCP-LISTEN:18081,bind=127.0.0.1,fork TCP:$XMR_HOST:$XMR_PORT &
+        CURL_PROXY_ARG=""
+    fi
+    
+    sleep 2
+else
+    CURL_PROXY_ARG=""
+fi
+
+# We always tell local tools to target 127.0.0.1:18081 because socat handles the forwarding
+XMR_RPC_HOST="127.0.0.1"
+XMR_RPC_PORT="18081"
+XMR_RPC_URL="http://127.0.0.1:18081/json_rpc"
+
+
+clear
+
+echo "[*] Cleaning up old processes and stale PID files..."
+sudo pkill -9 -f bitcoind 2>/dev/null || true
+sudo pkill -9 -f particld 2>/dev/null || true
+sudo pkill -9 -f basicswap-run 2>/dev/null || true
+
+rm -f "$SWAP_DATADIR/bitcoin/"*.pid
+rm -f "$SWAP_DATADIR/particl/"*.pid
+rm -f "$SWAP_DATADIR/monero/"*.pid
+sleep 2
+
+stty sane
+
+# ----------------------------------
+
+
+
+
+
+
+
+
+
+
+# ---------------------------------------------------------------------
+# 1. BASICSWAP PREPARATION WITH REAL-TIME FEEDBACK & RETRY
+# ---------------------------------------------------------------------
+if [ -d "$SWAP_DATADIR/bitcoin/blocks" ]; then
+    echo "Skipping preparation..."
+    clear
+else
+    MAX_PREP_RETRIES=5
+    PREP_RETRY_COUNT=0
+    PREP_SUCCESS=0
+
+    while [ $PREP_RETRY_COUNT -lt $MAX_PREP_RETRIES ]; do
+        PREP_RETRY_COUNT=$((PREP_RETRY_COUNT + 1))
+        echo -e "[*] Starting BasicSwap preparation (Attempt ${PREP_RETRY_COUNT} of ${MAX_PREP_RETRIES})..."
+
+        LOG_FILE="/tmp/basicswap_prep.log"
+        sudo rm -f "$LOG_FILE"
+        touch "$LOG_FILE"
+
+        # 1. Fetch current Monero block height reliably using Python
+        CURRENT_XMR_HEIGHT=$(curl -s http://127.0.0.1:18081/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}' -H 'Content-Type: application/json' | python3 -c "import sys, json; print(json.load(sys.stdin)['result']['height'])" 2>/dev/null)
+
+        # Enforce strict validation
+        if ! [[ "$CURRENT_XMR_HEIGHT" =~ ^[0-9]+$ ]] || [ "$CURRENT_XMR_HEIGHT" -le 0 ]; then
+            echo -e "\n[!] Error: Failed to fetch valid Monero block height from RPC. Retrying..."
+            sleep 3
+            continue
+        fi
+
+        # 2. Run preparation (running it synchronously or waiting for it ensures we catch errors)
+        XMR_RPC_HOST="127.0.0.1" \
+        XMR_RPC_PORT="18081" \
+            
+        # 1. Run standard prepare to bootstrap the config and binaries
+        /usr/local/bin/basicswap/venv/bin/basicswap-prepare \
+            --datadir="$SWAP_DATADIR" \
+            --withcoins=bitcoin,monero \
+            --btc-mode=electrum \
+            --xmrrestoreheight="$CURRENT_XMR_HEIGHT"
+        
+        # 2. Run prepare again with --enabletor to natively inject Tor settings into the generated json
+        /usr/local/bin/basicswap/venv/bin/basicswap-prepare \
+            --datadir="$SWAP_DATADIR" \
+            --enabletor
+            
+        # Automatically patch monero settings in basicswap.json right after preparation
+        sudo python3 -c '
+import json
+path = "/mnt/coinswaps/basicswap.json"
+with open(path, "r") as f:
+    data = json.load(f)
+if "monero" in data["chainclients"]:
+    data["chainclients"]["monero"]["manage_daemon"] = False
+    data["chainclients"]["monero"]["manage_wallet_daemon"] = True
+    data["chainclients"]["monero"]["rpcport"] = 18081
+with open(path, "w") as f:
+    json.dump(data, f, indent=4)
+'
+        
+        if [ $? -eq 0 ]; then
+            PREP_SUCCESS=1
+            echo "[+] BasicSwap preparation completed successfully."
+            break
+        else
+            echo "[!] Preparation failed on attempt $PREP_RETRY_COUNT. Check $LOG_FILE. Retrying..."
+            sleep 5
+        fi
+    done
+
+    if [ $PREP_SUCCESS -ne 1 ]; then
+        echo "Error: basicswap-prepare failed after ${MAX_PREP_RETRIES} attempts. Inspect /tmp/basicswap_prep.log for details."
+        exit 1
+    fi
+fi
+
+
+# Start BasicSwap Daemon in background cleanly
+sudo rm -f "/mnt/coinswaps/particl/debug.log"
+nohup /usr/local/bin/basicswap/venv/bin/basicswap-run --datadir="$SWAP_DATADIR" > "$SWAP_DATADIR/basicswap.log" 2>&1 &
+#echo "BasicSwap started in background. Logs: $SWAP_DATADIR/basicswap.log"
+
+clear
+echo
+echo "Initializing BasicSwap..."
+echo
+
+SEEN_PROGRESS=0
+
+tail -n0 -F "/mnt/coinswaps/particl/debug.log" | while IFS= read -r LINE; do
+
+    # Fully synced
+    if [[ "$LINE" == *"SecureMsg saved to inbox"* ]]; then
+        printf "\r[#################################] 100%%\n"
+        echo
+        echo "[+] BasicSwap sync complete!"
+        
+        # let next boot know we enabled basicswap
+        sudo mkdir -p /mnt/sallyport/config
+        if [ ! -f /mnt/sallyport/config/basicswap.en ]; then
+            sudo touch /mnt/sallyport/config/basicswap.en
+        fi
+
+        break
+    fi
+
+    # Switch to progress bar mode once progress= appears
+    if [[ "$LINE" == *"progress="* ]]; then
+
+        if [ "$SEEN_PROGRESS" -eq 0 ]; then
+            SEEN_PROGRESS=1
+            clear
+            echo
+            echo "Syncing Particl Blockchain..."
+            echo
+        fi
+
+        PROGRESS=$(echo "$LINE" | sed -n 's/.*progress=\([0-9.]*\).*/\1/p')
+
+        if [ -n "$PROGRESS" ]; then
+            PCT=$(awk "BEGIN { printf \"%.2f\", $PROGRESS * 100 }")
+        
+            FILLED=$(awk "BEGIN { printf \"%d\", $PROGRESS * 30 }")
+            [ "$FILLED" -gt 29 ] && FILLED=29
+        
+            EMPTY=$((30 - FILLED))
+        
+            BAR="$(printf '%*s' "$FILLED" '' | tr ' ' '#')"
+            BAR="$BAR$(printf '%*s' "$EMPTY" '' | tr ' ' '-')"
+        
+            printf "\r\033[K[%-30s] %6.2f%%" "$BAR" "$PCT"
+        fi
+
+    else
+        # Show latest status message on a single line
+        printf "\r\033[K%s" "${LINE:0:100}"
+    fi
+
+done
+
+# add file to enable button on webpage
+if [ ! -f /var/www/backend/bs.en ]; then
+    sudo touch /var/www/backend/bs.en
+fi
+
+
+
+# see minimum XMR to BTC
+# curl -s http://127.0.0.1:12700/json/offers | jq '[.[] | select((.coin_from | ascii_downcase) == "monero" and (.coin_to | ascii_downcase) == "bitcoin") | .min_bid_amount | tonumber] | min'
+
+# see minimum BTC to XMR
+# curl -s http://127.0.0.1:12700/json/offers | jq '[.[] | select((.coin_from | ascii_downcase) == "bitcoin" and (.coin_to | ascii_downcase) == "monero") | .min_bid_amount | tonumber] | min'
+
+# see bitcoin address
+# curl -s http://127.0.0.1:12700/json/wallets | jq -r '.BTC.deposit_address'
+
+# see monero deposit address
+# curl -s http://127.0.0.1:12700/json/wallets | jq -r '.XMR.deposit_address'
+
+# all
+# curl -s http://127.0.0.1:12700/json/wallets | jq '.'
+
+# find best xmr to btc based on amount to send (0.001)
+#curl -s http://127.0.0.1:12700/json/offers | jq --arg amt "0.001" '[.[] | select((.coin_from | ascii_downcase) == "monero" and (.coin_to | ascii_downcase) == "bitcoin" and (.min_bid_amount | tonumber) <= ($amt | tonumber)) | {id: .offer_id, rate: .rate, min_bid: .min_bid_amount, max_bid: .max_bid_amount}] | sort_by(.rate | tonumber) | reverse | .[0]'
+
+# find best btc to xmr based on amount to send (0.001)
+#curl -s http://127.0.0.1:12700/json/offers | jq --arg amt "0.001" '[.[] | select((.coin_from | ascii_downcase) == "bitcoin" and (.coin_to | ascii_downcase) == "monero" and (.min_bid_amount | tonumber) <= ($amt | tonumber)) | {id: .offer_id, rate: .rate, min_bid: .min_bid_amount, max_bid: .max_bid_amount}] | sort_by(.rate | tonumber) | .[0]'
+
+# important!
+#curl -s --digest --user xmr_wallet_user:xmr_wallet_pwd -X POST http://127.0.0.1:29998/json_rpc \
+#    -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}' \
+#    -H 'Content-Type: application/json' | jq '.'
+
+
+
+
+
+# launch basicswap
+#sudo -u user DISPLAY=:0 WEBKIT_DISABLE_COMPOSITING_MODE=1 nohup surf -K -f -N http://127.0.0.1:12700 > /dev/null 2>&1 &
+
+#start-dashboard

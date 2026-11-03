@@ -89,6 +89,23 @@ echo "Targeting Partition: $TARGET_PART" >> "$LOG_FILE"
 sudo mkdir -p "$EXT_MNT"
 sudo mount -t exfat -o uid=1000,gid=1000,fmask=0000,dmask=0000 "$TARGET_PART" "$EXT_MNT"
 
+# Copy over invoice scripts if they don't exist or if they have changed
+for script in create_invoice.bat create_invoice.py; do
+    src="/usr/local/bin/ext/$script"
+    dest="$EXT_MNT/$script"
+    
+    # Check if destination doesn't exist OR files differ in content
+    if [ ! -f "$dest" ] || ! cmp -s "$src" "$dest"; then
+        sudo cp "$src" "$dest"
+        echo "Updated $script on $EXT_MNT"
+    fi
+done
+
+# delete old version if present
+sudo rm -f "$EXT_MNT/create_invoice.sh"
+
+sync
+
 # Setup internet
 while true; do
     sleep 2
@@ -122,7 +139,7 @@ fi
 while true; do
     # 1. Capture password
     PASS=$(whiptail --title " $HW_VERSION " --passwordbox \
-        "\nEnter password to unlock Sallyport:" 12 50 \
+        "\nEnter Master Password:" 12 50 \
         --nocancel 3>&1 1>&2 2>&3)
 
     # 2. Pre-cleanup: Clean up any stale mapper nodes or partial hanging mounts safely
@@ -139,9 +156,15 @@ while true; do
             # Ensure standard user space can read/write the unlocked ext4 partition payload
             sudo chown -R 1000:1000 "$SALLY_MNT"
             
+            # --- SAVE HASHED PASSWORD TO CONFIG ---
+            echo -n "$PASS" | sha256sum | awk '{print $1}' | sudo tee /home/user/password.cfg > /dev/null
+            sudo chown 1000:1000 /home/user/password.cfg
+            sudo chmod 600 /home/user/password.cfg
+            # --------------------------------------
+
             echo "SUCCESS: $TARGET_FILE mounted safely." >> "$LOG_FILE"
             unset PASS
-            break 
+            break
         else
             echo "FAILED: Mount operation rejected." >> "$LOG_FILE"
             sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
@@ -178,14 +201,24 @@ fi
 echo "Searching for Monero Wallets..."
 sudo bash /usr/local/bin/os/spinup_monero || true
 
-
-
-
-
-
+echo "Searching for Bitcoin Wallets..."
+sudo bash /usr/local/bin/os/import_bitcoin || true
 
 echo "Getting Balances..."
 sudo bash /usr/local/bin/os/get_crypto_balances || true
+
+echo "Searching for Invoices..."
+sudo bash /usr/local/bin/os/load_invoices || true
+
+
+
+
+echo "Starting BasicSwap for Atomic Swap Capabilites..."
+sudo bash /usr/local/bin/os/start_basicswap || true
+
+
+
+
 
 ################################ Tor #########################################
 sudo bash /usr/local/bin/os/start_tor_server || true
@@ -247,9 +280,13 @@ kill $XTERM_PID 2>/dev/null || true
 
 
 
-
-
-sudo tee /etc/systemd/system/monero-node-monitor.service > /dev/null << 'EOF'
+MONERO_EXISTS=true
+BASE_DIR="/mnt/sallyport/watch_monero"
+if [ ! -d "$BASE_DIR" ] || [ $(find "$BASE_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 0 ]; then
+    MONERO_EXISTS=false
+fi
+if [ "$MONERO_EXISTS" = true ]; then
+    sudo tee /etc/systemd/system/monero-node-monitor.service > /dev/null << 'EOF'
 [Unit]
 Description=Monero Master Node Health Monitor
 After=network.target
@@ -266,12 +303,12 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-# --- Reload and Enable ---
-sudo chmod +x /usr/local/bin/os/monero_node_monitor
-sudo systemctl daemon-reload
-sudo systemctl enable --now monero-node-monitor.service
-echo -e "${WHITE}[*] Node Monitor injected and started successfully.${NC}"
-    
+    # --- Reload and Enable ---
+    sudo chmod +x /usr/local/bin/os/monero_node_monitor
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now monero-node-monitor.service
+    echo -e "${WHITE}[*] Node Monitor injected and started successfully.${NC}"
+fi
     
 
 exit 0

@@ -1,0 +1,268 @@
+const ConfigManager = (function() {
+    const state = {
+        isInitialized: false
+    };
+
+    function determineWebSocketPort() {
+        const wsPort =
+            window.ws_port ||
+            (typeof getWebSocketConfig === 'function' ? getWebSocketConfig().port : null) ||
+            '11700';
+        return wsPort;
+    }
+
+    const selectedWsPort = determineWebSocketPort();
+
+    const defaultConfig = {
+        cacheDuration: 10 * 60 * 1000,
+        requestTimeout: 60000,
+        wsPort: selectedWsPort,
+        cacheConfig: {
+            defaultTTL: 10 * 60 * 1000,
+            ttlSettings: {
+                prices: 5 * 60 * 1000,
+                chart: 5 * 60 * 1000,
+                historical: 60 * 60 * 1000,
+                volume: 30 * 60 * 1000,
+                offers: 2 * 60 * 1000,
+                identity: 15 * 60 * 1000
+            },
+            storage: {
+                maxSizeBytes: 10 * 1024 * 1024,
+                maxItems: 200
+            },
+            fallbackTTL: 24 * 60 * 60 * 1000
+        },
+        itemsPerPage: 50,
+        rateLimits: {
+            prices: {
+                requestsPerMinute: 50,
+                minInterval: 1200
+            }
+        },
+        retryDelays: [5000, 15000, 30000],
+        get coins() {
+            if (window.CoinManager) {
+                return window.CoinManager.getAllCoins();
+            }
+            console.warn('[ConfigManager] CoinManager not available, returning empty array');
+            return [];
+        },
+        chartConfig: {
+            colors: {
+                default: {
+                    lineColor: 'rgba(77, 132, 240, 1)',
+                    backgroundColor: 'rgba(77, 132, 240, 0.1)'
+                }
+            },
+            showVolume: false,
+            specialCoins: [''],
+            resolutions: {
+                year: { days: 365, interval: 'month' },
+                sixMonths: { days: 180, interval: 'daily' },
+                day: { days: 1, interval: 'hourly' }
+            },
+            currentResolution: 'year'
+        }
+    };
+
+    const publicAPI = {
+        ...defaultConfig,
+        initialize: function(options = {}) {
+            if (state.isInitialized) {
+                console.warn('[ConfigManager] Already initialized');
+                return this;
+            }
+            if (options) {
+                Object.assign(this, options);
+            }
+            if (window.CleanupManager) {
+                window.CleanupManager.registerResource('configManager', this, (mgr) => mgr.dispose());
+            }
+            this.utils = utils;
+            state.isInitialized = true;
+            console.log('ConfigManager initialized');
+            return this;
+        },
+        getCoinBackendId: function(coinName) {
+            if (!coinName) return null;
+            if (window.CoinManager) {
+                return window.CoinManager.getPriceKey(coinName);
+            }
+            if (window.CoinUtils) {
+                return window.CoinUtils.normalizeCoinName(coinName);
+            }
+            return typeof coinName === 'string' ? coinName.toLowerCase() : '';
+        },
+        coinMatches: function(offerCoin, filterCoin) {
+            if (!offerCoin || !filterCoin) return false;
+            if (window.CoinManager) {
+                return window.CoinManager.coinMatches(offerCoin, filterCoin);
+            }
+            if (window.CoinUtils) {
+                return window.CoinUtils.isSameCoin(offerCoin, filterCoin);
+            }
+            return offerCoin.toLowerCase() === filterCoin.toLowerCase();
+        },
+        update: function(path, value) {
+            const parts = path.split('.');
+            let current = this;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!current[parts[i]]) {
+                    current[parts[i]] = {};
+                }
+                current = current[parts[i]];
+            }
+            current[parts[parts.length - 1]] = value;
+            return this;
+        },
+        get: function(path, defaultValue = null) {
+            const parts = path.split('.');
+            let current = this;
+            for (let i = 0; i < parts.length; i++) {
+                if (current === undefined || current === null) {
+                    return defaultValue;
+                }
+                current = current[parts[i]];
+            }
+            return current !== undefined ? current : defaultValue;
+        },
+        dispose: function() {
+            state.isInitialized = false;
+            console.log('ConfigManager disposed');
+        }
+    };
+
+    const utils = {
+        formatNumber: function(number, decimals = 2) {
+            if (typeof number !== 'number' || isNaN(number)) {
+                console.warn('formatNumber received a non-number value:', number);
+                return '0';
+            }
+            try {
+                return new Intl.NumberFormat('en-US', {
+                    minimumFractionDigits: decimals,
+                    maximumFractionDigits: decimals
+                }).format(number);
+            } catch (e) {
+                return '0';
+            }
+        },
+        formatDate: function(timestamp, resolution) {
+            const date = new Date(timestamp);
+            const options = {
+                day: { hour: '2-digit', minute: '2-digit', hour12: true },
+                week: { month: 'short', day: 'numeric' },
+                month: { year: 'numeric', month: 'short', day: 'numeric' }
+            };
+            return date.toLocaleString('en-US', { ...options[resolution], timeZone: 'UTC' });
+        },
+        debounce: function(func, delay) {
+            let timeoutId;
+            return function(...args) {
+                clearTimeout(timeoutId);
+                timeoutId = CleanupManager.setTimeout(() => func(...args), delay);
+            };
+        },
+        formatTimeLeft: function(timestamp) {
+            const now = Math.floor(Date.now() / 1000);
+            if (timestamp <= now) return "Expired";
+            return this.formatTime(timestamp);
+        },
+        formatTime: function(timestamp, addAgoSuffix = false) {
+            const now = Math.floor(Date.now() / 1000);
+            const diff = Math.abs(now - timestamp);
+            let timeString;
+            if (diff < 60) {
+                timeString = `${diff} seconds`;
+            } else if (diff < 3600) {
+                timeString = `${Math.floor(diff / 60)} minutes`;
+            } else if (diff < 86400) {
+                timeString = `${Math.floor(diff / 3600)} hours`;
+            } else if (diff < 2592000) {
+                timeString = `${Math.floor(diff / 86400)} days`;
+            } else if (diff < 31536000) {
+                timeString = `${Math.floor(diff / 2592000)} months`;
+            } else {
+                timeString = `${Math.floor(diff / 31536000)} years`;
+            }
+            return addAgoSuffix ? `${timeString} ago` : timeString;
+        },
+        escapeHtml: function(unsafe) {
+            if (typeof unsafe !== 'string') {
+                console.warn('escapeHtml received a non-string value:', unsafe);
+                return '';
+            }
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        },
+        formatPrice: function(coin, price) {
+            if (typeof price !== 'number' || isNaN(price)) {
+                console.warn(`Invalid price for ${coin}:`, price);
+                return 'N/A';
+            }
+            if (price < 0.000001) return price.toExponential(2);
+            if (price < 0.001) return price.toFixed(8);
+            if (price < 1) return price.toFixed(4);
+            if (price < 10) return price.toFixed(3);
+            if (price < 1000) return price.toFixed(2);
+            if (price < 100000) return price.toFixed(1);
+            return price.toFixed(0);
+        },
+        getEmptyPriceData: function() {
+            return {
+                'bitcoin': { usd: null, btc: null },
+                'bitcoin-cash': { usd: null, btc: null },
+                'dash': { usd: null, btc: null },
+                'dogecoin': { usd: null, btc: null },
+                'decred': { usd: null, btc: null },
+                'namecoin': { usd: null, btc: null },
+                'litecoin': { usd: null, btc: null },
+                'particl': { usd: null, btc: null },
+                'pivx': { usd: null, btc: null },
+                'monero': { usd: null, btc: null },
+                'zano': { usd: null, btc: null },
+                'wownero': { usd: null, btc: null },
+                'firo': { usd: null, btc: null }
+            };
+        },
+        getCoinSymbol: function(fullName) {
+            if (window.CoinManager) {
+                return window.CoinManager.getSymbol(fullName) || fullName;
+            }
+            return fullName;
+        }
+    };
+    return publicAPI;
+})();
+
+window.logger = {
+    log: function(message) {
+        console.log(`[AppLog] ${new Date().toISOString()}: ${message}`);
+    },
+    warn: function(message) {
+        console.warn(`[AppWarn] ${new Date().toISOString()}: ${message}`);
+    },
+    error: function(message) {
+        console.error(`[AppError] ${new Date().toISOString()}: ${message}`);
+    }
+};
+
+window.config = ConfigManager;
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (!window.configManagerInitialized) {
+        ConfigManager.initialize();
+        window.configManagerInitialized = true;
+    }
+});
+
+if (typeof module !== 'undefined') {
+    module.exports = ConfigManager;
+}
+
+console.log('ConfigManager initialized');

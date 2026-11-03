@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# ---------------------------------------------------------
+#  UI THEME
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+export LC_ALL=C
+stty sane
+
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P459cbe8"
+    echo -ne "\e]P7ffffff"
+    clear
+fi
+
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
+VAULT_BASE="/mnt/vault"
+
+# ---------------------------------------------------------
+#  SCAN FOR WALLETS
+# ---------------------------------------------------------
+MENU_OPTIONS=()
+if [ -d "$VAULT_BASE/bitcoin" ]; then
+    while IFS= read -r dir; do
+        FULL_ADDR=$(basename "$dir")
+        [[ "$FULL_ADDR" =~ ^(blocks|chainstate|database|wallets|indexes|backups)$ ]] && continue
+        
+        MENU_ADDR_SHORT="${FULL_ADDR:0:8}...${FULL_ADDR: -8}"
+        MENU_OPTIONS+=("$FULL_ADDR" "[bitcoin] $MENU_ADDR_SHORT")
+    done < <(find "$VAULT_BASE/bitcoin" -mindepth 1 -maxdepth 1 -type d)
+fi
+
+if [ ${#MENU_OPTIONS[@]} -eq 0 ]; then
+    whiptail --title " Error " --msgbox "No Bitcoin wallets found in $VAULT_BASE/bitcoin." 8 50
+    exit 1
+fi
+
+CHOICE=$(whiptail --title " View Bitcoin Seed " --fb --notags --menu "\nSELECT WALLET:" 16 50 6 "${MENU_OPTIONS[@]}" 3>&1 1>&2 2>&3)
+[ $? -ne 0 ] && exit 0
+
+# ---------------------------------------------------------
+#  ELECTRUM SEED QUERY LOGIC (UNENCRYPTED)
+# ---------------------------------------------------------
+WALLET_DIR="$VAULT_BASE/bitcoin/$CHOICE"
+WALLET_PATH="$WALLET_DIR/wallet"
+
+if [ ! -f "$WALLET_PATH" ]; then
+    WALLET_PATH=$(find "$WALLET_DIR" -maxdepth 1 -type f ! -name "*.txt" ! -name ".*" | head -n 1)
+fi
+
+if [ -z "$WALLET_PATH" ] || [ ! -f "$WALLET_PATH" ]; then
+    whiptail --title " Error " --msgbox "Wallet file not found in $WALLET_DIR." 8 50
+    exit 1
+fi
+
+# Directly query seed offline without prompting for a password
+SEED_RAW=$(electrum --offline -w "$WALLET_PATH" getseed 2>/dev/null)
+
+if [ -z "$SEED_RAW" ]; then
+    whiptail --title " Error " --msgbox "Could not retrieve seed from Electrum wallet." 8 50
+    exit 1
+fi
+
+# ---------------------------------------------------------
+#  EXTRACT RESTORE DATE FROM VAULT
+# ---------------------------------------------------------
+WATCH_INFO="$VAULT_BASE/bitcoin/$CHOICE/watch_info.txt"
+RESTORE_DATE="N/A"
+if [ -f "$WATCH_INFO" ]; then
+    RESTORE_DATE=$(grep "RESTORE_DATE:" "$WATCH_INFO" | awk '{print $2}')
+fi
+
+# ---------------------------------------------------------
+#  FORMATTING: COMPACT 3-COLUMN GRID
+# ---------------------------------------------------------
+ADDR_SHORT="${CHOICE:0:8}...${CHOICE: -8}"
+FORMATTED_SEED="Address (shortened): $ADDR_SHORT\nRestore Date: $RESTORE_DATE\n\n"
+
+i=1
+for word in $SEED_RAW; do
+    FORMATTED_SEED+="$(printf "%-15s" "$i.$word")"
+    if (( i % 3 == 0 )); then 
+        FORMATTED_SEED+="\n" 
+    fi
+    ((i++))
+done
+
+whiptail --title " RECOVERY SEED " --msgbox "$(echo -e "$FORMATTED_SEED")" 16 50

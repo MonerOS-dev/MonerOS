@@ -96,6 +96,10 @@ if ! mountpoint -q "$FINAL_MOUNT"; then
     FOUND_DEV=$(sudo findfs LABEL="$TARGET_LABEL" 2>/dev/null)
     
     if [ -n "$FOUND_DEV" ] && sudo mount "$FOUND_DEV" "$EXT_MNT" >> "$LOG_FILE" 2>&1; then
+        # Copy over invoice scripts only if they don't already exist
+        sudo cp -n "/usr/local/bin/ext/create_invoice.bat" "$EXT_MNT"
+        sudo cp -n "/usr/local/bin/ext/create_invoice.sh" "$EXT_MNT"
+        
         if [ ! -f "$CONTAINER_PATH" ]; then
             echo "FAILURE: $CONTAINER_PATH not found on $TARGET_LABEL" >> "$LOG_FILE"
             exec /usr/local/bin/os/setup_menu

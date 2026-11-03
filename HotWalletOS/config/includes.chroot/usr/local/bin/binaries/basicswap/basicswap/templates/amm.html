@@ -1,0 +1,1534 @@
+{% include 'header.html' %}
+{% from 'style.html' import page_back_svg, page_forwards_svg, filter_clear_svg, filter_apply_svg, input_arrow_down_svg, arrow_right_svg, input_time_svg %}
+{% from 'macros.html' import page_header %}
+
+<script>
+  window.ammTablesConfig = {
+    stateData: {{ state_data|tojson|safe }},
+    configData: {{ config_data|tojson|safe }},
+    configContent: {{ config_content|tojson|safe }}
+  };
+</script>
+
+{{ page_header('Automated Market Maker', 'Automatically create offers and bids based on your configuration.', dark_bg='dark:bg-gray-500') }}
+
+<div class="xl:container mx-auto">
+{% include 'inc_messages.html' %}
+
+ <section>
+  <div class="lg:container mx-auto mt-6 lg:px-0 px-6">
+   <div class="flex flex-wrap -mx-4">
+    <div class="w-full px-4 mb-8">
+     <div class="p-6 px-0 lg:px-6 bg-white dark:bg-gray-500 rounded-xl shadow-md">
+      <div class="flex sm:pr-6 lg:pr-0 justify-end items-center">
+        <div class="flex space-x-2">
+          <button id="add-new-offer-btn" class="flex items-center px-4 py-2.5 bg-green-600 hover:bg-green-700 border-green-600 font-medium text-sm text-white border rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+            </svg>
+            Add Offer
+          </button>
+          {% if debug_ui_mode %}
+          <button id="add-new-bid-btn" class="flex items-center px-4 py-2.5 bg-green-600 hover:bg-green-700 border-green-600 font-medium text-sm text-white border rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+            </svg>
+            Add Bid
+          </button>
+          {% endif %}
+
+        </div>
+      </div>
+
+      <div class="pb-5">
+        <ul class="flex flex-wrap text-sm font-medium text-center text-gray-500 dark:text-gray-400" id="ammTabs" role="tablist">
+          <li class="mr-2" role="presentation">
+            <button class="inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="offers-tab" data-tabs-target="#offers-content" type="button" role="tab" aria-controls="offers" aria-selected="true">
+              Offers <span class="text-gray-500 dark:text-gray-400" id="offers-count">(0)</span>
+            </button>
+          </li>
+          {% if debug_ui_mode %}
+          <li class="mr-2" role="presentation">
+            <button class="inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="bids-tab" data-tabs-target="#bids-content" type="button" role="tab" aria-controls="bids" aria-selected="false">
+              Bids <span class="text-gray-500 dark:text-gray-400" id="bids-count">(0)</span>
+            </button>
+          </li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <div id="ammTabContent">
+        <div class="block" id="offers-content" role="tabpanel" aria-labelledby="offers-tab">
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-max">
+              <thead class="uppercase">
+                <tr>
+                  <th class="p-0">
+                    <div class="py-3 pl-4 justify-center rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Name</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Swap</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Amount & Min</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Rate & Receive</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Settings</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Status</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 rounded-tr-xl">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Actions</span>
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody id="amm-offers-body">
+                <tr>
+                  <td colspan="7" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">
+                    Loading offers data...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {% if debug_ui_mode %}
+        <div class="hidden" id="bids-content" role="tabpanel" aria-labelledby="bids-tab">
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-max">
+              <thead class="uppercase">
+                <tr>
+                  <th class="p-0">
+                    <div class="py-3 pl-4 justify-center rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Name</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Swap</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Amount & Balance</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Rate & Send</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Settings</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Status</span>
+                    </div>
+                  </th>
+                  <th class="p-0">
+                    <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 rounded-tr-xl">
+                      <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Actions</span>
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody id="amm-bids-body">
+                <tr>
+                  <td colspan="7" class="py-4 px-4 text-center text-gray-500 dark:text-gray-400">
+                    Loading bids data...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+ </section>
+
+ <section>
+  <div class="lg:container px-4 mx-auto">
+   <div class="flex flex-wrap -mx-4">
+    <div class="w-full lg:w-1/2 pr-4 mb-8">
+     <div class="p-6 bg-white dark:bg-gray-500 rounded-xl shadow-md">
+      <h3 class="mb-4 text-xl font-bold text-coolGray-900 dark:text-white">Control</h3>
+      <form method="post" autocomplete="off">
+       <div class="mb-4">
+        <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Status</label>
+        <div class="flex items-center">
+         <span class="inline-flex items-center px-3 py-2 text-sm font-medium rounded-lg
+          {% if current_status == 'running' %}
+          bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300
+          {% else %}
+          bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300
+          {% endif %}
+         ">
+          {{ current_status|capitalize }}
+         </span>
+        </div>
+       </div>
+
+       <div id="startup-feedback" class="mb-4 hidden">
+        <div class="bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
+          <div class="flex items-center">
+            <svg id="startup-spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <div>
+              <h4 class="text-sm font-medium text-blue-800 dark:text-blue-200" id="startup-title">Starting AMM...</h4>
+              <p class="text-sm text-blue-700 dark:text-blue-300 mt-1" id="startup-message">Validating configuration and checking requirements...</p>
+            </div>
+          </div>
+          <div id="startup-progress" class="mt-3">
+            <div class="bg-blue-200 dark:bg-blue-800 rounded-full h-2">
+              <div id="startup-progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+       </div>
+
+       {% if debug_ui_mode %}
+       <div class="mb-4">
+        <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Host</label>
+        <input type="text" name="host" value="{{ amm_host }}" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+       </div>
+
+       <div class="mb-4">
+        <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Port</label>
+        <input type="number" name="port" value="{{ amm_port }}" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+       </div>
+       {% else %}
+       <input type="hidden" name="host" value="{{ amm_host }}">
+       <input type="hidden" name="port" value="{{ amm_port }}">
+       {% endif %}
+
+       <div class="mb-4">
+        <label class="flex items-center">
+         <input type="checkbox" id="autostart-amm" name="autostart" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600" {% if amm_autostart %}checked{% endif %}>
+         <span class="ml-2 text-sm font-medium text-gray-900 dark:text-gray-300">Auto-start with BasicSwap</span>
+        </label>
+        <small class="text-xs text-gray-500 dark:text-gray-400 ml-6">Automatically start AMM when BasicSwap starts</small>
+       </div>
+
+       {% if debug_ui_mode %}
+       <div class="mb-4">
+        <label class="flex items-center">
+         <input type="checkbox" id="debug-mode" name="debug" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600" {% if amm_debug %}checked{% endif %}>
+         <span class="ml-2 text-sm font-medium text-gray-900 dark:text-gray-300">Debug Mode</span>
+        </label>
+       </div>
+       {% endif %}
+
+       <div class="flex flex-wrap gap-2">
+        <button type="submit" name="start" value="1" class="px-4 py-2.5 bg-green-600 hover:bg-green-700 font-medium text-sm text-white border border-green-600 rounded-md shadow-button focus:ring-0 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+         {% if current_status == 'running' %}disabled{% endif %}>
+         Start AMM
+        </button>
+        <button type="submit" name="stop" value="1" class="px-4 py-2.5 bg-red-900 hover:bg-red-700 font-medium text-sm text-white border border-red-800 rounded-md shadow-button focus:ring-0 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+         {% if current_status == 'stopped' %}disabled{% endif %}>
+         Stop
+        </button>
+       </div>
+
+       {% if debug_ui_mode %}
+       <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+         <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Process Management</h4>
+         <div class="flex flex-wrap gap-2">
+           <button type="submit" name="force_start" value="1" class="px-4 py-2.5 bg-yellow-500 hover:bg-yellow-600 font-medium text-sm text-white border border-yellow-500 rounded-md shadow-button focus:ring-0 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" title="Kill existing AMM processes and start fresh">
+             Force Start
+           </button>
+           <button type="submit" name="check_processes" value="1" class="inline-flex items-center px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium rounded-md shadow-sm focus:ring-0 focus:outline-none">
+             Check Processes
+           </button>
+           <button type="submit" name="kill_orphans" value="1" class="inline-flex items-center px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md shadow-sm focus:ring-0 focus:outline-none" title="Kill orphaned AMM processes">
+             Kill Orphans
+           </button>
+
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+           Use "Check Processes" to see running AMM processes. Use "Kill Orphans" to clean up duplicate processes. Use "Force Start" to automatically clean up and start fresh.
+         </p>
+       </div>
+       {% endif %}
+      </form>
+     </div>
+
+     {% if debug_ui_mode %}
+     <div class="mt-6 p-6 bg-white dark:bg-gray-500 rounded-xl shadow-md">
+      <h3 class="mb-4 text-xl font-bold text-coolGray-900 dark:text-white">Files</h3>
+      <div class="mb-4">
+       <p class="text-sm text-gray-700 dark:text-gray-300">
+        <strong>AMM Directory:</strong> {{ amm_dir }}
+       </p>
+       <p class="text-sm text-gray-700 dark:text-gray-300">
+        <strong>Config File:</strong> {{ config_path }}
+        {% if config_exists %}
+        <span class="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">Exists</span>
+        {% else %}
+        <span class="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300">Missing</span>
+        {% endif %}
+       </p>
+       <p class="text-sm text-gray-700 dark:text-gray-300">
+        <strong>State File:</strong> {{ state_path }}
+        {% if state_exists %}
+        <span class="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">Exists</span>
+        {% else %}
+        <span class="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300">Will be created</span>
+        {% endif %}
+       </p>
+       <p class="text-sm text-gray-700 dark:text-gray-300">
+        <strong>Script Module:</strong> {{ script_path }}
+        <span class="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">Integrated</span>
+       </p>
+      </div>
+
+     </div>
+     {% endif %}
+    </div>
+
+    <div class="w-full lg:w-1/2 pl-4 mb-8">
+     <div class="p-6 bg-white dark:bg-gray-500 rounded-xl shadow-md">
+      <h3 class="mb-4 text-xl font-bold text-coolGray-900 dark:text-white">Configuration</h3>
+
+      <div class="mb-4 border-b pb-5 border-gray-200 dark:border-gray-500">
+        <ul class="flex flex-wrap -mb-px text-sm font-medium text-center text-gray-500 dark:text-gray-400" role="tablist">
+          <li class="mr-2" role="presentation">
+            <button class="inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="json-tab" type="button" role="tab" aria-controls="json-content" aria-selected="true">JSON View</button>
+          </li>
+          <li class="mr-2" role="presentation">
+            <button class="inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="settings-tab" type="button" role="tab" aria-controls="settings-content" aria-selected="false">Global Settings</button>
+          </li>
+          <li class="mr-2" role="presentation">
+            <button class="{% if not debug_ui_mode %}hidden{% endif %} inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="overview-tab" type="button" role="tab" aria-controls="overview-content" aria-selected="false">Settings FAQ</button>
+          </li>
+        </ul>
+      </div>
+
+      <form method="post" autocomplete="off">
+
+        <div id="configTabContent">
+          <div class="block" id="json-content" role="tabpanel" aria-labelledby="json-tab">
+            <div id="amm-dirty-banner" class="hidden mb-4 p-3 rounded-md border border-yellow-300 bg-yellow-50 text-yellow-800 dark:bg-yellow-900 dark:border-yellow-700 dark:text-yellow-200 text-sm">
+              You have unsaved configuration changes while the AMM is running. Save the config for changes to take effect.
+            </div>
+            <div class="mb-4">
+              <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Config File (JSON)</label>
+              <textarea name="config_content" id="config_content" rows="20" class="font-mono bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" {% if not debug_ui_mode %}readonly{% endif %}>{{ config_content }}</textarea>
+
+
+              <div class="flex flex-col space-y-4 mt-4">
+                {% if debug_mode %}
+                <div class="flex items-center">
+                  <input type="checkbox" id="include_bids" name="include_bids" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded dark:bg-gray-700 dark:border-gray-600">
+                  <label for="include_bids" class="ml-2 block text-sm text-gray-900 dark:text-gray-300">Include bids in default config</label>
+                </div>
+                {% endif %}
+                <div class="flex justify-between">
+                  <button type="submit" name="create_default" value="true" id="create_default_btn" class="px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Create Default Config</button>
+                  {% if debug_ui_mode %}
+                  <button type="submit" name="save_config" value="true" id="save_config_btn" class="px-4 py-2.5 bg-green-600 hover:bg-green-700 font-medium text-sm text-white border border-green-600 rounded-md shadow-button focus:ring-0 focus:outline-none">Save Config</button>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hidden" id="settings-content" role="tabpanel" aria-labelledby="settings-tab">
+            <form method="post" id="global-settings-form">
+              <div class="space-y-6">
+                <h4 class="text-lg font-semibold text-gray-900 dark:text-white">Global Settings</h4>
+
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <h5 class="mb-3 text-base font-medium text-gray-900 dark:text-white">Timing Settings</h5>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label for="min_seconds_between_offers" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Min Seconds Between Offers</label>
+                      <input type="number" id="min_seconds_between_offers" name="min_seconds_between_offers" min="1" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                    </div>
+                    <div>
+                      <label for="max_seconds_between_offers" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Max Seconds Between Offers</label>
+                      <input type="number" id="max_seconds_between_offers" name="max_seconds_between_offers" min="1" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                    </div>
+                    <div>
+                      <label for="main_loop_delay" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Main Loop Delay (seconds)</label>
+                      <input type="number" id="main_loop_delay" name="main_loop_delay" min="1" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                    </div>
+                    {% if debug_ui_mode %}
+                    <div>
+                      <label for="min_seconds_between_bids" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Min Seconds Between Bids</label>
+                      <input type="number" id="min_seconds_between_bids" name="min_seconds_between_bids" min="1" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                    </div>
+                    <div>
+                      <label for="max_seconds_between_bids" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Max Seconds Between Bids</label>
+                      <input type="number" id="max_seconds_between_bids" name="max_seconds_between_bids" min="1" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                    </div>
+                    <div>
+                      <label for="prune_state_delay" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Prune State Delay (seconds)</label>
+                      <input type="number" id="prune_state_delay" name="prune_state_delay" min="1" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                    </div>
+                    <div>
+                      <label for="prune_state_after_seconds" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Prune State After (seconds)</label>
+                      <input type="number" id="prune_state_after_seconds" name="prune_state_after_seconds" min="1" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                    </div>
+                    {% else %}
+                    <input type="hidden" id="min_seconds_between_bids" name="min_seconds_between_bids">
+                    <input type="hidden" id="max_seconds_between_bids" name="max_seconds_between_bids">
+                    <input type="hidden" id="prune_state_delay" name="prune_state_delay">
+                    <input type="hidden" id="prune_state_after_seconds" name="prune_state_after_seconds">
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div class="flex justify-end">
+                  <button type="submit" name="save_global_settings" value="true" class="px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">Save Settings</button>
+                </div>
+                <input type="hidden" name="formid" value="{{ form_id }}">
+              </div>
+            </form>
+          </div>
+
+          <div class="hidden" id="overview-content" role="tabpanel" aria-labelledby="overview-tab">
+            {% if debug_ui_mode %}
+            <div class="mb-4">
+              <button type="button" class="collapsible-header flex items-center justify-between w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 focus:outline-none" data-target="general-settings-content">
+                <h4 class="text-lg font-semibold text-gray-900 dark:text-white">Settings</h4>
+                <svg class="w-5 h-5 transition-transform transform text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              <div id="general-settings-content" class="collapsible-content mt-2 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg hidden overflow-hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div class="break-words">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Offer Timing</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li class="break-words"><span class="font-semibold">min_seconds_between_offers:</span> Minimum delay between creating offers (default: 15)</li>
+                      <li class="break-words"><span class="font-semibold">max_seconds_between_offers:</span> Maximum delay between creating offers (default: 60)</li>
+                    </ul>
+                  </div>
+                  <div class="break-words">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Bid Timing</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li class="break-words"><span class="font-semibold">min_seconds_between_bids:</span> Minimum delay between creating bids (default: 15)</li>
+                      <li class="break-words"><span class="font-semibold">max_seconds_between_bids:</span> Maximum delay between creating bids (default: 60)</li>
+                    </ul>
+                  </div>
+                </div>
+
+                <div class="mt-4 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <div class="break-words">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Script Behavior</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li class="break-words"><span class="font-semibold">main_loop_delay:</span> Seconds between main loop iterations (10-1000)</li>
+                      <li class="break-words"><span class="font-semibold">auth:</span> Basicswap API auth string, e.g., "admin:password", for running createoffers.py standalone. Ignored when the AMM is started by BasicSwap (it uses a temporary token) or if client auth is not enabled.</li>
+                      <li class="break-words"><span class="font-semibold">wallet_port_override:</span> If needed, uncomment and set to override wallet API port (for testing only)</li>
+                    </ul>
+                  </div>
+                  <div class="break-words">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>State Management</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li class="break-words"><span class="font-semibold">prune_state_delay:</span> Seconds between pruning old state data (0 to disable)</li>
+                      <li class="break-words"><span class="font-semibold">prune_state_after_seconds:</span> How long to keep old state data (default: 7 days)</li>
+                    </ul>
+                  </div>
+                  <div class="break-words">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Automation Strategies</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li class="break-words"><span class="font-semibold">accept_all:</span> Auto-accept all bids (default)</li>
+                      <li class="break-words"><span class="font-semibold">accept_known:</span> Only accept bids from known identities</li>
+                      <li class="break-words"><span class="font-semibold">none:</span> Manual acceptance required</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <button type="button" class="collapsible-header flex items-center justify-between w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 focus:outline-none" data-target="offer-templates-content">
+                <h4 class="text-lg font-semibold text-gray-900 dark:text-white">Offer Templates</h4>
+                <svg class="w-5 h-5 transition-transform transform text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              <div id="offer-templates-content" class="collapsible-content mt-2 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg hidden overflow-hidden">
+                <p class="text-sm font-bold text-gray-600 dark:text-gray-400 mb-3 break-words">
+                  Offer templates define how the AMM creates offers. Each template can have the following settings:
+                </p>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div class="break-words">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Required Settings</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li class="break-words"><span class="font-semibold">name:</span> Template name, must be unique</li>
+                      <li class="break-words"><span class="font-semibold">enabled:</span> Set to true to enable this offer</li>
+                      <li class="break-words"><span class="font-semibold">coin_from:</span> Coin you send</li>
+                      <li class="break-words"><span class="font-semibold">coin_to:</span> Coin you receive</li>
+                      <li class="break-words"><span class="font-semibold">amount:</span> Amount to create the offer for</li>
+                      <li class="break-words"><span class="font-semibold">minrate:</span> Rate below which the offer won't drop</li>
+                      <li class="break-words"><span class="font-semibold">min_coin_from_amt:</span> Won't generate offers if wallet balance would drop below this (default: 0)</li>
+                      <li class="break-words">
+                        <span class="font-semibold">adjust_rates_based_on_market:</span> Controls how AMM determines competitive rates. See detailed explanation below.
+                      </li>
+                    </ul>
+                  </div>
+                  <div class="break-words">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Optional Settings</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li class="break-words"><span class="font-semibold">ratetweakpercent:</span> Modify the offer rate from the fetched value (can be negative)</li>
+                      <li class="break-words"><span class="font-semibold">amount_variable:</span> Whether bidder can set a different amount</li>
+                      <li class="break-words"><span class="font-semibold">address:</span> Address offer is sent from (auto = generate new address per offer)</li>
+                      <li class="break-words"><span class="font-semibold">offer_valid_seconds:</span> How long generated offers will be valid for (minimum 600 seconds)</li>
+                      <li class="break-words"><span class="font-semibold">swap_type:</span> Type of swap, defaults to "adaptor_sig"</li>
+                      <li class="break-words"><span class="font-semibold">min_swap_amount:</span> Minimum purchase quantity when offer amount is variable</li>
+                      <li class="break-words"><span class="font-semibold">amount_step:</span> <strong>Mandatory privacy feature</strong> that sets the offer size increment. Prevents revealing exact wallet balance by creating stepped offers. Must be >= 0.001 and <= your offer amount. Default: 0.001</li>
+                      <li class="break-words"><span class="font-semibold">offer_mode:</span> Offer lifecycle/tracking mode: <strong>"standing"</strong> (default), <strong>"one_time"</strong>, or <strong>"fixed_total"</strong> (plus <strong>"legacy"</strong>, config file only). See detailed explanation below.</li>
+                      <li class="break-words"><span class="font-semibold">total_to_sell:</span> Only used when <span class="font-semibold">offer_mode</span> is "fixed_total". Cumulative amount to sell across repeated offers before this template stops (must be >= amount)</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <button type="button" class="collapsible-header flex items-center justify-between w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 focus:outline-none" data-target="offer-tracking-faq-content">
+                <h4 class="text-lg font-semibold text-gray-900 dark:text-white">Offer Tracking Modes FAQ</h4>
+                <svg class="w-5 h-5 transition-transform transform text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              <div id="offer-tracking-faq-content" class="collapsible-content mt-2 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg hidden">
+                <p class="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">
+                  The <strong>offer_mode</strong> setting controls how an offer template's lifecycle is tracked and when it stops repeating. Here are all available options:
+                </p>
+
+                <div class="space-y-4">
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Standing</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"standing"</code> (default)<br>
+                      <strong>Behavior:</strong> Repeats indefinitely. New offers are skipped while the wallet balance would drop below <strong>min_coin_from_amt</strong>, which acts as the offer's wallet reserve floor.<br>
+                      <strong>Best for:</strong> Continuous, always-on market making.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">One-time</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"one_time"</code><br>
+                      <strong>Behavior:</strong> Creates a single offer for <strong>amount</strong>. Once it is fully filled (or revoked), the template does not create another offer.<br>
+                      <strong>Best for:</strong> Selling a single, fixed batch exactly once.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Fixed total</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"fixed_total"</code><br>
+                      <strong>Behavior:</strong> Repeats, creating offers of <strong>amount</strong> each time, until the cumulative amount sold reaches <strong>total_to_sell</strong>. The amount sold so far is tracked across all swaps for the template.<br>
+                      <strong>Best for:</strong> Capped or inventory-limited selling campaigns.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Legacy</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"legacy"</code> (config file only, not selectable in the UI)<br>
+                      <strong>Behavior:</strong> No budget/fill tracking row is created; offers repeat using the original pre-tracking behavior. A variable-amount legacy offer can be filled repeatedly until it expires or the wallet can no longer fund swaps.<br>
+                      <strong>Best for:</strong> Existing configs that should keep their current behavior unchanged. Editing a legacy template in the UI converts it to "standing".
+                    </p>
+                  </div>
+                </div>
+
+                <div class="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <h6 class="font-semibold text-gray-900 dark:text-gray-200 mb-2">Important Notes</h6>
+                  <ul class="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                    <li>• If <strong>offer_mode</strong> is not set, templates default to <strong>"standing"</strong></li>
+                    <li>• Tracking state (amount filled, fills completed) is persisted per-offer and is self-correcting: a failed or cancelled bid simply drops out of the in-flight total</li>
+                    <li>• <strong>total_to_sell</strong> is only read when <strong>offer_mode</strong> is "fixed_total", and must be greater than or equal to <strong>amount</strong></li>
+                    <li>• For "standing" offers, <strong>min_coin_from_amt</strong> doubles as the minimum wallet reserve used to decide when to stop reposting. A value of 0 means no reserve floor (sell until the wallet is empty)</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <button type="button" class="collapsible-header flex items-center justify-between w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 focus:outline-none" data-target="bid-templates-content">
+                <h4 class="text-lg font-semibold text-gray-900 dark:text-white">Bid Templates</h4>
+                <svg class="w-5 h-5 transition-transform transform text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              <div id="bid-templates-content" class="collapsible-content mt-2 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg hidden">
+                <p class="text-sm font-bold text-gray-600 dark:text-gray-400 mb-3">
+                  Bid templates define how the AMM creates bids. Each template can have the following settings:
+                </p>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Required Settings</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li><span class="font-semibold">name:</span> Template name, must be unique</li>
+                      <li><span class="font-semibold">enabled:</span> Set to true to enable this bid</li>
+                      <li><span class="font-semibold">coin_from:</span> Coin you receive</li>
+                      <li><span class="font-semibold">coin_to:</span> Coin you send</li>
+                      <li><span class="font-semibold">amount:</span> Amount to bid (minimum: 0.001)</li>
+                      <li><span class="font-semibold">max_rate:</span> Maximum rate for bids</li>
+                      <li><span class="font-semibold">min_coin_to_balance:</span> Won't send bids if wallet amount would drop below this</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300"><strong>Optional Settings</strong></p>
+                    <ul class="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                      <li><span class="font-semibold">max_concurrent:</span> Maximum number of bids to have active at once (default: 1)</li>
+                      <li><span class="font-semibold">amount_variable:</span> Can send bids below the set amount where possible</li>
+                      <li><span class="font-semibold">max_coin_from_balance:</span> If needed, uncomment and set to limit bids when wallet amount is above this</li>
+                      <li><span class="font-semibold">address:</span> Address bid is sent from (auto = generate new address per bid)</li>
+                      <li><span class="font-semibold">min_swap_amount:</span> Minimum swap amount for variable amount bids</li>
+                      <li><span class="font-semibold">use_balance_bidding:</span> If true, calculates bid amount as (wallet_balance - offer_min_amount) instead of using template amount</li>
+                      <li><span class="font-semibold">offers_to_bid_on:</span> Filter offers to bid on: <strong>"auto_accept_only"</strong> (only auto-accept offers, default), <strong>"all"</strong> (any offer), <strong>"known_only"</strong> (known identities only)</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {% endif %}
+
+            <div class="mb-4">
+              <button type="button" class="collapsible-header flex items-center justify-between w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 focus:outline-none" data-target="rate-adjustment-faq-content">
+                <h4 class="text-lg font-semibold text-gray-900 dark:text-white">Rate Adjustment Settings FAQ</h4>
+                <svg class="w-5 h-5 transition-transform transform text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              <div id="rate-adjustment-faq-content" class="collapsible-content mt-2 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg hidden">
+                <p class="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">
+                  The <strong>adjust_rates_based_on_market</strong> setting controls how your AMM determines competitive rates for offers. Here are all available options:
+                </p>
+
+                <div class="space-y-4">
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Oracle</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">false</code><br>
+                      <strong>Behavior:</strong> Uses only the oracle rate, from the enabled oracles in settings. Fails if no oracle has a rate.<br>
+                      <strong>Best for:</strong> Stable, external market pricing without local market influence.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Orderbook</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"only"</code><br>
+                      <strong>Behavior:</strong> Uses only Orderbook offers that are as or more permissive than your automation_strategy. Fails if no matches.<br>
+                      <strong>Best for:</strong> Competing only with other market makers.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Either</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">true</code><br>
+                      <strong>Behavior:</strong> Uses the higher rate between the oracle and market offers. Fails only if BOTH sources are unavailable.<br>
+                      <strong>Best for:</strong> Balanced approach with fallback protection.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Both</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"all"</code><br>
+                      <strong>Behavior:</strong> Uses the higher rate between the oracle and market offers. Fails if EITHER source is unavailable.<br>
+                      <strong>Best for:</strong> Strict validation requiring both external and market data.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Orderbook - Fallback</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"minrate"</code><br>
+                      <strong>Behavior:</strong> Uses market offers if available, otherwise falls back to your minimum rate.<br>
+                      <strong>Best for:</strong> Market-responsive pricing with guaranteed operation.
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Static</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>Value:</strong> <code class="bg-gray-200 dark:bg-gray-600 px-1 rounded text-gray-900 dark:text-gray-200">"static"</code><br>
+                      <strong>Behavior:</strong> Uses only your minimum rate + rate tweak percentage. Ignores all external data.<br>
+                      <strong>Best for:</strong> Fixed pricing strategies or testing.
+                    </p>
+                  </div>
+                </div>
+
+                <div class="mt-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <h6 class="font-semibold text-gray-900 dark:text-gray-200 mb-2">Rate Calculation Formula</h6>
+                  <p class="text-sm text-gray-700 dark:text-gray-300">
+                    <strong>Final Rate = Base Rate × (ratetweakpercent / 100 + 1)</strong><br>
+                    Where Base Rate comes from your selected adjustment method above.
+                  </p>
+                </div>
+
+                <div class="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <h6 class="font-semibold text-gray-900 dark:text-gray-200 mb-2">Important Notes</h6>
+                  <ul class="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                    <li>• Final rate will never go below your <strong>minrate</strong> setting</li>
+                    <li>• Strategies which use the orderbook will only consider offers with an automation strategy as permissive or better than your config</li>
+                    <li>• If your chosen method fails to get rates, the offer will be skipped for that cycle (Exception: "Static" and "Orderbook (Fallback)")</li>
+                    <li>• Rate tweak percentage can be negative to offer below market rates</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <button type="button" class="collapsible-header flex items-center justify-between w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 focus:outline-none" data-target="bidding-strategy-faq-content">
+                <h4 class="text-lg font-semibold text-gray-900 dark:text-white">Bidding Strategy Settings FAQ</h4>
+                <svg class="w-5 h-5 transition-transform transform text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              <div id="bidding-strategy-faq-content" class="collapsible-content mt-2 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg hidden">
+                <p class="text-sm font-bold text-gray-600 dark:text-gray-400 mb-4">
+                   <strong>Attempt Bids First</strong> allows your AMM to fill existing offers before creating new ones.
+                </p>
+
+                <div class="space-y-4">
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">How it works</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      <strong>1.</strong> AMM wants to create a 1 BTC → XMR offer at rate 150<br>
+                      <strong>2.</strong> Checks for existing XMR → BTC offers that would fill our intended offer<br>
+                      <strong>3.</strong> Places bids on compatible offers to fill what we can<br>
+                      <strong>4.</strong> Creates AMM offer only for the remaining amount<br>
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Bidding Strategies</h5>
+                    <div class="space-y-2 mt-2">
+                      <div>
+                        <strong class="text-gray-900 dark:text-white">Aggressive:</strong>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">Bid on all compatible offers to fill as much as possible</span>
+                      </div>
+                      <div>
+                        <strong class="text-gray-900 dark:text-white">Balanced:</strong>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">Mix of bidding and offer creation (default)</span>
+                      </div>
+                      <div>
+                        <strong class="text-gray-900 dark:text-white">Conservative:</strong>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">Only bid on offers that match your automation strategy</span>
+                      </div>
+                      <div>
+                        <strong class="text-gray-900 dark:text-white">Best rates from auto-accept offers only:</strong>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">Only bid on offers that match your automation strategy, prioritizing best rates</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Automation Strategy Compatibility</h5>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Bidding strategies consider your AMM's automation strategy when selecting offers to bid on:<br>
+                      <strong>• Accept All:</strong> Only bids on offers with "Accept All" automation<br>
+                      <strong>• Accept Known:</strong> Bids on offers with "Accept All" or "Accept Known" automation<br>
+                      <strong>• None:</strong> Bids on all offers regardless of automation strategy<br>
+                    </p>
+                  </div>
+
+                  <div class="border-l-4 border-gray-300 dark:border-gray-600 pl-4">
+                    <h5 class="font-semibold text-gray-900 dark:text-white">Configuration Options</h5>
+                    <div class="space-y-2 mt-2">
+                      <div>
+                        <strong class="text-gray-900 dark:text-white">Max Bid Percentage:</strong>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">Maximum % of your offer amount to use for bidding (0-100)</span>
+                      </div>
+                      <div>
+                        <strong class="text-gray-900 dark:text-white">Rate Tolerance %:</strong>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">Bid on offers up to this % better than your intended rate</span>
+                      </div>
+                      <div>
+                        <strong class="text-gray-900 dark:text-white">Min Remaining Offer:</strong>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">Don't create AMM offer if remainder is below this amount</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+       <!-- AMM Configuration Tabs handled by external JS -->
+      </form>
+     </div>
+
+     {% if state_exists and debug_ui_mode %}
+     <div class="mt-6 p-6 bg-white dark:bg-gray-500 rounded-xl shadow-md">
+      <h3 class="mb-4 text-xl font-bold text-coolGray-900 dark:text-white">State File (JSON)</h3>
+      <div class="mb-4">
+       <div class="font-mono bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg p-2.5 h-64 overflow-y-auto dark:bg-gray-700 dark:border-gray-600 dark:text-white">{{ state_content }}</div>
+       <div class="mt-4">
+         <form method="post">
+           <button type="button" id="clearStateBtn" class="px-4 py-2.5 bg-red-500 hover:bg-red-600 font-medium text-sm text-white border border-red-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+             Clear AMM State
+           </button>
+           <input type="hidden" name="formid" value="{{ form_id }}">
+         </form>
+       </div>
+      </div>
+     </div>
+     {% endif %}
+    </div>
+   </div>
+
+   {% if debug_ui_mode %}
+   <div class="mb-8 -mx-4">
+    <div class="p-6 bg-white dark:bg-gray-500 rounded-xl shadow-md">
+     <h3 class="mb-4 text-xl font-bold text-coolGray-900 dark:text-white">AMM Logs</h3>
+     <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto font-mono text-sm text-gray-900 dark:text-gray-200">
+      {% if logs %}
+       {% for log in logs %}
+        <div class="mb-1">{{ log }}</div>
+       {% endfor %}
+      {% else %}
+       <div class="text-gray-500 dark:text-gray-400">No logs available</div>
+      {% endif %}
+     </div>
+    </div>
+   </div>
+   {% endif %}
+  </div>
+ </section>
+</div>
+
+<div id="add-amm-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+  <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+    <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+      <div class="absolute inset-0 bg-gray-500 opacity-75 dark:bg-gray-900 dark:opacity-90"></div>
+    </div>
+
+    <div class="inline-block align-bottom bg-white dark:bg-gray-800 rounded-lg text-left overflow-visible shadow-xl transform transition-all sm:my-8 sm:align-middle md:max-w-2xl md:w-full">
+      <div class="bg-white dark:bg-gray-800 px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+        <div class="sm:flex sm:items-start">
+          <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white" id="add-modal-title">Add New Item</h3>
+            <div class="mt-4">
+              <form id="add-amm-form" class="space-y-4">
+                <input type="hidden" id="add-amm-type">
+
+                <div>
+                  <label for="add-amm-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Name <span class="text-red-500">*</span></label>
+                  <input type="text" id="add-amm-name" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="e.g., Offer 1" required>
+                </div>
+
+                <div class="flex items-center">
+                  <input type="checkbox" id="add-amm-enabled" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded dark:bg-gray-700 dark:border-gray-600" checked>
+                  <label for="add-amm-enabled" class="ml-2 block text-sm text-gray-900 dark:text-gray-300">Enabled</label>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <div class="min-h-[80px]">
+                    <label for="add-amm-coin-from" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Maker</label>
+                    <div class="relative">
+                      <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                      </svg>
+                      <select id="add-amm-coin-from" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                        {% for c in coins %}
+                        <option value="{{ c[1] }}" data-symbol="{{ c[0] }}" data-balance="{{ c[2] }}">{{ c[1] }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+
+                  </div>
+
+                  <div class="min-h-[80px]">
+                    <label for="add-amm-coin-to" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Taker</label>
+                    <div class="relative">
+                      <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                      </svg>
+                      <select id="add-amm-coin-to" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                        {% for c in coins %}
+                        <option value="{{ c[1] }}" data-symbol="{{ c[0] }}" data-balance="{{ c[2] }}">{{ c[1] }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label for="add-amm-amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Amount <span class="text-red-500">*</span></label>
+                    <input type="text" id="add-amm-amount" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                    <div class="mt-2 flex space-x-2">
+                      <button type="button" class="hidden md:block py-1 px-2 bg-blue-500 text-white text-xs rounded-md focus:outline-none" data-set-amm-amount="0.25" data-input-id="add-amm-amount">25%</button>
+                      <button type="button" class="hidden md:block py-1 px-2 bg-blue-500 text-white text-xs rounded-md focus:outline-none" data-set-amm-amount="0.5" data-input-id="add-amm-amount">50%</button>
+                      <button type="button" class="py-1 px-2 bg-blue-500 text-white text-xs rounded-md focus:outline-none" data-set-amm-amount="1" data-input-id="add-amm-amount">100%</button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label id="add-amm-rate-label" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Minimum Rate <span class="text-red-500">*</span></label>
+                    <input type="text" id="add-amm-rate" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                    <div class="mt-2">
+                      <button type="button" id="add-get-rate-button" class="py-1 px-2 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded-md focus:outline-none">Get Rate</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="add-offer-fields" class="hidden space-y-4">
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-offer-mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Type</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="add-offer-mode" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="one_time">One-time — fill once, then close</option>
+                          <option value="fixed_total">Fixed total — sell up to a set total, then close</option>
+                          <option value="standing" selected>Standing — repeat until a wallet floor</option>
+                        </select>
+                      </div>
+                      <small class="text-xs text-gray-500 dark:text-gray-400 mt-1 block">One-time posts a single offer and stops once it is filled. Fixed total keeps reposting until the cumulative sold amount reaches Total to Sell. Standing repeats indefinitely, skipping new offers when the wallet balance would drop below the Minimum Balance floor (0 = no floor, sell everything).</small>
+                    </div>
+
+                    <div id="add-offer-total-to-sell-wrap" class="hidden">
+                      <label for="add-offer-total-to-sell" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Total to Sell</label>
+                      <input type="text" id="add-offer-total-to-sell" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                      <small class="text-xs text-gray-500 dark:text-gray-400">Must be at least the offer amount. The offer closes once this total is reached.</small>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+
+                    <div>
+                      <label for="add-offer-ratetweakpercent" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Rate Tweak Percent</label>
+                      <input type="text" id="add-offer-ratetweakpercent" pattern="-?[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="0" placeholder="0">
+                    </div>
+
+                    <div>
+                      <label for="add-offer-min-coin-from-amt" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Minimum Balance</label>
+                      <input type="text" id="add-offer-min-coin-from-amt" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-offer-valid-seconds" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Valid Seconds <span class="text-red-500">*</span></label>
+                      <input type="text" id="add-offer-valid-seconds" pattern="[0-9]+" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="3600" placeholder="3600">
+                      <small class="text-xs text-gray-500 dark:text-gray-400">Minimum 600 seconds (10 minutes).</small>
+                    </div>
+
+                    <div>
+                      <label for="add-offer-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">SMSG Address / Identity</label>
+                      <input type="text" id="add-offer-address" class="font-mono bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="auto" value="auto">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-offer-swap-type" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Swap Type</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="add-offer-swap-type" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="adaptor_sig" data-desc="Adaptor Sig">Adaptor Sig (default)</option>
+                          <option value="seller_first" data-desc="Secret Hash">Secret Hash</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label for="add-offer-lock-hours" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract Lock Period</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="add-offer-lock-hours" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="4">4 hours</option>
+                          <option value="8">8 hours</option>
+                          <option value="12">12 hours</option>
+                          <option value="24" selected>24 hours (default)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-offer-min-swap-amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Swap Amount</label>
+                      <input type="text" id="add-offer-min-swap-amount" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="0.001" placeholder="0.001">
+                    </div>
+
+                    <div>
+                      <label for="add-offer-amount-step" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Size Increment <span class="text-red-500">*</span></label>
+                      <input type="text" id="add-offer-amount-step" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="e.g., 5.0" required>
+                      <small class="text-xs text-gray-500 dark:text-gray-400">
+                        How much to adjust offer size when partially filled. Must be between 0.001 and your offer amount.
+                      </small>
+                    </div>
+                  </div>
+
+                  {% if debug_ui_mode %}
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-offer-automation-strategy" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Auto Accept Bids</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="add-offer-automation-strategy" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="accept_all">Accept All Bids</option>
+                          <option value="accept_known">Accept Known Identities</option>
+                          <option value="none">No Auto Accept</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  {% endif %}
+
+                  <div>
+                    <label for="add-offer-adjust-rates" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Adjust Rates Based on Market</label>
+                    <div class="relative">
+                      <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                      </svg>
+                      <select id="add-offer-adjust-rates" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                        <option value="false">Oracle - Use the oracle rate, fail if rates not found</option>
+                        <option value="only">Orderbook - Use Orderbook auto-accept offers only, fail if rates not found</option>
+                        <option value="true">Either - Use greater of Oracle + Orderbook, fail if BOTH unavailable</option>
+                        <option value="all">Both - Use greater of Oracle + Orderbook, fail if EITHER unavailable</option>
+                        <option value="minrate">Orderbook (Fallback) - Fallback to Minimum Rate</option>
+                        <option value="static">Static - Exclusively use Minimum Rate + Tweak</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {% if debug_ui_mode %}
+                  <div class="border-t border-gray-200 dark:border-gray-600 pt-4">
+                    <div class="flex items-center mb-3">
+                      <input type="checkbox" id="add-offer-attempt-bids-first" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600">
+                      <label for="add-offer-attempt-bids-first" class="ml-2 block text-sm font-medium text-gray-900 dark:text-gray-300">Attempt Bids First</label>
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">Before creating an AMM offer, attempt to fill existing offers by placing bids, then create offer for remainder.</p>
+
+                    <div id="add-offer-bidding-options" class="hidden space-y-4">
+                      <div class="grid grid-cols-2 gap-4">
+                        <div>
+                          <label for="add-offer-bid-strategy" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Bidding Strategy</label>
+                          <div class="relative">
+                            <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                            <select id="add-offer-bid-strategy" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                              <option value="aggressive">Aggressive - Fill as much as possible</option>
+                              <option value="balanced" selected>Balanced - Mix of bids and offers</option>
+                              <option value="conservative">Conservative - Only obvious wins</option>
+                              <option value="auto_accept_only">Best rates from auto-accept offers only</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label for="add-offer-max-bid-percentage" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Max Bid Percentage</label>
+                          <input type="text" id="add-offer-max-bid-percentage" pattern="[0-9]+" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="50" placeholder="50">
+                          <small class="text-xs text-gray-500 dark:text-gray-400">Maximum % of offer amount to use for bidding (0-100)</small>
+                        </div>
+                      </div>
+
+                      <div class="grid grid-cols-2 gap-4">
+                        <div>
+                          <label for="add-offer-bid-rate-tolerance" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Rate Tolerance %</label>
+                          <input type="text" id="add-offer-bid-rate-tolerance" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="2.0" placeholder="2.0">
+                          <small class="text-xs text-gray-500 dark:text-gray-400">Bid on offers up to this % better than our rate</small>
+                        </div>
+
+                        <div>
+                          <label for="add-offer-min-remaining-offer" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Remaining Offer</label>
+                          <input type="text" id="add-offer-min-remaining-offer" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="0.001" placeholder="0.001">
+                          <small class="text-xs text-gray-500 dark:text-gray-400">Don't create offer if remainder is below this amount</small>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {% endif %}
+                </div>
+
+                <div id="add-bid-fields" class="hidden space-y-4">
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-bid-min-coin-to-balance" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Coin To Balance</label>
+                      <input type="text" id="add-bid-min-coin-to-balance" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="1.0" placeholder="1.0">
+                    </div>
+
+                    <div>
+                      <label for="add-bid-max-concurrent" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Max Concurrent</label>
+                      <input type="text" id="add-bid-max-concurrent" pattern="[0-9]+" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="1" placeholder="1">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-bid-offers-to-bid-on" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offers to Bid On</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="add-bid-offers-to-bid-on" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="all">All Offers</option>
+                          <option value="auto_accept_only">Auto-Accept Offers Only</option>
+                          <option value="known_only">Known Identities Only</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label for="add-bid-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Address</label>
+                      <input type="text" id="add-bid-address" class="font-mono bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="auto" value="auto">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="add-bid-min-swap-amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Swap Amount</label>
+                      <input type="text" id="add-bid-min-swap-amount" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="0.001" placeholder="0.001">
+                    </div>
+
+                    <div class="flex items-center">
+                      <input type="checkbox" id="add-bid-use-balance-bidding" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600">
+                      <label for="add-bid-use-balance-bidding" class="ml-2 block text-sm text-gray-900 dark:text-gray-300">Use Balance Bidding</label>
+                    </div>
+                  </div>
+
+                  <div class="text-xs text-gray-500 dark:text-gray-400">
+                    <strong>Use Balance Bidding:</strong> Calculate bid amount as (wallet_balance - offer_min_amount) instead of using template amount.
+                  </div>
+                </div>
+
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+        <button type="button" id="add-amm-save" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:ring-0 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+          Add
+        </button>
+        <button type="button" id="add-amm-cancel" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:ring-0 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm dark:bg-gray-600 dark:text-white dark:hover:bg-gray-500 dark:border-gray-500">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="edit-amm-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+  <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+    <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+      <div class="absolute inset-0 bg-gray-500 opacity-75 dark:bg-gray-900 dark:opacity-90"></div>
+    </div>
+
+    <div class="inline-block align-bottom bg-white dark:bg-gray-800 rounded-lg text-left overflow-visible shadow-xl transform transition-all sm:my-8 sm:align-middle md:max-w-2xl md:w-full">
+      <div class="bg-white dark:bg-gray-800 px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+        <div class="sm:flex sm:items-start">
+          <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white" id="edit-modal-title">Edit Item</h3>
+            <div class="mt-4">
+              <form id="edit-amm-form" class="space-y-4">
+                <input type="hidden" id="edit-amm-type">
+                <input type="hidden" id="edit-amm-id">
+                <input type="hidden" id="edit-amm-original-name">
+
+                <div>
+                  <label for="edit-amm-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Name <span class="text-red-500">*</span></label>
+                  <input type="text" id="edit-amm-name" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" required>
+                </div>
+
+                <div class="flex items-center">
+                  <input type="checkbox" id="edit-amm-enabled" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600" checked>
+                  <label for="edit-amm-enabled" class="ml-2 block text-sm text-gray-900 dark:text-gray-300">Enabled</label>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <div class="min-h-[80px]">
+                    <label for="edit-amm-coin-from" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Maker</label>
+                    <div class="relative">
+                      <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                      </svg>
+                      <select id="edit-amm-coin-from" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                        {% for c in coins %}
+                        <option value="{{ c[1] }}" data-symbol="{{ c[0] }}" data-balance="{{ c[2] }}">{{ c[1] }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+
+                  </div>
+
+                  <div class="min-h-[80px]">
+                    <label for="edit-amm-coin-to" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Taker</label>
+                    <div class="relative">
+                      <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                      </svg>
+                      <select id="edit-amm-coin-to" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                        {% for c in coins %}
+                        <option value="{{ c[1] }}" data-symbol="{{ c[0] }}" data-balance="{{ c[2] }}">{{ c[1] }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label for="edit-amm-amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Amount <span class="text-red-500">*</span></label>
+                    <input type="text" id="edit-amm-amount" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                    <div class="mt-2 flex space-x-2">
+                      <button type="button" class="hidden md:block py-1 px-2 bg-blue-500 text-white text-xs rounded-md focus:outline-none" data-set-amm-amount="0.25" data-input-id="edit-amm-amount">25%</button>
+                      <button type="button" class="hidden md:block py-1 px-2 bg-blue-500 text-white text-xs rounded-md focus:outline-none" data-set-amm-amount="0.5" data-input-id="edit-amm-amount">50%</button>
+                      <button type="button" class="py-1 px-2 bg-blue-500 text-white text-xs rounded-md focus:outline-none" data-set-amm-amount="1" data-input-id="edit-amm-amount">100%</button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label id="edit-amm-rate-label" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Minimum Rate <span class="text-red-500">*</span></label>
+                    <input type="text" id="edit-amm-rate" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                    <div class="mt-2">
+                      <button type="button" id="edit-get-rate-button" class="py-1 px-2 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded-md focus:outline-none">Get Rate</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="edit-offer-fields" class="hidden space-y-4">
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-offer-mode" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Type</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="edit-offer-mode" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="one_time">One-time — fill once, then close</option>
+                          <option value="fixed_total">Fixed total — sell up to a set total, then close</option>
+                          <option value="standing">Standing — repeat until a wallet floor</option>
+                        </select>
+                      </div>
+                      <small class="text-xs text-gray-500 dark:text-gray-400 mt-1 block">One-time posts a single offer and stops once it is filled. Fixed total keeps reposting until the cumulative sold amount reaches Total to Sell. Standing repeats indefinitely, skipping new offers when the wallet balance would drop below the Minimum Balance floor (0 = no floor, sell everything).</small>
+                    </div>
+
+                    <div id="edit-offer-total-to-sell-wrap" class="hidden">
+                      <label for="edit-offer-total-to-sell" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Total to Sell</label>
+                      <input type="text" id="edit-offer-total-to-sell" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                      <small class="text-xs text-gray-500 dark:text-gray-400">Must be at least the offer amount. The offer closes once this total is reached.</small>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-offer-ratetweakpercent" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Rate Tweak Percent</label>
+                      <input type="text" id="edit-offer-ratetweakpercent" pattern="-?[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0">
+                    </div>
+
+                    <div>
+                      <label for="edit-offer-min-coin-from-amt" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Minimum Balance</label>
+                      <input type="text" id="edit-offer-min-coin-from-amt" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.0">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-offer-valid-seconds" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Valid Seconds <span class="text-red-500">*</span></label>
+                      <input type="text" id="edit-offer-valid-seconds" pattern="[0-9]+" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="3600">
+                      <small class="text-xs text-gray-500 dark:text-gray-400">Minimum 600 seconds (10 minutes).</small>
+                    </div>
+
+                    <div>
+                      <label for="edit-offer-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">SMSG Address / Identity</label>
+                      <input type="text" id="edit-offer-address" class="font-mono bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="auto">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-offer-swap-type" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Swap Type</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="edit-offer-swap-type" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="adaptor_sig" data-desc="Adaptor Sig">Adaptor Sig</option>
+                          <option value="seller_first" data-desc="Secret Hash">Secret Hash</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label for="edit-offer-lock-hours" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Contract Lock Period</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="edit-offer-lock-hours" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="4">4 hours</option>
+                          <option value="8">8 hours</option>
+                          <option value="12">12 hours</option>
+                          <option value="24">24 hours (default)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-offer-min-swap-amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Minimum Swap Amount</label>
+                      <input type="text" id="edit-offer-min-swap-amount" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.001">
+                    </div>
+
+                    <div>
+                      <label for="edit-offer-amount-step" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offer Size Increment <span class="text-red-500">*</span></label>
+                      <input type="text" id="edit-offer-amount-step" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="e.g., 5.0" required>
+                      <small class="text-xs text-gray-500 dark:text-gray-400">
+                        How much to adjust offer size when partially filled. Must be between 0.001 and your offer amount.
+                      </small>
+                    </div>
+                  </div>
+
+                  {% if debug_ui_mode %}
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-offer-automation-strategy" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Auto Accept Bids</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="edit-offer-automation-strategy" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="accept_all">Accept All Bids</option>
+                          <option value="accept_known">Accept Known Identities</option>
+                          <option value="none">No Auto Accept</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  {% endif %}
+
+                  <div>
+                    <label for="edit-offer-adjust-rates" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Adjust Rates Based on Market</label>
+                    <div class="relative">
+                      <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                      </svg>
+                      <select id="edit-offer-adjust-rates" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                        <option value="false">Oracle - Use the oracle rate, fail if rates not found</option>
+                        <option value="only">Orderbook - Use Orderbook auto-accept offers only, fail if rates not found</option>
+                        <option value="true">Either - Use greater of Oracle + Orderbook, fail if BOTH unavailable</option>
+                        <option value="all">Both - Use greater of Oracle + Orderbook, fail if EITHER unavailable</option>
+                        <option value="minrate">Orderbook (Fallback) - Fallback to Minimum Rate</option>
+                        <option value="static">Static - Exclusively use Minimum Rate + Tweak</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {% if debug_ui_mode %}
+                  <div class="border-t border-gray-200 dark:border-gray-600 pt-4">
+                    <div class="flex items-center mb-3">
+                      <input type="checkbox" id="edit-offer-attempt-bids-first" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600">
+                      <label for="edit-offer-attempt-bids-first" class="ml-2 block text-sm font-medium text-gray-900 dark:text-gray-300">Attempt Bids First</label>
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">Before creating an AMM offer, attempt to fill existing offers by placing bids, then create offer for remainder.</p>
+
+                    <div id="edit-offer-bidding-options" class="hidden space-y-4">
+                      <div class="grid grid-cols-2 gap-4">
+                        <div>
+                          <label for="edit-offer-bid-strategy" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Bidding Strategy</label>
+                          <div class="relative">
+                            <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                            <select id="edit-offer-bid-strategy" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                              <option value="aggressive">Aggressive - Fill as much as possible</option>
+                              <option value="balanced" selected>Balanced - Mix of bids and offers</option>
+                              <option value="conservative">Conservative - Only obvious wins</option>
+                              <option value="auto_accept_only">Best rates from auto-accept offers only</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label for="edit-offer-max-bid-percentage" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Max Bid Percentage</label>
+                          <input type="text" id="edit-offer-max-bid-percentage" pattern="[0-9]+" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="50" placeholder="50">
+                          <small class="text-xs text-gray-500 dark:text-gray-400">Maximum % of offer amount to use for bidding (0-100)</small>
+                        </div>
+                      </div>
+
+                      <div class="grid grid-cols-2 gap-4">
+                        <div>
+                          <label for="edit-offer-bid-rate-tolerance" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Rate Tolerance %</label>
+                          <input type="text" id="edit-offer-bid-rate-tolerance" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="2.0" placeholder="2.0">
+                          <small class="text-xs text-gray-500 dark:text-gray-400">Bid on offers up to this % better than our rate</small>
+                        </div>
+
+                        <div>
+                          <label for="edit-offer-min-remaining-offer" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Remaining Offer</label>
+                          <input type="text" id="edit-offer-min-remaining-offer" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" value="0.001" placeholder="0.001">
+                          <small class="text-xs text-gray-500 dark:text-gray-400">Don't create offer if remainder is below this amount</small>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {% endif %}
+                </div>
+
+                <div id="edit-bid-fields" class="hidden space-y-4">
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-bid-min-coin-to-balance" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Coin To Balance</label>
+                      <input type="text" id="edit-bid-min-coin-to-balance" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="1.0">
+                    </div>
+
+                    <div>
+                      <label for="edit-bid-max-concurrent" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Max Concurrent</label>
+                      <input type="text" id="edit-bid-max-concurrent" pattern="[0-9]+" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="1">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-bid-offers-to-bid-on" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Offers to Bid On</label>
+                      <div class="relative">
+                        <svg class="absolute top-1/2 right-3 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <select id="edit-bid-offers-to-bid-on" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 appearance-none">
+                          <option value="all">All Offers</option>
+                          <option value="auto_accept_only">Auto-Accept Offers Only</option>
+                          <option value="known_only">Known Identities Only</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label for="edit-bid-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Address</label>
+                      <input type="text" id="edit-bid-address" class="font-mono bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="auto">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="edit-bid-min-swap-amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Min Swap Amount</label>
+                      <input type="text" id="edit-bid-min-swap-amount" pattern="[0-9]*\.?[0-9]*" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="0.001">
+                    </div>
+
+                    <div class="flex items-center">
+                      <input type="checkbox" id="edit-bid-use-balance-bidding" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600">
+                      <label for="edit-bid-use-balance-bidding" class="ml-2 block text-sm text-gray-900 dark:text-gray-300">Use Balance Bidding</label>
+                    </div>
+                  </div>
+
+                  <div class="text-xs text-gray-500 dark:text-gray-400">
+                    <strong>Use Balance Bidding:</strong> Calculate bid amount as (wallet_balance - offer_min_amount) instead of using template amount.
+                  </div>
+                </div>
+
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+        <button type="button" id="edit-amm-save" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:ring-0 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+          Save Changes
+        </button>
+        <button type="button" id="edit-amm-cancel" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:ring-0 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm dark:bg-gray-600 dark:text-white dark:hover:bg-gray-500 dark:border-gray-500">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="errorModal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+  <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity duration-300 ease-out"></div>
+  <div class="relative z-50 min-h-screen px-4 flex items-center justify-center">
+    <div class="bg-white dark:bg-gray-500 rounded-lg max-w-md w-full p-6 shadow-lg transition-opacity duration-300 ease-out">
+      <div class="text-center">
+        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900 mb-4">
+          <svg class="h-6 w-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+          </svg>
+        </div>
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4" id="errorTitle">Error</h2>
+        <p class="text-gray-600 dark:text-gray-200 mb-6 whitespace-pre-line" id="errorMessage">An error occurred</p>
+        <div class="flex justify-center">
+          <button type="button" id="errorOk"
+                  class="px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="confirmModal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+  <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity duration-300 ease-out"></div>
+  <div class="relative z-50 min-h-screen px-4 flex items-center justify-center">
+    <div class="bg-white dark:bg-gray-500 rounded-lg max-w-md w-full p-6 shadow-lg transition-opacity duration-300 ease-out">
+      <div class="text-center">
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4" id="confirmTitle">Confirm Action</h2>
+        <p class="text-gray-600 dark:text-gray-200 mb-6 whitespace-pre-line" id="confirmMessage">Are you sure?</p>
+        <div class="flex justify-center gap-4">
+          <button type="button" id="confirmYes"
+                  class="px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            Confirm
+          </button>
+          <button type="button" id="confirmNo"
+                  class="px-4 py-2.5 font-medium text-sm text-white hover:text-red border border-red-500 hover:border-red-500 hover:bg-red-600 bg-red-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/modules/amm-template-validation.js"></script>
+<script src="/static/js/pages/amm-tables.js"></script>
+<script src="/static/js/pages/amm-config-tabs.js"></script>
+<script src="/static/js/pages/amm-page.js"></script>
+
+{% include 'footer.html' %}

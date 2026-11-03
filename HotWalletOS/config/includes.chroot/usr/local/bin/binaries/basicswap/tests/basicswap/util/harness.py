@@ -1,0 +1,766 @@
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2020-2024 tecnovert
+# Copyright (c) 2024-2026 The Basicswap developers
+# Distributed under the MIT software license, see the accompanying
+# file LICENSE or http://www.opensource.org/licenses/mit-license.php.
+
+import json
+import logging
+import multiprocessing
+import os
+import shutil
+import signal
+import sys
+import threading
+import unittest
+from urllib.request import urlopen
+from unittest.mock import patch
+
+from basicswap.contrib.rpcauth import generate_salt, password_to_hmac
+from basicswap.rpc_xmr import callrpc_xmr
+from tests.basicswap.util.mnemonics import mnemonics
+from tests.basicswap.util.common import (
+    run_prepare_subprocess,
+    waitForServer,
+    BASE_PORT,
+    BASE_RPC_PORT,
+    BTC_BASE_PORT,
+    BTC_BASE_RPC_PORT,
+    BTC_BASE_TOR_PORT,
+    LTC_BASE_PORT,
+    LTC_BASE_RPC_PORT,
+    PIVX_BASE_PORT,
+    BTC_USE_DESCRIPTORS,
+    BTC_USE_LEGACY_KEY_PATHS,
+)
+from tests.basicswap.extended.test_nmc import (
+    NMC_BASE_PORT,
+    NMC_BASE_RPC_PORT,
+    NMC_BASE_TOR_PORT,
+)
+from tests.basicswap.extended.test_dcr import (
+    DCR_BASE_PORT,
+    DCR_BASE_RPC_PORT,
+    DCR_BASE_WALLET_RPC_PORT,
+)
+from tests.basicswap.test_bch_xmr import (
+    BCH_BASE_PORT,
+    BCH_BASE_RPC_PORT,
+)
+from tests.basicswap.extended.test_doge import (
+    DOGE_BASE_PORT,
+    DOGE_BASE_RPC_PORT,
+)
+
+import basicswap.config as cfg
+import basicswap.bin.run as runSystem
+
+TEST_PATH = os.path.expanduser(os.getenv("TEST_PATH", "/tmp/test_basicswap"))
+
+PARTICL_PORT_BASE = int(os.getenv("PARTICL_PORT_BASE", BASE_PORT))
+PARTICL_RPC_PORT_BASE = int(os.getenv("PARTICL_RPC_PORT_BASE", BASE_RPC_PORT))
+
+BITCOIN_PORT_BASE = int(os.getenv("BITCOIN_PORT_BASE", BTC_BASE_PORT))
+BITCOIN_RPC_PORT_BASE = int(os.getenv("BITCOIN_RPC_PORT_BASE", BTC_BASE_RPC_PORT))
+BITCOIN_TOR_PORT_BASE = int(os.getenv("BITCOIN_TOR_PORT_BASE", BTC_BASE_TOR_PORT))
+
+LITECOIN_RPC_PORT_BASE = int(os.getenv("LITECOIN_RPC_PORT_BASE", LTC_BASE_RPC_PORT))
+
+DECRED_RPC_PORT_BASE = int(os.getenv("DECRED_RPC_PORT_BASE", DCR_BASE_RPC_PORT))
+DECRED_WALLET_RPC_PORT_BASE = int(
+    os.getenv("DECRED_WALLET_RPC_PORT_BASE", DCR_BASE_WALLET_RPC_PORT)
+)
+
+NAMECOIN_PORT_BASE = int(os.getenv("NAMECOIN_PORT_BASE", NMC_BASE_PORT))
+NAMECOIN_RPC_PORT_BASE = int(os.getenv("NAMECOIN_RPC_PORT_BASE", NMC_BASE_RPC_PORT))
+NAMECOIN_TOR_PORT_BASE = int(os.getenv("NAMECOIN_TOR_PORT_BASE", NMC_BASE_TOR_PORT))
+
+XMR_BASE_P2P_PORT = 17792
+XMR_BASE_RPC_PORT = 29798
+XMR_BASE_WALLET_RPC_PORT = 29998
+
+PIVX_BASE_RPC_PORT = 36832
+PIVX_RPC_PORT_BASE = int(os.getenv("PIVX_RPC_PORT_BASE", PIVX_BASE_RPC_PORT))
+
+DASH_BASE_PORT = 37732
+DASH_BASE_RPC_PORT = 37832
+DASH_RPC_PORT_BASE = int(os.getenv("DASH_RPC_PORT_BASE", DASH_BASE_RPC_PORT))
+
+FIRO_BASE_PORT = 34832
+FIRO_BASE_RPC_PORT = 35832
+FIRO_RPC_PORT_BASE = int(os.getenv("FIRO_RPC_PORT_BASE", FIRO_BASE_RPC_PORT))
+
+BITCOINCASH_RPC_PORT_BASE = int(
+    os.getenv("BITCOINCASH_RPC_PORT_BASE", BCH_BASE_RPC_PORT)
+)
+DOGECOIN_RPC_PORT_BASE = int(os.getenv("DOGECOIN_RPC_PORT_BASE", DOGE_BASE_RPC_PORT))
+
+EXTRA_CONFIG_JSON = json.loads(os.getenv("EXTRA_CONFIG_JSON", "{}"))
+
+
+def waitForBidState(delay_event, port, bid_id, wait_for_state, wait_for=60):
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        bid = json.loads(
+            urlopen("http://127.0.0.1:12700/json/bids/{}".format(bid_id)).read()
+        )
+        if isinstance(wait_for_state, (list, tuple)):
+            if bid["bid_state"] in wait_for_state:
+                return
+        else:
+            if bid["bid_state"] == wait_for_state:
+                return
+        delay_event.wait(1)
+    raise ValueError("waitForBidState failed")
+
+
+def updateThread(xmr_addr, delay_event, xmr_auth):
+    while not delay_event.is_set():
+        try:
+            callrpc_xmr(
+                XMR_BASE_RPC_PORT + 1,
+                "generateblocks",
+                {"wallet_address": xmr_addr, "amount_of_blocks": 1},
+                auth=xmr_auth,
+            )
+        except Exception as e:
+            print("updateThread error", str(e))
+        delay_event.wait(2)
+
+
+def recursive_update_dict(base, new_vals):
+    for key, value in new_vals.items():
+        if key in base and isinstance(value, dict):
+            recursive_update_dict(base[key], value)
+        else:
+            base[key] = value
+
+
+def run_prepare(
+    node_id,
+    datadir_path,
+    bins_path,
+    with_coins,
+    mnemonic_in=None,
+    num_nodes=3,
+    use_rpcauth=False,
+    extra_settings={},
+    port_ofs=0,
+    extra_args=[],
+):
+    config_path = os.path.join(datadir_path, cfg.CONFIG_FILENAME)
+
+    os.environ["BSX_TEST_MODE"] = "true"
+    os.environ["PART_RPC_PORT"] = str(PARTICL_RPC_PORT_BASE)
+    os.environ["BTC_RPC_PORT"] = str(BITCOIN_RPC_PORT_BASE)
+    os.environ["BTC_PORT"] = str(BITCOIN_PORT_BASE)
+    os.environ["BTC_USE_DESCRIPTORS"] = str(BTC_USE_DESCRIPTORS)
+    os.environ["BTC_USE_LEGACY_KEY_PATHS"] = str(BTC_USE_LEGACY_KEY_PATHS)
+    os.environ["BTC_ONION_PORT"] = str(BITCOIN_TOR_PORT_BASE)
+    os.environ["LTC_RPC_PORT"] = str(LITECOIN_RPC_PORT_BASE)
+    os.environ["DCR_RPC_PORT"] = str(DECRED_RPC_PORT_BASE)
+    os.environ["DCR_RPC_PWD"] = "dcr_pwd"
+    os.environ["DCR_WALLET_RPC_PORT"] = str(DECRED_WALLET_RPC_PORT_BASE)
+
+    os.environ["NMC_RPC_PORT"] = str(NAMECOIN_RPC_PORT_BASE)
+    os.environ["NMC_PORT"] = str(NMC_BASE_PORT)
+    os.environ["NMC_ONION_PORT"] = str(NAMECOIN_TOR_PORT_BASE)
+    os.environ["XMR_RPC_USER"] = "xmr_user"
+    os.environ["XMR_RPC_PWD"] = "xmr_pwd"
+    os.environ["PIVX_RPC_PORT"] = str(PIVX_RPC_PORT_BASE)
+    os.environ["DASH_RPC_PORT"] = str(DASH_RPC_PORT_BASE)
+    os.environ["FIRO_RPC_PORT"] = str(FIRO_RPC_PORT_BASE)
+    os.environ["BCH_PORT"] = str(BCH_BASE_PORT)
+    os.environ["BCH_RPC_PORT"] = str(BITCOINCASH_RPC_PORT_BASE)
+    os.environ["DOGE_PORT"] = str(DOGE_BASE_PORT)
+    os.environ["DOGE_RPC_PORT"] = str(DOGECOIN_RPC_PORT_BASE)
+
+    testargs = [
+        f'-datadir="{datadir_path}"',
+        f'-bindir="{bins_path}"',
+        f"-portoffset={(node_id + port_ofs)}",
+        "-regtest",
+        f"-withcoins={with_coins}",
+        "-noextractover",
+        "-noreleasesizecheck",
+        "-xmrrestoreheight=0",
+    ] + extra_args
+    if mnemonic_in:
+        testargs.append(f'-particl_mnemonic="{mnemonic_in}"')
+
+    keysdirpath = os.getenv("PGP_KEYS_DIR_PATH", None)
+    if keysdirpath is not None:
+        testargs.append('-keysdirpath="' + os.path.expanduser(keysdirpath) + '"')
+
+    result = run_prepare_subprocess(testargs)
+    if mnemonic_in is None:
+        lines = result.stdout.split("\n")
+        marker = "IMPORTANT - Save your particl wallet recovery phrase:"
+        mnemonic_out = lines[lines.index(marker) + 1]
+    else:
+        mnemonic_out = mnemonic_in
+
+    with open(config_path) as fs:
+        settings = json.load(fs)
+
+    config_filename = os.path.join(datadir_path, "particl", "particl.conf")
+    with open(config_filename, "r") as fp:
+        lines = fp.readlines()
+    with open(config_filename, "w") as fp:
+        for line in lines:
+            if not line.startswith("staking"):
+                fp.write(line)
+        fp.write("port={}\n".format(PARTICL_PORT_BASE + node_id + port_ofs))
+        fp.write("bind=127.0.0.1\n")
+        fp.write("dnsseed=0\n")
+        fp.write("discover=0\n")
+        fp.write("listenonion=0\n")
+        fp.write("upnp=0\n")
+        fp.write("minstakeinterval=5\n")
+        fp.write("stakethreadconddelayms=2000\n")
+        fp.write("smsgsregtestadjust=0\n")
+        if use_rpcauth:
+            salt = generate_salt(16)
+            rpc_user = "test_part_" + str(node_id)
+            rpc_pass = "test_part_pwd_" + str(node_id)
+            fp.write(
+                "rpcauth={}:{}${}\n".format(
+                    rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                )
+            )
+            settings["chainclients"]["particl"]["rpcuser"] = rpc_user
+            settings["chainclients"]["particl"]["rpcpassword"] = rpc_pass
+        for ip in range(num_nodes):
+            if ip != node_id:
+                fp.write(
+                    "connect=127.0.0.1:{}\n".format(PARTICL_PORT_BASE + ip + port_ofs)
+                )
+        for opt in EXTRA_CONFIG_JSON.get(f"part{node_id}", []):
+            fp.write(opt + "\n")
+
+    coins_array = with_coins.split(",")
+
+    if "bitcoin" in coins_array:
+        # Pruned nodes don't provide blocks
+        config_filename = os.path.join(datadir_path, "bitcoin", "bitcoin.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            # fp.write("bind=127.0.0.1\n")  # Causes BTC v28 to try and bind to bind=127.0.0.1:8444, even with a bind...=onion present
+            # listenonion=0 does not stop the node from trying to bind to the tor port
+            # https://github.com/bitcoin/bitcoin/issues/22726
+            fp.write(
+                "bind=127.0.0.1:{}=onion\n".format(
+                    BITCOIN_TOR_PORT_BASE + node_id + port_ofs
+                )
+            )
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_btc_" + str(node_id)
+                rpc_pass = "test_btc_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["bitcoin"]["rpcuser"] = rpc_user
+                settings["chainclients"]["bitcoin"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(
+                            BITCOIN_PORT_BASE + ip + port_ofs
+                        )
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"btc{node_id}", []):
+                fp.write(opt + "\n")
+
+    if "litecoin" in coins_array:
+        # Pruned nodes don't provide blocks
+        config_filename = os.path.join(datadir_path, "litecoin", "litecoin.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            fp.write("port={}\n".format(LTC_BASE_PORT + node_id + port_ofs))
+            fp.write("bind=127.0.0.1\n")
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_ltc_" + str(node_id)
+                rpc_pass = "test_ltc_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["litecoin"]["rpcuser"] = rpc_user
+                settings["chainclients"]["litecoin"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(LTC_BASE_PORT + ip + port_ofs)
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"ltc{node_id}", []):
+                fp.write(opt + "\n")
+
+    if "decred" in coins_array:
+        # Pruned nodes don't provide blocks
+        config_filename = os.path.join(datadir_path, "decred", "dcrd.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            fp.write("listen=127.0.0.1:{}\n".format(DCR_BASE_PORT + node_id + port_ofs))
+            fp.write("noseeders=1\n")
+            fp.write("nodnsseed=1\n")
+            fp.write("nodiscoverip=1\n")
+            if node_id == 0:
+                fp.write("miningaddr=SsppG7KLiH52NC7iJmUVGVq89FLS83E5vho\n")
+                for ip in range(num_nodes):
+                    if ip != node_id:
+                        fp.write(
+                            "addpeer=127.0.0.1:{}\n".format(
+                                DCR_BASE_PORT + ip + port_ofs
+                            )
+                        )
+        config_filename = os.path.join(datadir_path, "decred", "dcrwallet.conf")
+        with open(config_filename, "a") as fp:
+            fp.write("enablevoting=1\n")
+
+    if "namecoin" in coins_array:
+        # Pruned nodes don't provide blocks
+        config_filename = os.path.join(datadir_path, "namecoin", "namecoin.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            # fp.write("bind=127.0.0.1\n")  # Causes BTC v28 to try and bind to bind=127.0.0.1:8444, even with a bind...=onion present
+            # listenonion=0 does not stop the node from trying to bind to the tor port
+            # https://github.com/bitcoin/bitcoin/issues/22726
+            fp.write(
+                "bind=127.0.0.1:{}=onion\n".format(
+                    NAMECOIN_TOR_PORT_BASE + node_id + port_ofs
+                )
+            )
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_nmc_" + str(node_id)
+                rpc_pass = "test_nmc_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["namecoin"]["rpcuser"] = rpc_user
+                settings["chainclients"]["namecoin"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(
+                            NAMECOIN_PORT_BASE + ip + port_ofs
+                        )
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"ncm{node_id}", []):
+                fp.write(opt + "\n")
+
+    if "monero" in coins_array:
+        with open(os.path.join(datadir_path, "monero", "monerod.conf"), "a") as fp:
+            fp.write("p2p-bind-ip=127.0.0.1\n")
+            fp.write(
+                "p2p-bind-port={}\n".format(XMR_BASE_P2P_PORT + node_id + port_ofs)
+            )
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "add-exclusive-node=127.0.0.1:{}\n".format(
+                            XMR_BASE_P2P_PORT + ip + port_ofs
+                        )
+                    )
+
+    if "pivx" in coins_array:
+        # Pruned nodes don't provide blocks
+        config_filename = os.path.join(datadir_path, "pivx", "pivx.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            fp.write("port={}\n".format(PIVX_BASE_PORT + node_id + port_ofs))
+            fp.write("bind=127.0.0.1\n")
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_pivx_" + str(node_id)
+                rpc_pass = "test_pivx_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["pivx"]["rpcuser"] = rpc_user
+                settings["chainclients"]["pivx"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(PIVX_BASE_PORT + ip + port_ofs)
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"pivx{node_id}", []):
+                fp.write(opt + "\n")
+
+    if "dash" in coins_array:
+        # Pruned nodes don't provide blocks
+        config_filename = os.path.join(datadir_path, "dash", "dash.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            fp.write("port={}\n".format(DASH_BASE_PORT + node_id + port_ofs))
+            fp.write("bind=127.0.0.1\n")
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_dash_" + str(node_id)
+                rpc_pass = "test_dash_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["dash"]["rpcuser"] = rpc_user
+                settings["chainclients"]["dash"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(DASH_BASE_PORT + ip + port_ofs)
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"dash{node_id}", []):
+                fp.write(opt + "\n")
+
+    if "firo" in coins_array:
+        # Pruned nodes don't provide blocks
+        config_filename = os.path.join(datadir_path, "firo", "firo.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            fp.write("port={}\n".format(FIRO_BASE_PORT + node_id + port_ofs))
+            fp.write("bind=127.0.0.1\n")
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_firo_" + str(node_id)
+                rpc_pass = "test_firo_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["firo"]["rpcuser"] = rpc_user
+                settings["chainclients"]["firo"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(FIRO_BASE_PORT + ip + port_ofs)
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"firo{node_id}", []):
+                fp.write(opt + "\n")
+
+    if "bitcoincash" in coins_array:
+        config_filename = os.path.join(datadir_path, "bitcoincash", "bitcoin.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            # NOTE: port is set (when starting daemon) from basicswap.json
+            fp.write("bind=127.0.0.1\n")
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_bch_" + str(node_id)
+                rpc_pass = "test_bch_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["bitcoincash"]["rpcuser"] = rpc_user
+                settings["chainclients"]["bitcoincash"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(BCH_BASE_PORT + ip + port_ofs)
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"bch{node_id}", []):
+                fp.write(opt + "\n")
+
+    if "dogecoin" in coins_array:
+        config_filename = os.path.join(datadir_path, "dogecoin", "dogecoin.conf")
+        with open(config_filename, "r") as fp:
+            lines = fp.readlines()
+        with open(config_filename, "w") as fp:
+            for line in lines:
+                if not line.startswith("prune"):
+                    fp.write(line)
+            fp.write("port={}\n".format(DOGE_BASE_PORT + node_id + port_ofs))
+            fp.write("bind=127.0.0.1\n")
+            fp.write("dnsseed=0\n")
+            fp.write("discover=0\n")
+            fp.write("listenonion=0\n")
+            fp.write("upnp=0\n")
+            fp.write("debug=1\n")
+            if use_rpcauth:
+                salt = generate_salt(16)
+                rpc_user = "test_doge_" + str(node_id)
+                rpc_pass = "test_doge_pwd_" + str(node_id)
+                fp.write(
+                    "rpcauth={}:{}${}\n".format(
+                        rpc_user, salt, password_to_hmac(salt, rpc_pass)
+                    )
+                )
+                settings["chainclients"]["dogecoin"]["rpcuser"] = rpc_user
+                settings["chainclients"]["dogecoin"]["rpcpassword"] = rpc_pass
+            for ip in range(num_nodes):
+                if ip != node_id:
+                    fp.write(
+                        "connect=127.0.0.1:{}\n".format(DOGE_BASE_PORT + ip + port_ofs)
+                    )
+            for opt in EXTRA_CONFIG_JSON.get(f"doge{node_id}", []):
+                fp.write(opt + "\n")
+
+    settings["startup_delay"] = 1
+    settings["min_delay_event"] = 1
+    settings["max_delay_event"] = 4
+    settings["min_delay_event_short"] = 1
+    settings["max_delay_event_short"] = 4
+    settings["min_delay_retry"] = 10
+    settings["max_delay_retry"] = 20
+
+    settings["check_progress_seconds"] = 5
+    settings["check_watched_seconds"] = 5
+    settings["check_expired_seconds"] = 60
+    settings["check_events_seconds"] = 5
+    settings["check_split_messages_seconds"] = 5
+    settings["check_xmr_swaps_seconds"] = 5
+
+    recursive_update_dict(settings, extra_settings)
+
+    extra_config = EXTRA_CONFIG_JSON.get(f"sc{node_id}", {})
+    recursive_update_dict(settings, extra_config)
+
+    with open(config_path, "w") as fp:
+        json.dump(settings, fp, indent=4)
+
+    return mnemonic_out
+
+
+def prepare_nodes(
+    num_nodes,
+    extra_coins,
+    use_rpcauth=False,
+    extra_settings={},
+    port_ofs=0,
+    wallets_password=None,
+):
+    bins_path = os.path.join(TEST_PATH, "bin")
+    for i in range(num_nodes):
+        logging.info(f"Preparing node: {i}.")
+        client_path = os.path.join(TEST_PATH, f"client{i}")
+        try:
+            shutil.rmtree(client_path)
+        except Exception as ex:
+            logging.warning(f"setUpClass {ex}")
+
+        if wallets_password is not None:
+            assert isinstance(wallets_password, str)
+            logging.info("Using wallets password.")
+            os.environ["WALLET_ENCRYPTION_PWD"] = wallets_password
+        run_prepare(
+            i,
+            client_path,
+            bins_path,
+            extra_coins,
+            mnemonics[i] if i < len(mnemonics) else None,
+            num_nodes=num_nodes,
+            use_rpcauth=use_rpcauth,
+            extra_settings=extra_settings,
+            port_ofs=port_ofs,
+        )
+        if wallets_password is not None:
+            os.environ.pop("WALLET_ENCRYPTION_PWD", None)
+
+
+class TestBase(unittest.TestCase):
+    def setUpClass(cls):
+        super().setUpClass()
+
+        cls.delay_event = threading.Event()
+        signal.signal(
+            signal.SIGINT, lambda signal, frame: cls.signal_handler(cls, signal, frame)
+        )
+
+    def signal_handler(self, sig, frame):
+        os.write(sys.stdout.fileno(), f"Signal {sig} detected.\n".encode("utf-8"))
+        self.delay_event.set()
+
+    def wait_seconds(self, seconds):
+        self.delay_event.wait(seconds)
+        if self.delay_event.is_set():
+            raise ValueError("Test stopped.")
+
+    def wait_for_particl_height(self, http_port, num_blocks=3):
+        # Wait for height, or sequencelock is thrown off by genesis blocktime
+        logging.info("Waiting for Particl chain height %d", num_blocks)
+        for i in range(60):
+            if self.delay_event.is_set():
+                raise ValueError("Test stopped.")
+            try:
+                wallets = json.loads(
+                    urlopen(f"http://127.0.0.1:{http_port}/json/wallets").read()
+                )
+                particl_blocks = wallets["PART"]["blocks"]
+                print("particl_blocks", particl_blocks)
+                if particl_blocks >= num_blocks:
+                    return
+            except Exception as e:
+                print("Error reading wallets", str(e))
+
+            self.delay_event.wait(1)
+        raise ValueError(f"wait_for_particl_height failed http_port: {http_port}")
+
+
+def run_process(client_id):
+    client_path = os.path.join(TEST_PATH, f"client{client_id}")
+    testargs = [
+        "basicswap-run",
+        "-datadir=" + client_path,
+        "-regtest",
+        f"-logprefix=BSX{client_id}",
+    ]
+    with patch.object(sys, "argv", testargs):
+        runSystem.main()
+
+
+class XmrTestBase(TestBase):
+    @classmethod
+    def setUpClass(cls):
+        super(XmrTestBase, cls).setUpClass(cls)
+
+        cls.update_thread = None
+        cls.processes = []
+
+        prepare_nodes(3, "monero")
+
+    def start_processes(self):
+        multiprocessing.set_start_method("spawn")
+        self.delay_event.clear()
+
+        for i in range(3):
+            self.processes.append(
+                multiprocessing.Process(target=run_process, args=(i,))
+            )
+            self.processes[-1].start()
+
+        waitForServer(self.delay_event, 12701, 60)
+
+        def waitForMainAddress():
+            for i in range(20):
+                if self.delay_event.is_set():
+                    raise ValueError("Test stopped.")
+                try:
+                    wallets = json.loads(
+                        urlopen("http://127.0.0.1:12701/json/wallets").read()
+                    )
+                    return wallets["XMR"]["main_address"]
+                except Exception as e:
+                    print(f"Waiting for main address {e}")
+                self.delay_event.wait(1)
+            raise ValueError("waitForMainAddress timedout")
+
+        xmr_addr1 = waitForMainAddress()
+        num_blocks: int = 100
+
+        xmr_auth = None
+        if os.getenv("XMR_RPC_USER", "") != "":
+            xmr_auth = (os.getenv("XMR_RPC_USER", ""), os.getenv("XMR_RPC_PWD", ""))
+
+        if (
+            callrpc_xmr(XMR_BASE_RPC_PORT + 1, "get_block_count", auth=xmr_auth)[
+                "count"
+            ]
+            < num_blocks
+        ):
+            logging.info(f"Mining {num_blocks} Monero blocks to {xmr_addr1}.")
+            callrpc_xmr(
+                XMR_BASE_RPC_PORT + 1,
+                "generateblocks",
+                {"wallet_address": xmr_addr1, "amount_of_blocks": num_blocks},
+                auth=xmr_auth,
+            )
+        logging.info(
+            "XMR blocks: %d",
+            callrpc_xmr(XMR_BASE_RPC_PORT + 1, "get_block_count", auth=xmr_auth)[
+                "count"
+            ],
+        )
+
+        self.update_thread = threading.Thread(
+            target=updateThread, args=(xmr_addr1, self.delay_event, xmr_auth)
+        )
+        self.update_thread.start()
+
+        self.wait_for_particl_height(12701, num_blocks=3)
+
+    @classmethod
+    def tearDownClass(cls):
+        logging.info("Stopping test")
+        cls.delay_event.set()
+        if cls.update_thread:
+            cls.update_thread.join()
+        for p in cls.processes:
+            p.terminate()
+        for p in cls.processes:
+            p.join()
+        cls.update_thread = None
+        cls.processes = []

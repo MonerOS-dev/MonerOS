@@ -1,0 +1,194 @@
+{% include 'header.html' %} {% from 'style.html' import input_down_arrow_offer_svg, select_rate_svg, input_time_svg, select_target_svg, select_auto_strategy_svg %}
+{% from 'macros.html' import offer_stepper, page_header %}
+<div class="container mx-auto">
+  {{ page_header('Offer Terms', 'Set how long the offer lasts and how bids are handled.', outer_class='py-3 px-4 mt-3') }}
+  {% include 'inc_messages.html' %}
+  {{ offer_stepper(2) }}
+
+  <form method="post" autocomplete="off" id="form">
+  <section class="px-4 py-6">
+    <div class="lg:container mx-auto max-w-3xl space-y-6">
+
+      <!-- Trade summary with edit -->
+      <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold text-coolGray-900 dark:text-white">Your trade</h3>
+          <button name="step1" type="submit" value="Back" class="inline-flex items-center text-sm font-medium text-blue-500 hover:text-blue-600 focus:outline-none">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+            Edit trade
+          </button>
+        </div>
+        {% include 'offer_summary_card.html' %}
+      </div>
+
+      <!-- Terms -->
+      <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-coolGray-900 dark:text-white mb-4">Duration</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Offer valid for (hours)</label>
+            <div class="relative">
+              <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ input_time_svg | safe }}</div>
+              <input class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-3 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" type="number" name="validhrs" min="1" max="48" value="{{ data.validhrs }}">
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              {% for h in [6, 12, 24, 48] %}
+              <button type="button" data-set-value="{{ h }}" data-target-name="validhrs" class="py-1 px-2 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded-md focus:outline-none">{{ h }}h</button>
+              {% endfor %}
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">How long your offer stays visible to other traders. After this time it expires automatically and no new bids can be made.</p>
+          </div>
+          {% if data.debug_ui == true %}
+          <div>
+            <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Contract locked (minutes)</label>
+            <div class="relative">
+              <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ input_time_svg | safe }}</div>
+              <input class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-3 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" type="number" name="lockmins" min="10" max="5000" value="{{ data.lockmins }}">
+            </div>
+            {% if data.swap_style != 'xmr' %}
+            <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">Participate txn will be locked for half the time.</p>
+            {% endif %}
+          </div>
+          {% else %}
+          <div>
+            <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Contract locked (hours)</label>
+            <div class="relative">
+              <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ input_time_svg | safe }}</div>
+              <input class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-3 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" type="number" name="lockhrs" min="1" max="24" value="{{ data.lockhrs }}">
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              {% for h in [4, 8, 12, 24] %}
+              <button type="button" data-set-value="{{ h }}" data-target-name="lockhrs" class="py-1 px-2 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded-md focus:outline-none">{{ h }}h</button>
+              {% endfor %}
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">Maximum time allowed to complete the swap once a bid is accepted. If it isn't finished in time, the locked funds can be refunded{% if data.swap_style != 'xmr' %}; the participate transaction is locked for half this time{% endif %}.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Auto accept -->
+      <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-coolGray-900 dark:text-white mb-4">Bid handling</h3>
+        <div class="md:w-1/2">
+          <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Auto accept strategy</label>
+          <div class="relative">
+            {{ input_down_arrow_offer_svg | safe }}
+            <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ select_auto_strategy_svg | safe }}</div>
+            <select class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="automation_strat_id">
+              <option value="-1" {% if data.automation_strat_id==-1 %} selected{% endif %}>None (accept bids manually)</option>
+              {% for a in automation_strategies %}
+              <option value="{{ a[0] }}" {% if data.automation_strat_id==a[0] %} selected{% endif %}>{{ a[1] }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">When enabled, matching bids are accepted instantly — you won't review each one manually. Leave as "None" to approve every bid yourself.</p>
+        </div>
+      </div>
+
+      {# Network fees (adaptor-sig swaps only) #}
+      {% if data.swap_style == 'xmr' %}
+      {% if (data.coin_from | int not in (6, 9)) or (data.coin_to | int not in (6, 9)) %}
+      <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-coolGray-900 dark:text-white mb-4">Network fees</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {% if data.coin_from | int not in (6, 9) %}
+          <div>
+            <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Fee from confirm target</label>
+            <div class="relative">
+              <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ select_target_svg | safe }}</div>
+              <input class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-3 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" type="number" name="fee_from_conf" min="1" max="32" value="{{ data.fee_from_conf }}">
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">How many block confirmations to target when estimating the fee. Fewer blocks = higher fee but faster confirmation.</p>
+          </div>
+          <div>
+            <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Fee from increase by</label>
+            <div class="relative">
+              {{ input_down_arrow_offer_svg | safe }}
+              <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ select_rate_svg | safe }}</div>
+              <select class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="fee_from_extra">
+                <option value="0">None</option>
+                <option value="10" {% if data.fee_from_extra==10 %} selected{% endif %}>10%</option>
+                <option value="50" {% if data.fee_from_extra==50 %} selected{% endif %}>50%</option>
+                <option value="100" {% if data.fee_from_extra==100 %} selected{% endif %}>100%</option>
+              </select>
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">Optional extra fee bump applied on top of the estimate to help confirm faster when the network is busy.</p>
+          </div>
+          {% endif %}
+          {% if data.coin_to | int not in (6, 9) %}
+          <div>
+            <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Fee to confirm target</label>
+            <div class="relative">
+              <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ select_target_svg | safe }}</div>
+              <input class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-3 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" type="number" name="fee_to_conf" min="1" max="32" value="{{ data.fee_to_conf }}">
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">How many block confirmations to target when estimating the fee. Fewer blocks = higher fee but faster confirmation.</p>
+          </div>
+          <div>
+            <label class="block mb-1.5 text-sm font-medium text-coolGray-800 dark:text-white">Fee to increase by</label>
+            <div class="relative">
+              {{ input_down_arrow_offer_svg | safe }}
+              <div class="flex absolute inset-y-0 left-0 items-center pl-3 pointer-events-none">{{ select_rate_svg | safe }}</div>
+              <select class="pl-10 hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-white text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0" name="fee_to_extra">
+                <option value="0">None</option>
+                <option value="10" {% if data.fee_to_extra==10 %} selected{% endif %}>10%</option>
+                <option value="50" {% if data.fee_to_extra==50 %} selected{% endif %}>50%</option>
+                <option value="100" {% if data.fee_to_extra==100 %} selected{% endif %}>100%</option>
+              </select>
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-300 mt-2">Optional extra fee bump applied on top of the estimate to help confirm faster when the network is busy.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% endif %}
+
+      <!-- Navigation -->
+      <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl px-6 py-5">
+        <div class="flex flex-wrap justify-between gap-2">
+          <button name="step1" type="submit" value="Back" class="inline-flex items-center px-4 py-2.5 font-medium text-sm text-coolGray-500 hover:text-coolGray-600 border border-coolGray-200 hover:border-coolGray-300 bg-white rounded-md focus:ring-0 focus:outline-none dark:text-white dark:hover:text-white dark:bg-gray-600 dark:hover:bg-gray-700 dark:border-gray-600 dark:hover:border-gray-600">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            <span>Back</span>
+          </button>
+          <button name="check_offer" value="Continue" type="submit" data-testid="offer-continue" class="inline-flex items-center px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <span>Review offer</span>
+            <svg class="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <input type="hidden" name="formid" value="{{ form_id }}">
+  <input type="hidden" name="addr_to" value="{{ data.addr_to }}">
+  <input type="hidden" name="addr_from" value="{{ data.addr_from }}">
+  <input type="hidden" name="swap_type" value="{{ data.swap_type }}">
+  <input type="hidden" name="coin_from" value="{{ data.coin_from }}">
+  <input type="hidden" name="coin_to" value="{{ data.coin_to }}">
+  <input type="hidden" name="amt_from" value="{{ data.amt_from }}">
+  <input type="hidden" name="amt_to" value="{{ data.amt_to }}">
+  <input type="hidden" name="amt_bid_min" value="{{ data.amt_bid_min }}">
+  {% if data.amt_var==true %}
+  <input type="hidden" name="amt_var" value="av">
+  {% endif %}
+  {% if data.rate_var==true %}
+  <input type="hidden" name="rate_var" value="rv">
+  {% endif %}
+  {% if data.offer_mode is defined %}
+  <input type="hidden" name="offer_mode" value="{{ data.offer_mode }}">
+  {% endif %}
+  {% if data.total_to_sell is defined %}
+  <input type="hidden" name="total_to_sell" value="{{ data.total_to_sell }}">
+  {% endif %}
+  {% if data.min_wallet_reserve is defined %}
+  <input type="hidden" name="min_wallet_reserve" value="{{ data.min_wallet_reserve }}">
+  {% endif %}
+  </form>
+</div>
+<script src="static/js/modules/coin-picker.js?v={{ static_v }}"></script>
+<script src="static/js/pages/offer-new-page.js?v={{ static_v }}"></script>
+{% include 'footer.html' %}
+</body>
+</html>

@@ -1,9 +1,33 @@
 #!/bin/bash
 
+# --- 1. REMAP ANSI PALETTE & WHIPTAIL COLORS ---
+export TERM=linux
+if [ "$TERM" = "linux" ]; then
+    # Color 4 (Blue) -> Bright Red (#ff0000)
+    echo -ne "\e]P4ff0000" 
+    # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+export NEWT_COLORS='
+  root=black,black
+  window=red,black
+  shadow=black,black
+  border=red,black
+  title=red,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,red
+  button=white,black
+  actbutton=black,white
+  entry=white,black
+'
+
 # --- Configuration ---
 BASE_DIR="/mnt/sallyport/watch_bitcoin"
 ELECTRUM_BIN="/usr/local/bin/electrum"
-ELECTRUM_DATA="/home/user/.electrum"
 LOG_FILE="/tmp/logs/submit_btc.log"
 
 # --- Debug Mode ---
@@ -19,21 +43,21 @@ log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-echo "Submitting signed Bitcoin Transactions via Electrum"
+echo "Submitting signed Bitcoin Transactions via Electrum..."
+echo "=================================================="
 
-# 1. Find and sort all signed JSON transactions by timestamp
-TX_LIST=$(find "$BASE_DIR" -type f -name "signed_tx_*.json" | sort -t '_' -k3 -n)
+# 1. Find and sort all signed JSON transactions by timestamp using process substitution for safety
+while read -r TX_PATH; do
+    [ -z "$TX_PATH" ] && continue
 
-if [ -z "$TX_LIST" ]; then
-    echo "SUCCESS: No Bitcoin transactions to process"
-    exit 0
-fi
-
-for TX_PATH in $TX_LIST; do
     DIR=$(dirname "$TX_PATH")
     SIGNED_FILE=$(basename "$TX_PATH")
-    # Derived filename for cleanup: signed_tx_123.json -> unsigned_tx_123.psbt
-    UNSIGNED_FILE=$(echo "$SIGNED_FILE" | sed 's/signed_tx_/unsigned_tx_/' | sed 's/.json/.psbt/')
+    
+    ID_PART="${SIGNED_FILE#signed_tx_}"
+    ID_PART="${ID_PART%.json}"
+    
+    UNSIGNED_FILE="unsigned_tx_${ID_PART}.psbt"
+    SIGNED_RECORD_FILE="${DIR}/signed_record_${ID_PART}"
     ADDR_ID=$(basename "$DIR")
 
     if [ "$DEBUG" = true ]; then
@@ -41,8 +65,13 @@ for TX_PATH in $TX_LIST; do
         echo "Processing: $SIGNED_FILE ($ADDR_ID)"
     fi
 
+    if [ ! -f "$TX_PATH" ]; then
+        echo "[FAILED] $SIGNED_FILE ($ADDR_ID) - Transaction file missing or modified mid-process"
+        ((F_COUNT++))
+        continue
+    fi
+
     # 2. Extract the 'hex' string from the JSON
-    # Using python3 since your system uses it in the ETH script
     RAW_HEX=$(python3 -c "import json; print(json.load(open('$TX_PATH'))['hex'])" 2>/dev/null)
 
     if [ -z "$RAW_HEX" ]; then
@@ -70,25 +99,35 @@ for TX_PATH in $TX_LIST; do
             echo "Electrum Response: $RESPONSE"
         fi
 
-        # 4. Check for Success
-        # Electrum returns the TXID (64 chars) on success
+        # 4. Check for Success (Electrum returns the TXID - 64 hex characters)
         if [[ "$RESPONSE" =~ ^[0-9a-fA-F]{64}$ ]]; then
             TXID=$RESPONSE
             echo "[OK] $SIGNED_FILE | TXID: $TXID"
             log_msg "SUCCESS: $SIGNED_FILE | TXID: $TXID"
             ((S_COUNT++))
-            
-            # Cleanup: Remove both signed JSON and the original unsigned PSBT
-            rm -f "$TX_PATH"
+
+            # --- UI POPUP: Show Record Data & TXID (Matching Monero Workflow) ---
+            if [ -f "$SIGNED_RECORD_FILE" ]; then
+                RECORD_CONTENT=$(cat "$SIGNED_RECORD_FILE")
+            else
+                RECORD_CONTENT="No saved record details found for this transaction."
+            fi
+
+            whiptail --title " Broadcast Successful " \
+                     --msgbox "Bitcoin Transaction Submitted!\n\nTXID: $TXID\n\n$RECORD_CONTENT" 0 0
+            clear
+
+            # Cleanup: Remove signed JSON, unsigned PSBT, and the signed record receipt
+            rm -f "$TX_PATH" "$SIGNED_RECORD_FILE"
             [ -f "$DIR/$UNSIGNED_FILE" ] && rm -f "$DIR/$UNSIGNED_FILE"
-            
+
             SUCCESS_FLAG=true
             break 
         else
             # Extract error (strip common Electrum noise)
             ERR_MSG=$(echo "$RESPONSE" | tr '\n' ' ')
             echo "[FAILED ATTEMPT $ATTEMPT] $SIGNED_FILE ($ERR_MSG)"
-            
+
             if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
                 sleep $RETRY_DELAY
                 ((ATTEMPT++))
@@ -102,11 +141,14 @@ for TX_PATH in $TX_LIST; do
     done
 
     sleep 1
-done
+done < <(find "$BASE_DIR" -type f -name "signed_tx_*.json" | sort -t '_' -k3 -n)
 
-echo "------------------------------------------------"
+echo "=================================================="
+echo "TRANSACTION PROCESSING LOOP EXHAUSTED"
 if [ "$F_COUNT" -eq 0 ]; then
-    echo "SUMMARY_SUCCESS: $S_COUNT processed"
+    echo "SUMMARY_SUCCESS: All $S_COUNT signed transactions successfully submitted."
 else
-    echo "SUMMARY_FAILURE: $S_COUNT ok, $F_COUNT failed"
+    echo "SUMMARY_FAILURE: Execution finished with errors. Success Count: $S_COUNT, Failure Count: $F_COUNT"
 fi
+
+sleep 5

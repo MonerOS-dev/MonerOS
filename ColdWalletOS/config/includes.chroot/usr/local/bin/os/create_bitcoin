@@ -3,21 +3,16 @@
 # ---------------------------------------------------------
 #  UI THEME (Stealth)
 # ---------------------------------------------------------
-export PATH=$PATH:/usr/sbin:/sbin
+export PATH=$PATH:/usr/sbin:/sbin:/usr/local/bin
 export TERM=linux
 stty sane
 
-# 1. REMAP ANSI PALETTE
 if [ "$TERM" = "linux" ]; then
-    echo -ne "\e]P459cbe8" # Color 4 (Blue) -> Cyan
-    echo -ne "\e]P7ffffff" # Color 7 (Lightgray) -> Pure White
+    echo -ne "\e]P459cbe8"
+    echo -ne "\e]P7ffffff"
     clear
 fi
 
-# 2. ASSIGN NEWT COLORS
-# window = black (Dark Gray)
-# border/title/text = blue (Cyan)
-# button = white (fg) on black (bg)
 export NEWT_COLORS='
   root=black,black
   window=blue,black
@@ -34,85 +29,68 @@ export NEWT_COLORS='
 '
 
 BASE_DIR="/mnt/vault/bitcoin"
-TEMP_NAME="btc_temp"
+TEMP_WALLET="/tmp/electrum_temp_$$"
+ADDR_FILE="/tmp/btc_addr_$$.txt"
+ZPUB_FILE="/tmp/btc_zpub_$$.txt"
 
 mkdir -p "$BASE_DIR" >/dev/null 2>&1
-mkdir -p "$BASE_DIR/wallets" >/dev/null 2>&1
-
-ADDR_FILE="/tmp/btc_addr.$$"
 
 # ---------------------------------------------------------
-#  SHOW GAUGE IMMEDIATELY — ALL WORK HAPPENS BEHIND IT
+#  SHOW GAUGE IMMEDIATELY
 # ---------------------------------------------------------
 (
-echo 5
-sleep 0.1
-
-# Kill any running bitcoind
-pkill -9 -f bitcoind 2>/dev/null
-sleep 1
-
 echo 20
 sleep 0.1
 
-# Start bitcoind offline
-bitcoind -datadir="$BASE_DIR" \
-         -daemon \
-         -connect=0 \
-         -listen=0 \
-         -dnsseed=0 >/dev/null 2>&1
+# Create wallet and explicitly pass empty lines to bypass encryption prompts
+python3 -c "
+import subprocess
+try:
+    p = subprocess.Popen(['electrum', '--offline', '-w', '$TEMP_WALLET', 'create'], 
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p.communicate(input=b'\n\n')
+except Exception as e:
+    pass
+" 2>/dev/null
 
-echo 35
+echo 60
 sleep 0.1
 
-# Wait for RPC cookie
-for i in {1..20}; do
-    if [ -f "$BASE_DIR/.cookie" ]; then
-        break
-    fi
-    sleep 1
-done
+# Extract the address and master public key offline via python
+ADDR=$(python3 -c "
+import subprocess, json
+try:
+    res = subprocess.check_output(['electrum', '-o', '-w', '$TEMP_WALLET', 'listaddresses'])
+    addrs = json.loads(res.decode())
+    print(addrs[0] if addrs else '')
+except Exception:
+    print('')
+" 2>/dev/null)
 
-echo 50
-sleep 0.1
+ZPUB=$(python3 -c "
+import json
+try:
+    with open('$TEMP_WALLET', 'r') as f:
+        data = json.load(f)
+        keystore = data.get('keystore', {})
+        zpub = keystore.get('zpub', '') or keystore.get('xpub', '') or keystore.get('ypub', '')
+        print(zpub)
+except Exception:
+    print('')
+" 2>/dev/null)
 
-# Create wallet (descriptors)
-bitcoin-cli -datadir="$BASE_DIR" -named createwallet wallet_name="$TEMP_NAME" descriptors=true >/dev/null 2>&1
-
-echo 70
-sleep 0.1
-
-# Get Bech32 address
-ADDR=$(bitcoin-cli -datadir="$BASE_DIR" -rpcwallet="$TEMP_NAME" getnewaddress "" "bech32" 2>/dev/null)
-
-# Pass address back to parent
 echo "$ADDR" > "$ADDR_FILE"
+echo "$ZPUB" > "$ZPUB_FILE"
 
 echo 85
 sleep 0.1
 
-# Shut down bitcoind
-bitcoin-cli -datadir="$BASE_DIR" stop >/dev/null 2>&1
-sleep 3
-pkill -9 -f bitcoind 2>/dev/null
-
-echo 90
-sleep 0.1
-
-# Move wallet to folder named after address
-if [ -d "$BASE_DIR/wallets/$TEMP_NAME" ]; then
-    mv "$BASE_DIR/wallets/$TEMP_NAME" "$BASE_DIR/$ADDR"
-elif [ -d "$BASE_DIR/$TEMP_NAME" ]; then
-    mv "$BASE_DIR/$TEMP_NAME" "$BASE_DIR/$ADDR"
+# Move wallet into the correct vault directory structure: /mnt/vault/bitcoin/<address>/wallet
+if [ -n "$ADDR" ] && [ -f "$TEMP_WALLET" ]; then
+    WALLET_DIR="$BASE_DIR/$ADDR"
+    mkdir -p "$WALLET_DIR"
+    mv "$TEMP_WALLET" "$WALLET_DIR/wallet"
 fi
-sync
-
-echo 95
-sleep 0.1
-
-# Cleanup blockchain data
-rm -rf "$BASE_DIR/blocks" "$BASE_DIR/chainstate" "$BASE_DIR/backups" "$BASE_DIR/database" "$BASE_DIR/wallets"
-rm -f "$BASE_DIR/.cookie" "$BASE_DIR/peers.dat" "$BASE_DIR/mempool.dat" "$BASE_DIR/fee_estimates.dat" "$BASE_DIR/banlist.json" "$BASE_DIR/settings.json"
 sync
 
 echo 100
@@ -121,30 +99,102 @@ sleep 0.1
 whiptail --gauge "Creating Bitcoin wallet...\nPlease wait." 8 50 0
 
 # ---------------------------------------------------------
-#  READ ADDRESS BACK FROM TEMP FILE
+#  READ ADDRESS & ZPUB BACK FROM TEMP FILES
 # ---------------------------------------------------------
 ADDR=$(cat "$ADDR_FILE" 2>/dev/null)
-rm -f "$ADDR_FILE"
+ZPUB=$(cat "$ZPUB_FILE" 2>/dev/null)  
+rm -f "$ADDR_FILE" "$ZPUB_FILE" "$TEMP_WALLET"
 
 # ---------------------------------------------------------
-#  CREATE WATCH-ONLY WALLET VERSION
+#  PROMPT FOR RESTORE DATE & CREATE WATCH-ONLY VERSION
 # ---------------------------------------------------------
-WATCH_BASE="/mnt/sallyport/watch_bitcoin"
-WATCH_PATH="$WATCH_BASE/$ADDR"
+if [ -n "$ADDR" ]; then
+    WALLET_DIR="$BASE_DIR/$ADDR"
+    
+    # Loop indefinitely until a valid date is entered
+    while :; do
+        RESTORE_DATE=$(whiptail --title "Set Restore Date (REQUIRED)" \
+            --nocancel \
+            --inputbox "\nEnter the wallet restore date (YYYY-MM-DD).\n" \
+            10 50 "" 3>&1 1>&2 2>&3)
 
-mkdir -p "$WATCH_PATH" >/dev/null 2>&1
+        if [[ $RESTORE_DATE =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            break
+        else
+            whiptail --title "Invalid Format" \
+                --msgbox "ERROR: '$RESTORE_DATE' is not valid.\n\nYou must enter the date manually as YYYY-MM-DD.\nExample: 2026-04-29" 10 50
+        fi
+    done
 
-{
-    echo "ADDRESS: $ADDR"
-    echo "TYPE: watch-only"
-} > "$WATCH_PATH/watch_info.txt"
-sync
+    # Save watch info in vault with the manually entered date
+    {
+        echo "ADDRESS: $ADDR"
+        echo "ZPUB: $ZPUB"
+        echo "RESTORE_DATE: $RESTORE_DATE"
+    } > "$WALLET_DIR/watch_info.txt"
+
+    WATCH_BASE="/mnt/sallyport/watch_bitcoin"
+    WATCH_PATH="$WATCH_BASE/$ADDR"
+    mkdir -p "$WATCH_PATH" >/dev/null 2>&1
+    if [ -f "$WALLET_DIR/watch_info.txt" ]; then
+        cp "$WALLET_DIR/watch_info.txt" "$WATCH_PATH/watch_info.txt"
+    fi
+    sync
+fi
 
 # ---------------------------------------------------------
-#  FINAL POPUP
+#  FINAL POPUPS & SEED DISPLAY LOGIC
 # ---------------------------------------------------------
-whiptail --title "Bitcoin Wallet Created" \
-         --msgbox "\nYour Bitcoin wallet has been generated.\n\nAddress:\n$ADDR" \
-         0 0
+if [ -n "$ADDR" ]; then
+    WH_INFO="$BASE_DIR/$ADDR/watch_info.txt"
+    RESTORE_DATE="N/A"
+    if [ -f "$WH_INFO" ]; then
+        RESTORE_DATE=$(grep "RESTORE_DATE:" "$WH_INFO" | awk '{print $2}')
+    fi
 
-/usr/local/bin/os/main_menu
+    whiptail --title "Bitcoin Wallet Created" \
+             --msgbox "\nYour Bitcoin wallet has been generated.\n\nAddress:\n$ADDR" \
+             0 0
+
+    whiptail --title " WALLET RECOVERY " \
+             --msgbox "\nIt is highly recommended that you write down the information displayed on the next screen. This will allow you to restore your wallet on any other machine in case of data loss.\n\nSTORE IT IN A SAFE PLACE!\n" \
+             0 0
+
+    # Retrieve seed directly from wallet file via Python
+    WALLET_PATH="$BASE_DIR/$ADDR/wallet"
+    SEED_RAW=$(python3 -c "
+import json
+try:
+    with open('$WALLET_PATH', 'r') as f:
+        data = json.load(f)
+        seed = data.get('seed', '')
+        if not seed and 'keystore' in data:
+            seed = data['keystore'].get('seed', '')
+        print(seed)
+except Exception:
+    print('')
+" 2>/dev/null)
+
+    # Format into a 3-column grid matching the viewer script
+    ADDR_SHORT="${ADDR:0:8}...${ADDR: -8}"
+    FORMATTED_SEED="Address (shortened): $ADDR_SHORT\nRestore Date: $RESTORE_DATE\n\n"
+
+    i=1
+    for word in $SEED_RAW; do
+        FORMATTED_SEED+="$(printf "%-15s" "$i.$word")"
+        if (( i % 3 == 0 )); then 
+            FORMATTED_SEED+="\n" 
+        fi
+        ((i++))
+    done
+
+    whiptail --title " RECOVERY SEED " --msgbox "$(echo -e "$FORMATTED_SEED")" 16 50
+
+    /usr/local/bin/os/main_menu
+else
+    whiptail --title "Error" \
+             --msgbox "\nWallet generation failed.\n" \
+             0 0
+
+    /usr/local/bin/os/main_menu
+fi

@@ -1,0 +1,290 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------
+#  UI THEME
+# ---------------------------------------------------------
+export PATH=$PATH:/usr/sbin:/sbin
+export TERM=linux
+stty sane
+
+# 1. REMAP ANSI PALETTE (Original Red & White scheme)
+if [ "$TERM" = "linux" ]; then
+    echo -ne "\e]P4ff0000" 
+    echo -ne "\e]P7ffffff" 
+    clear
+fi
+
+# 2. ASSIGN NEWT COLORS
+export NEWT_COLORS='
+  root=black,black
+  window=blue,black
+  shadow=black,black
+  border=blue,black
+  title=blue,black
+  textbox=white,black
+  label=white,black
+  listbox=white,black
+  actlistbox=black,blue
+  button=white,blue
+  actbutton=white,black
+  entry=white,black
+'
+
+# run whiptail in a way that allows arrow keys
+run_whiptail() {
+    local ecfile=$(mktemp)
+    script -q -c "$(printf '%q ' "$@"); echo \$? > $ecfile" /dev/null
+    local ec=$(cat "$ecfile")
+    rm -f "$ecfile"
+    return "$ec"
+}
+
+sudo loadkeys us >/dev/null 2>&1
+stty sane -ixon
+
+INVOICE_DIR="/mnt/external/invoices"
+PYTHON_SCRIPT="/usr/local/bin/os/decrypt_invoice.py"
+SALLY_BASE="/mnt/sallyport"
+CONFIG_FILE="/home/user/password.cfg"
+
+# Exit immediately if the directory doesn't exist
+if [ ! -d "$INVOICE_DIR" ]; then
+    exit 1
+fi
+
+# Check if any .enc files exist before bothering to prompt for a password
+found=0
+for file in "$INVOICE_DIR"/*.enc; do
+    if [ -e "$file" ]; then
+        found=1
+        break
+    fi
+done
+
+# Exit immediately if no .enc files were found
+if [ "$found" -eq 0 ]; then
+    exit 1
+fi
+
+# --- FUNCTION TO HANDLE EACH DECRYPTED INVOICE ---
+process_invoice() {
+    local invoice_line="$1"
+    local file_path="$2"
+
+    # Robust parsing: splits by pipe or comma
+    # Correct field order from Python: Coin, Address, Amount, Timestamp
+    # Original Python output order: Coin, Amount, Address, Timestamp
+    IFS=',' read -r coin_type pay_address amount  date <<< "$invoice_line"
+    if [ -z "$date" ]; then
+        IFS='|' read -r coin_type pay_address amount date <<< "$invoice_line"
+    fi
+
+    coin_type=$(echo "$coin_type" | xargs | tr '[:upper:]' '[:lower:]')
+    amount=$(echo "$amount" | xargs)
+    pay_address=$(echo "$pay_address" | xargs)
+    date=$(echo "$date" | xargs)
+
+    # Normalize coin type name and get ticker label
+    local sally_coin=""
+    local ticker=""
+    if [[ "$coin_type" =~ bitcoin|btc ]]; then
+        sally_coin="watch_bitcoin"
+        coin_type="Bitcoin"
+        ticker="BTC"
+    elif [[ "$coin_type" =~ monero|xmr ]]; then
+        sally_coin="watch_monero"
+        coin_type="Monero"
+        ticker="XMR"
+    else
+        ticker="COIN"
+    fi
+
+    while true; do
+        # Notification dialog using the run_whiptail wrapper
+        run_whiptail whiptail --title " Invoice Asset: $coin_type " \
+            --yes-button "Select Account" \
+            --no-button "Delete" \
+            --yesno "Pay to Address: $pay_address\n\nPayment Amount ($ticker): $amount\n\nInvoice Timestamp: $date" \
+            15 50
+        
+        local choice=$?
+
+        # Choice 1 = Delete (No button clicked)
+        if [ $choice -eq 1 ]; then
+            if run_whiptail whiptail --title " CONFIRM DELETION " --yesno "Are you sure you want to delete this invoice?" 9 50; then
+                rm -f "$file_path"
+                whiptail --title " Success " --msgbox "Invoice file deleted." 9 50
+            fi
+            break
+
+        # Choice 0 = Pay (Yes button clicked)
+        elif [ $choice -eq 0 ]; then
+            # Scan matching watch folder for available addresses
+            WALLET_OPTIONS=()
+            if [ -n "$sally_coin" ] && [ -d "$SALLY_BASE/$sally_coin" ]; then
+                while IFS= read -r dir; do
+                    [ -z "$dir" ] && continue
+                    FULL_ADDR=$(basename "$dir")
+                    
+                    if [ ${#FULL_ADDR} -gt 15 ]; then
+                        SHORT_ADDR="${FULL_ADDR:0:6}...${FULL_ADDR: -6}"
+                    else
+                        SHORT_ADDR="$FULL_ADDR"
+                    fi
+                    
+                    # Read the balance from the appropriate backend folder
+                    if [ "$coin_type" = "Bitcoin" ]; then
+                        BALANCE_FILE="/var/www/backend/Bitcoin/${FULL_ADDR}_balance.txt"
+                    else
+                        BALANCE_FILE="/var/www/backend/Monero/${FULL_ADDR}_unlocked.txt"
+                    fi
+
+                    if [ -f "$BALANCE_FILE" ]; then
+                        BALANCE=$(cat "$BALANCE_FILE" 2>/dev/null | xargs)
+                    else
+                        BALANCE="0.00"
+                    fi
+
+                    WALLET_OPTIONS+=("$FULL_ADDR" "$SHORT_ADDR [$BALANCE $ticker]")
+                done < <(find "$SALLY_BASE/$sally_coin" -mindepth 1 -maxdepth 1 -type d)
+            fi
+
+            if [ ${#WALLET_OPTIONS[@]} -eq 0 ]; then
+                whiptail --title " Error " --msgbox "No matching $coin_type addresses found in $SALLY_BASE." 10 50
+                continue
+            fi
+
+            CHOSEN_WALLET=$(whiptail --title " Select Address " \
+                --notags \
+                --ok-button "Approve" \
+                --cancel-button "Go Back" \
+                --menu "\nSELECT SOURCE ADDRESS TO PAY FROM:" \
+                15 50 6 \
+                "${WALLET_OPTIONS[@]}" \
+                3>&1 1>&2 2>&3)
+
+            if [ $? -eq 0 ] && [ -n "$CHOSEN_WALLET" ]; then
+                # Select the correct backend script based on coin type
+                if [ "$coin_type" = "Bitcoin" ]; then
+                    TRANSFER_SCRIPT="/usr/local/bin/os/transfer_bitcoin"
+                else
+                    TRANSFER_SCRIPT="/usr/local/bin/os/transfer_monero"
+                fi
+
+                # Prompt for development contribution tip percentage
+                TIP_PERCENT=$(whiptail --title " Development Contribution " \
+                    --ok-button "Select" \
+                    --cancel-button "Back" \
+                    --menu "\nSELECT DEVELOPMENT CONTRIBUTION:" \
+                    15 50 5 \
+                    "1.00" "1.00% (Transaction Amount * 0.0100)" \
+                    "0.75" "0.75% (Transaction Amount * 0.0075)" \
+                    "0.50" "0.50% (Transaction Amount * 0.0050)" \
+                    "0.25" "0.25% (Transaction Amount * 0.0025)" \
+                    "0"    "0.00% (No Development Contribution)" \
+                    3>&1 1>&2 2>&3)
+
+                if [ $? -ne 0 ] || [ -z "$TIP_PERCENT" ]; then
+                    continue
+                fi
+
+                # --- MASTER PASSWORD PROMPT & SHA256 VERIFICATION LOOP ---
+                pass_verified=0
+                while true; do
+                    MASTER_PASSWORD=$(whiptail --title " Master Authentication " \
+                        --passwordbox --nocancel "\nEnter Master Password:" 11 50 3>&1 1>&2 2>&3)
+
+                    if [ ! -f "$CONFIG_FILE" ]; then
+                        whiptail --title " Error " --msgbox "Password configuration file not found at $CONFIG_FILE." 9 50
+                        break
+                    fi
+
+                    STORED_HASH=$(tr -d '\r\n' < "$CONFIG_FILE" | xargs)
+                    
+                    # Hash the entered password using sha256sum to match how password.cfg was generated
+                    ENTERED_HASH=$(printf '%s' "$MASTER_PASSWORD" | sha256sum | awk '{print $1}')
+
+                    if [ "$ENTERED_HASH" = "$STORED_HASH" ]; then
+                        pass_verified=1
+                        break # Password matches stored hash
+                    else
+                        whiptail --title " Authentication Failed " --msgbox "Incorrect Master Password. Please try again." 9 50
+                    fi
+                done
+
+                # If the config file was missing, loop back out to address selection
+                if [ ! -f "$CONFIG_FILE" ] || [ $pass_verified -eq 0 ]; then
+                    continue
+                fi
+
+                # Construct and execute command using the verified MASTER_PASSWORD
+                TRANSFER_CMD="sudo /usr/bin/bash $TRANSFER_SCRIPT $(printf '%q' "$CHOSEN_WALLET") $(printf '%q' "$pay_address") $(printf '%q' "$amount") $(printf '%q' "$TIP_PERCENT") $(printf '%q' "$MASTER_PASSWORD")"
+
+                TMP_OUT=$(mktemp)
+                eval "$TRANSFER_CMD" >"$TMP_OUT" 2>&1
+                TRANSFER_STATUS=$?
+
+                TRANSFER_OUTPUT=$(cat "$TMP_OUT")
+                rm -f "$TMP_OUT"
+
+                # Show output in a Whiptail notice box
+                run_whiptail whiptail --title " Transfer Result " \
+                    --msgbox "$TRANSFER_OUTPUT" 15 50
+
+                # Check if it succeeded (matching PHP success criteria)
+                if [ $TRANSFER_STATUS -eq 0 ] && [[ "$TRANSFER_OUTPUT" == *'SUCCESS'* || "$TRANSFER_OUTPUT" == *'Transfer Address'* ]]; then
+                    rm -f "$file_path"
+                    whiptail --title " Success " --msgbox "Payment processed successfully. Corresponding invoice file deleted." 9 50
+                    ANY_SUCCESS=1
+                    break
+                fi
+            fi
+        else
+            # ESC or unexpected exit
+            break
+        fi
+    done
+}
+
+# --- LOOP FOR INVOICE PASSWORD UNTIL SUCCESSFUL ---
+while true; do
+    INVOICE_PASSWORD=$(whiptail --title " Authentication " \
+        --passwordbox --nocancel "\nEnter Invoice Password:" 11 50 3>&1 1>&2 2>&3)
+
+    success=0
+
+    # First pass: test if the password can successfully decrypt at least one file
+    for file in "$INVOICE_DIR"/*.enc; do
+        if [ -e "$file" ]; then
+            python3 "$PYTHON_SCRIPT" "$file" "$INVOICE_PASSWORD" >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                success=1
+                break
+            fi
+        fi
+    done
+
+    # If password is correct, clear screen and process each file interactively
+    if [ "$success" -eq 1 ]; then
+        clear
+        ANY_SUCCESS=0
+        for file in "$INVOICE_DIR"/*.enc; do
+            if [ -e "$file" ]; then
+                invoice_line=$(python3 "$PYTHON_SCRIPT" "$file" "$INVOICE_PASSWORD" 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$invoice_line" ]; then
+                    process_invoice "$invoice_line" "$file"
+                fi
+            fi
+        done
+
+        # Prompt for shutdown if any transaction succeeded
+        if [ "$ANY_SUCCESS" -eq 1 ]; then
+            if run_whiptail whiptail --title " Shutdown Required " --yesno "Do you want to shutdown now to sign?" 9 50; then
+                sudo bash /usr/local/bin/os/safe_shutdown
+            fi
+        fi
+        break
+    else
+        # Wrong password, notify and loop back to prompt again
+        whiptail --title " Decryption Failed " --msgbox "Incorrect invoice password. Please try again." 8 50
+    fi
+done

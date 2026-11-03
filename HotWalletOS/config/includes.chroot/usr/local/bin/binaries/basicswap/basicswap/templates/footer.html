@@ -1,0 +1,100 @@
+{% from 'style.html' import github_svg, matrix_svg %}
+<section class="mt-8">
+  <div class="container px-4 mx-auto py-8">
+    <div class="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+      <a class="shrink-0" href="/">
+        <img src="/static/images/logos/basicswap-logo.svg" class="h-7 imageshow dark-image" alt="BasicSwap">
+        <img src="/static/images/logos/basicswap-logo-dark.svg" class="h-7 imageshow light-image" alt="BasicSwap">
+      </a>
+      <div class="flex flex-col gap-6 sm:flex-row sm:gap-10 sm:items-start sm:justify-end sm:ml-auto">
+        <div class="flex flex-col gap-2 sm:items-end">
+          <span class="text-xs font-medium uppercase tracking-wide text-coolGray-400 dark:text-gray-500">BSX</span>
+          <nav class="flex flex-wrap gap-x-4 gap-y-2 text-sm font-medium sm:justify-end" aria-label="BSX links">
+            <a class="{% if current_page == 'offers' %}text-coolGray-900 dark:text-white font-semibold{% else %}text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white{% endif %}" href="/offers">Order Book</a>
+            <a class="{% if current_page == 'wallets' or current_page == 'wallet' %}text-coolGray-900 dark:text-white font-semibold{% else %}text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white{% endif %}" href="/wallets">Wallets</a>
+            <a class="{% if current_page == 'amm' %}text-coolGray-900 dark:text-white font-semibold{% else %}text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white{% endif %}" href="/amm">AMM</a>
+            <a class="{% if current_page == 'settings' or current_page == 'changepassword' %}text-coolGray-900 dark:text-white font-semibold{% else %}text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white{% endif %}" href="/settings">Settings</a>
+            <a class="{% if current_page == 'donation' %}text-coolGray-900 dark:text-white font-semibold{% else %}text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white{% endif %}" href="/donation">Donate</a>
+          </nav>
+        </div>
+        <div class="flex flex-col gap-2 sm:items-end">
+          <span class="text-xs font-medium uppercase tracking-wide text-coolGray-400 dark:text-gray-500">Help</span>
+          <nav class="flex flex-wrap gap-x-4 gap-y-2 text-sm font-medium sm:justify-end" aria-label="Help links">
+            <a class="text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white" href="https://docs.basicswapdex.com/docs/intro/" target="_blank" rel="noopener noreferrer">About</a>
+            <a class="text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white" href="https://docs.basicswapdex.com/docs/category/user-guides" target="_blank" rel="noopener noreferrer">Guides</a>
+            <a class="text-coolGray-500 hover:text-coolGray-700 dark:text-gray-300 dark:hover:text-white" href="https://matrix.to/#/#basicswap:matrix.org" target="_blank" rel="noopener noreferrer">Community</a>
+          </nav>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-4 pt-5 mt-5 border-t border-gray-100 dark:border-gray-600 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center text-xs text-coolGray-400 dark:text-gray-400">
+        <span class="text-coolGray-600 dark:text-gray-300 font-medium">© 2024–2026 BasicSwap</span>
+        <span class="text-coolGray-300 dark:text-gray-600" aria-hidden="true">·</span>
+        <a class="text-coolGray-500 hover:text-coolGray-700 dark:text-gray-400 dark:hover:text-gray-200 font-medium" href="https://basicswapdex.com/terms" target="_blank" rel="noopener noreferrer">Terms</a>
+        <span class="hidden sm:inline text-coolGray-300 dark:text-gray-600" aria-hidden="true">·</span>
+        <span>BSX v{{ version }} · GUI v{{ gui_version }} · AMM v{{ amm_version }}</span>
+        {% if update_available and latest_version %}
+        <a id="footer-update-badge" href="https://github.com/basicswap/basicswap/releases/tag/v{{ latest_version }}" target="_blank" rel="noopener noreferrer"
+           class="inline-flex items-center self-start px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 hover:bg-blue-200 dark:hover:bg-blue-800">
+          Update available: v{{ latest_version }}
+        </a>
+        {% else %}
+        <a id="footer-update-badge" href="#" target="_blank" rel="noopener noreferrer"
+           class="hidden inline-flex items-center self-start px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 hover:bg-blue-200 dark:hover:bg-blue-800">
+          Update available
+        </a>
+        {% endif %}
+      </div>
+      <div class="flex items-center gap-4">
+        <a class="inline-block text-coolGray-400 hover:text-coolGray-600 dark:text-gray-400 dark:hover:text-gray-200" href="https://matrix.to/#/#basicswap:matrix.org" target="_blank" rel="noopener noreferrer" aria-label="BasicSwap community on Matrix">
+          {{ matrix_svg | safe }}
+        </a>
+        <a class="inline-block text-coolGray-400 hover:text-coolGray-600 dark:text-gray-400 dark:hover:text-gray-200" href="https://github.com/basicswap/basicswap" target="_blank" rel="noopener noreferrer" aria-label="BasicSwap on GitHub">
+          {{ github_svg | safe }}
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+(function() {
+  function setFooterUpdateBadge(available, latestVersion, releaseUrl) {
+    var badge = document.getElementById('footer-update-badge');
+    if (!badge) return;
+    if (available && latestVersion) {
+      badge.textContent = 'Update available: v' + latestVersion;
+      badge.href = releaseUrl || ('https://github.com/basicswap/basicswap/releases/tag/v' + latestVersion);
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  }
+
+  function refreshFooterUpdateStatus() {
+    fetch('/json/updatestatus', { method: 'GET', headers: { 'Accept': 'application/json' } })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data && data.update_available) {
+          setFooterUpdateBadge(true, data.latest_version, data.release_url);
+        }
+      })
+      .catch(function() {});
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', refreshFooterUpdateStatus);
+  } else {
+    refreshFooterUpdateStatus();
+  }
+
+  if (window.WebSocketManager && typeof window.WebSocketManager.addMessageHandler === 'function') {
+    window.WebSocketManager.addMessageHandler('message', function(data) {
+      if (data && data.event === 'update_available') {
+        setFooterUpdateBadge(true, data.latest_version, data.release_url);
+      }
+    });
+  }
+})();
+</script>

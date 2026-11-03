@@ -1,0 +1,1806 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2019-2024 tecnovert
+# Copyright (c) 2024-2026 The Basicswap developers
+# Distributed under the MIT software license, see the accompanying
+# file LICENSE or http://www.opensource.org/licenses/mit-license.php.
+
+import hashlib
+import logging
+import os
+import random
+import secrets
+import threading
+import unittest
+
+from coincurve.ed25519 import ed25519_get_pubkey
+from coincurve.ecdsaotves import (
+    ecdsaotves_enc_sign,
+    ecdsaotves_enc_verify,
+    ecdsaotves_dec_sig,
+    ecdsaotves_rec_enc_key,
+)
+from coincurve.keys import PrivateKey
+
+from basicswap.basicswap import (
+    Coins,
+    BasicSwap,
+    SwapTypes,
+)
+from basicswap.base import BaseApp
+from basicswap.contrib.mnemonic import Mnemonic
+from basicswap.db import create_db_, DBMethods, KnownIdentity
+from basicswap.util import h2b
+from basicswap.util.address import decodeAddress, toWIF
+from basicswap.util.crypto import ripemd160, hash160, blake256
+from basicswap.util.extkey import ExtKeyPair
+from basicswap.util.integer import encode_varint, decode_varint
+from basicswap.util.network import (
+    is_loopback_address,
+    is_origin_allowed,
+    is_private_ip_address,
+    is_public_url,
+    is_url_scheme_allowed,
+)
+from basicswap.util.rfc2440 import rfc2440_hash_password
+from basicswap.util_xmr import (
+    decode_address as xmr_decode_address,
+    encode_address as xmr_encode_address,
+)
+from basicswap.interface.btc.btc import BTCInterface
+from basicswap.util.logging import BSXLogger
+from basicswap.interface.xmr.xmr import XMRInterface
+from tests.basicswap.util.mnemonics import mnemonics
+from tests.basicswap.util.common import (
+    REQUIRED_SETTINGS,
+    PREFIX_SECRET_KEY_REGTEST,
+)
+
+from basicswap.config import DEFAULT_ALTRUISTIC
+from basicswap.basicswap_util import (
+    ADAPTOR_SIG_LOCK_SPEND_FEE_BUFFER,
+    TxLockTypes,
+)
+from basicswap.util import (
+    make_int,
+    SerialiseNum,
+    format_amount,
+    DeserialiseNum,
+    validate_amount,
+)
+from basicswap.rpc import Jsonrpc, escape_rpcauth
+from basicswap.messages_npb import (
+    BidMessage,
+)
+from basicswap.contrib.test_framework.script import (
+    CScript,
+    hash160 as hash160_btc,
+    OP_CHECKMULTISIG,
+    SegwitV0SignatureHash,
+    SIGHASH_ALL,
+)
+from basicswap.contrib.test_framework.messages import (
+    COutPoint,
+    CTransaction,
+    CTxIn,
+    CTxOut,
+    uint256_from_str,
+)
+
+logger = logging.getLogger()
+
+
+class _FakeSwapClient:
+    # Use the real lookup, BaseApp can't be instantiated without a datadir
+    getBaseAltruistic = BaseApp.getBaseAltruistic
+
+    def __init__(self, settings=None):
+        self.settings = {"chainclients": {}}
+        if settings:
+            self.settings.update(settings)
+        self.log = BSXLogger("test")
+
+    def getChainClientSettings(self, coin):
+        return {}
+
+
+class Test(unittest.TestCase):
+
+    @staticmethod
+    def ci_btc():
+        btc_coin_settings = {"rpcport": 0, "rpcauth": "none"}
+        btc_coin_settings.update(REQUIRED_SETTINGS)
+        ci = BTCInterface(btc_coin_settings, "regtest")
+        # Without a swap client _log is the logging module, which has no id()
+        ci._log = BSXLogger("test")
+        return ci
+
+    @staticmethod
+    def ci_xmr():
+        xmr_coin_settings = {"rpcport": 0, "walletrpcport": 0, "walletrpcauth": "none"}
+        xmr_coin_settings.update(REQUIRED_SETTINGS)
+        return XMRInterface(xmr_coin_settings, "regtest")
+
+    def test_altruistic_setting(self):
+        def ci_btc_with(coin_setting=None, swap_client=None):
+            coin_settings = {"rpcport": 0, "rpcauth": "none"}
+            coin_settings.update(REQUIRED_SETTINGS)
+            if coin_setting is not None:
+                coin_settings["altruistic"] = coin_setting
+            ci = BTCInterface(coin_settings, "regtest", swap_client=swap_client)
+            ci._log = BSXLogger("test")
+            return ci
+
+        sc_unset = _FakeSwapClient()
+        sc_on = _FakeSwapClient({"altruistic": True})
+        sc_off = _FakeSwapClient({"altruistic": False})
+
+        # No swap client or base unset, no coin key → the shared default
+        assert ci_btc_with()._altruistic is DEFAULT_ALTRUISTIC
+        assert ci_btc_with(swap_client=sc_unset)._altruistic is DEFAULT_ALTRUISTIC
+
+        # Base off, no coin key → off
+        assert ci_btc_with(swap_client=sc_off)._altruistic is False
+
+        # Base on, no coin key → on
+        assert ci_btc_with(swap_client=sc_on)._altruistic is True
+
+        # Coin key wins over base, both directions
+        assert ci_btc_with(False, sc_on)._altruistic is False
+        assert ci_btc_with(True, sc_off)._altruistic is True
+
+    def test_altruistic_coin_setting_passthrough(self):
+        logging.info("---------- Test altruistic coin setting passthrough")
+        basicswap_dir = "/tmp/bsx_test_other"
+        if not os.path.exists(basicswap_dir):
+            os.makedirs(basicswap_dir)
+
+        k = PrivateKey()
+        settings = {
+            "network_key": toWIF(PREFIX_SECRET_KEY_REGTEST, k.secret),
+            "network_pubkey": k.public_key.format().hex(),
+            "chainclients": {
+                "bitcoin": {"altruistic": True},
+                "decred": {"altruistic": False},
+            },
+        }
+
+        sc = BasicSwap(
+            basicswap_dir,
+            settings,
+            "regtest",
+            log_name="bsx_test_other",
+        )
+        # setCoinConnectParams must forward the key, the interfaces read coin_clients
+        assert sc.coin_clients[Coins.BTC]["altruistic"] is True
+        assert sc.coin_clients[Coins.DCR]["altruistic"] is False
+        assert "altruistic" not in sc.coin_clients[Coins.LTC]
+
+        del sc
+
+    def test_serialise_num(self):
+        def test_case(v, nb=None):
+            b = SerialiseNum(v)
+            if nb is not None:
+                assert len(b) == nb
+            assert v == DeserialiseNum(b)
+
+        test_case(0, 1)
+        test_case(1, 1)
+        test_case(16, 1)
+
+        test_case(-1, 2)
+        test_case(17, 2)
+
+        test_case(500)
+        test_case(-500)
+        test_case(4194642)
+
+    def test_sequence(self):
+        ci = self.ci_btc()
+
+        time_val = 48 * 60 * 60
+        encoded = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_TIME, time_val)
+        decoded = ci.decodeSequence(encoded)
+        assert encoded == 4194642
+        assert decoded >= time_val
+        assert decoded <= time_val + 512
+
+        time_val = 24 * 60
+        encoded = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_TIME, time_val)
+        decoded = ci.decodeSequence(encoded)
+        assert decoded >= time_val
+        assert decoded <= time_val + 512
+
+        blocks_val = 123
+        encoded = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_BLOCKS, blocks_val)
+        decoded = ci.decodeSequence(encoded)
+        assert decoded == blocks_val
+
+    def test_csv_lock_remaining(self):
+        ci = self.ci_btc()
+
+        parent_height: int = 100
+        parent_time: int = 1700000000
+        encoded = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_TIME, 4 * 60 * 60)
+        lock_value: int = ci.decodeSequence(encoded)
+
+        assert (
+            ci.csvLockRemaining(
+                TxLockTypes.SEQUENCE_LOCK_TIME,
+                encoded,
+                parent_height,
+                parent_time,
+                chain_mtp=parent_time,
+                coin_mtp=parent_time,
+            )
+            == lock_value
+        )
+        assert (
+            ci.csvLockRemaining(
+                TxLockTypes.SEQUENCE_LOCK_TIME,
+                encoded,
+                parent_height,
+                parent_time,
+                chain_mtp=parent_time + lock_value,
+                coin_mtp=parent_time,
+            )
+            == 0
+        )
+
+        # A remaining value at or below zero must mean the lock has matured
+        for offset in range(0, lock_value + 1024, 499):
+            chain_mtp: int = parent_time + offset
+            remaining = ci.csvLockRemaining(
+                TxLockTypes.SEQUENCE_LOCK_TIME,
+                encoded,
+                parent_height,
+                parent_time,
+                chain_mtp=chain_mtp,
+                coin_mtp=parent_time,
+            )
+            assert (remaining <= 0) == ci.isCsvLockMature(
+                TxLockTypes.SEQUENCE_LOCK_TIME,
+                encoded,
+                parent_height,
+                parent_time,
+                chain_mtp=chain_mtp,
+                coin_mtp=parent_time,
+            )
+
+        # Unknown until the lock tx is in a block
+        assert (
+            ci.csvLockRemaining(TxLockTypes.SEQUENCE_LOCK_TIME, encoded, None, None)
+            is None
+        )
+        assert (
+            ci.csvLockRemaining(
+                TxLockTypes.SEQUENCE_LOCK_TIME, encoded, parent_height, None
+            )
+            is None
+        )
+
+        encoded = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_BLOCKS, 10)
+        assert (
+            ci.csvLockRemaining(
+                TxLockTypes.SEQUENCE_LOCK_BLOCKS,
+                encoded,
+                parent_height,
+                parent_time,
+                chain_height=parent_height + 5,
+            )
+            == 4
+        )
+
+    def test_lock_spend_margin(self):
+        # The margin the follower applies before publishing the lock spend tx
+        ci = self.ci_btc()
+
+        parent_height: int = 100
+        parent_time: int = 1700000000
+        margin: int = 3600
+        encoded = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_TIME, 48 * 60 * 60)
+        lock_value: int = ci.decodeSequence(encoded)
+
+        def remaining_at(chain_mtp: int) -> int:
+            return ci.csvLockRemaining(
+                TxLockTypes.SEQUENCE_LOCK_TIME,
+                encoded,
+                parent_height,
+                parent_time,
+                chain_mtp=chain_mtp,
+                coin_mtp=parent_time,
+            )
+
+        # Exactly at the margin must still publish, one second under must not
+        assert remaining_at(parent_time + lock_value - margin) == margin
+        assert remaining_at(parent_time + lock_value - margin) >= margin
+        assert remaining_at(parent_time + lock_value - margin + 1) < margin
+
+        # An expired lock must always be caught by the same comparison
+        for offset in range(lock_value, lock_value + 2048, 499):
+            assert remaining_at(parent_time + offset) < margin
+            assert ci.isCsvLockMature(
+                TxLockTypes.SEQUENCE_LOCK_TIME,
+                encoded,
+                parent_height,
+                parent_time,
+                chain_mtp=parent_time + offset,
+                coin_mtp=parent_time,
+            )
+
+        # An honest leader releases well before its own margin, even on the shortest offer
+        release_margin: int = 3600
+        assert margin <= release_margin
+        # min_sequence_lock_seconds less the wait for the coin b lock to be spendable
+        assert (2 * 60 * 60) - (10 * 120) >= margin
+
+    def test_lock_spend_tx_fee(self):
+        # The lock spend tx must pay more than the lock refund tx, else the refund tx
+        # can replace it by RBF once the spend tx has been broadcast
+        ci = self.ci_btc()
+
+        Kal = ci.getPubkey(ci.getNewRandomKey())
+        Kaf = ci.getPubkey(ci.getNewRandomKey())
+        script_lock = CScript([2, Kal, Kaf, 2, OP_CHECKMULTISIG])
+        pkh_dest = ci.pkh(Kaf)
+
+        locked_coin: int = ci.make_int(0.1)
+        lock_tx = CTransaction()
+        lock_tx.nVersion = ci.txVersion()
+        lock_tx.vin.append(
+            CTxIn(COutPoint(uint256_from_str(secrets.token_bytes(32)), 0))
+        )
+        lock_tx.vout.append(CTxOut(locked_coin, ci.getScriptDest(script_lock)))
+        lock_tx.rehash()
+        lock_tx_bytes = lock_tx.serialize()
+
+        lock1_value = ci.getExpectedSequence(
+            TxLockTypes.SEQUENCE_LOCK_TIME, 2 * 60 * 60
+        )
+        csv_val = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_TIME, 2 * 60 * 60)
+
+        for fee_rate in (1000, 1013, 2500, 10000, 59999):
+            refund_tx, _, refund_value = ci.createSCLockRefundTx(
+                lock_tx_bytes,
+                script_lock,
+                Kal,
+                Kaf,
+                lock1_value,
+                csv_val,
+                fee_rate,
+            )
+            refund_fee: int = locked_coin - refund_value
+
+            spend_tx = ci.createSCLockSpendTx(
+                lock_tx_bytes,
+                script_lock,
+                pkh_dest,
+                fee_rate,
+                tx_lock_refund_bytes=refund_tx,
+            )
+            spend_fee: int = locked_coin - ci.loadTx(spend_tx).vout[0].nValue
+
+            assert spend_fee == refund_fee + ADAPTOR_SIG_LOCK_SPEND_FEE_BUFFER
+            # RBF rule 3 rejects the refund tx as a replacement while this holds
+            assert spend_fee > refund_fee
+
+            ci.verifySCLockSpendTx(
+                spend_tx,
+                lock_tx_bytes,
+                script_lock,
+                pkh_dest,
+                fee_rate,
+                tx_lock_refund_bytes=refund_tx,
+            )
+
+            # A spend tx paying the refund tx's fee must be rejected
+            tx = ci.loadTx(spend_tx)
+            tx.vout[0].nValue += ADAPTOR_SIG_LOCK_SPEND_FEE_BUFFER
+            tx.rehash()
+            try:
+                ci.verifySCLockSpendTx(
+                    tx.serialize(),
+                    lock_tx_bytes,
+                    script_lock,
+                    pkh_dest,
+                    fee_rate,
+                    tx_lock_refund_bytes=refund_tx,
+                )
+                assert False, "Should fail"
+            except Exception as e:
+                assert "Bad fee" in str(e)
+
+    def test_compare_fee_rates(self):
+        # compareFeeRates must accept every fee feeForVSize can produce
+        ci = self.ci_btc()
+
+        for vsize in range(110, 400):
+            for expected in range(500, 20000, 7):
+                paid_rate: int = ci.feeForVSize(expected, vsize) * 1000 // vsize
+                assert ci.compareFeeRates(paid_rate, expected)
+                assert ci.compareFeeRates(expected - 1, expected) is False
+
+    def test_make_int(self):
+        def test_case(vs, vf, expect_int):
+            i = make_int(vs)
+            assert i == expect_int and isinstance(i, int)
+            i = make_int(vf)
+            assert i == expect_int and isinstance(i, int)
+            vs_out = format_amount(i, 8)
+            # Strip
+            for i in range(7):
+                if vs_out[-1] == "0":
+                    vs_out = vs_out[:-1]
+            if "." in vs:
+                assert vs_out == vs
+            else:
+                assert vs_out[:-2] == vs
+
+        test_case("0", 0, 0)
+        test_case("1", 1, 100000000)
+        test_case("10", 10, 1000000000)
+        test_case("0.00899999", 0.00899999, 899999)
+        test_case("899999.0", 899999.0, 89999900000000)
+        test_case("899999.00899999", 899999.00899999, 89999900899999)
+        test_case("0.0", 0.0, 0)
+        test_case("1.0", 1.0, 100000000)
+        test_case("1.1", 1.1, 110000000)
+        test_case("1.2", 1.2, 120000000)
+        test_case("0.00899991", 0.00899991, 899991)
+        test_case("0.0089999", 0.0089999, 899990)
+        test_case("0.0089991", 0.0089991, 899910)
+        test_case("0.123", 0.123, 12300000)
+        test_case("123000.000123", 123000.000123, 12300000012300)
+
+        try:
+            make_int("0.123456789")
+            assert False
+        except Exception as e:
+            assert str(e) == "Mantissa too long"
+        validate_amount("0.12345678")
+
+        # Floor
+        assert make_int("0.123456789", r=-1) == 12345678
+        # Round up
+        assert make_int("0.123456789", r=1) == 12345679
+
+    def test_format_amount(self):
+        # display_scale defaults to scale: fixed-precision, zero-padded
+        assert format_amount(123456789, 8) == "1.23456789"
+        assert format_amount(0, 8) == "0.00000000"
+        assert format_amount(1, 8) == "0.00000001"
+        assert format_amount(-100000000, 8) == "-1.00000000"
+        assert format_amount(2100000000000000, 8) == "21000000.00000000"
+        assert format_amount(10000000000000, 12) == "10.000000000000"
+
+        # Amounts must be integers
+        try:
+            format_amount(1.0, 8)
+            assert False
+        except ValueError as e:
+            assert str(e) == "Amount must be an integer."
+
+        # display_scale < scale: show the first display_scale decimals (truncate, no rounding)
+        assert format_amount(123456789, 4, 8) == "1.2345"
+        assert format_amount(-123456789, 4, 8) == "-1.2345"
+        assert format_amount(199999999, 2, 8) == "1.99"
+
+        # display_scale > scale: pad the stored decimals out to display_scale places
+        assert format_amount(123456789, 12, 8) == "1.234567890000"
+        assert format_amount(150000000, 10, 8) == "1.5000000000"
+
+    def test_make_int12(self):
+        def test_case(vs, vf, expect_int):
+            i = make_int(vs, 12)
+            assert i == expect_int and isinstance(i, int)
+            i = make_int(vf, 12)
+            assert i == expect_int and isinstance(i, int)
+            vs_out = format_amount(i, 12)
+            # Strip
+            for i in range(7):
+                if vs_out[-1] == "0":
+                    vs_out = vs_out[:-1]
+            if "." in vs:
+                assert vs_out == vs
+            else:
+                assert vs_out[:-2] == vs
+
+        test_case("0.123456789", 0.123456789, 123456789000)
+        test_case("0.123456789123", 0.123456789123, 123456789123)
+        try:
+            make_int("0.1234567891234", 12)
+            assert False
+        except Exception as e:
+            assert str(e) == "Mantissa too long"
+        validate_amount("0.123456789123", 12)
+        try:
+            validate_amount("0.1234567891234", 12)
+            assert False
+        except Exception as e:
+            assert "Too many decimal places" in str(e)
+        try:
+            validate_amount(0.1234567891234, 12)
+            assert False
+        except Exception as e:
+            assert "Too many decimal places" in str(e)
+
+    def test_ed25519(self):
+        privkey = bytes.fromhex(
+            "0b4c6e34c21b910f92c7985a8093de526f5f8677a112a8c672d1098139b70e0f"
+        )
+        pubkey = ed25519_get_pubkey(privkey)
+        assert pubkey == bytes.fromhex(
+            "5c26c518fb698e91a5858c33e9075488c55c235f391162fe9e6cbd4f694f80aa"
+        )
+
+    def test_key_summing(self):
+        ci_btc = self.ci_btc()
+        ci_xmr = self.ci_xmr()
+        keys = [
+            bytes.fromhex(
+                "e6b8e7c2ca3a88fe4f28591aa0f91fec340179346559e4ec430c2531aecc19aa"
+            ),
+            bytes.fromhex(
+                "b725b6359bd2b510d9d5a7bba7bdee17abbf113253f6338ea50a8f0cf45fd0d0"
+            ),
+        ]
+        sum_secp256k1: bytes = ci_btc.sumKeys(keys[0], keys[1])
+        assert (
+            sum_secp256k1.hex()
+            == "9dde9df8660d3e0f28fe00d648b70e052511ad800a07783f284455b1d2f5a939"
+        )
+
+        sum_ed25519: bytes = ci_xmr.sumKeys(keys[0], keys[1])
+        assert (
+            sum_ed25519.hex()
+            == "0dde9df8660d3e0f28fe00d648b70e0323e9c192fe9b94f1cf7138515e877725"
+        )
+
+        pk_secp256k1 = ci_btc.sumPubkeys(
+            ci_btc.getPubkey(keys[0]), ci_btc.getPubkey(keys[1])
+        )
+        assert (
+            pk_secp256k1.hex()
+            == "028c30392e35620af0787b363a03cf9a695336759664436e1f609481c869541a5c"
+        )
+
+        pk_ed25519 = ci_xmr.sumPubkeys(
+            ci_xmr.getPubkey(keys[0]), ci_xmr.getPubkey(keys[1])
+        )
+        assert (
+            pk_ed25519.hex()
+            == "4b2dd2dc9acc9be7efed4fdbfb96f0002aeb9e4c8638c5b24562a7158b283626"
+        )
+
+        assert pk_secp256k1 == ci_btc.getPubkey(sum_secp256k1)
+
+    def test_ecdsa_otves(self):
+        ci = self.ci_btc()
+        vk_sign = ci.getNewRandomKey()
+        vk_encrypt = ci.getNewRandomKey()
+
+        pk_sign = ci.getPubkey(vk_sign)
+        pk_encrypt = ci.getPubkey(vk_encrypt)
+        sign_hash = secrets.token_bytes(32)
+
+        cipher_text = ecdsaotves_enc_sign(vk_sign, pk_encrypt, sign_hash)
+        assert ecdsaotves_enc_verify(pk_sign, pk_encrypt, sign_hash, cipher_text)
+
+        sig = ecdsaotves_dec_sig(vk_encrypt, cipher_text)
+        assert ci.verifySig(pk_sign, sign_hash, sig)
+
+        recovered_key = ecdsaotves_rec_enc_key(pk_encrypt, cipher_text, sig)
+        assert vk_encrypt == recovered_key
+
+    def test_sign(self):
+        ci = self.ci_btc()
+
+        vk = ci.getNewRandomKey()
+        pk = ci.getPubkey(vk)
+
+        message = "test signing message"
+        message_hash = hashlib.sha256(bytes(message, "utf-8")).digest()
+        eck = PrivateKey(vk)
+        sig = eck.sign(message.encode("utf-8"))
+
+        ci.verifySig(pk, message_hash, sig)
+
+    def test_sign_compact(self):
+        ci = self.ci_btc()
+
+        vk = ci.getNewRandomKey()
+        pk = ci.getPubkey(vk)
+        sig = ci.signCompact(vk, "test signing message")
+        assert len(sig) == 64
+        ci.verifyCompactSig(pk, "test signing message", sig)
+
+        # Nonce is set deterministically (using default libsecp256k1 method rfc6979)
+        sig2 = ci.signCompact(vk, "test signing message")
+        assert sig == sig2
+
+    def test_sign_recoverable(self):
+        ci = self.ci_btc()
+
+        vk = ci.getNewRandomKey()
+        pk = ci.getPubkey(vk)
+        sig = ci.signRecoverable(vk, "test signing message")
+        assert len(sig) == 65
+        pk_rec = ci.verifySigAndRecover(sig, "test signing message")
+        assert pk == pk_rec
+
+        # Nonce is set deterministically (using default libsecp256k1 method rfc6979)
+        sig2 = ci.signRecoverable(vk, "test signing message")
+        assert sig == sig2
+
+    def test_pubkey_to_address(self):
+        ci = self.ci_btc()
+        pk = h2b("02c26a344e7d21bcc6f291532679559f2fd234c881271ff98714855edc753763a6")
+        addr = ci.pubkey_to_address(pk)
+        assert addr == "mj6SdSxmWRmdDqR5R3FfZmRiLmQfQAsLE8"
+
+    def test_dleag(self):
+        ci = self.ci_xmr()
+
+        key = ci.getNewRandomKey()
+        proof = ci.proveDLEAG(key)
+        assert ci.verifyDLEAG(proof)
+
+    def test_rate(self):
+        scale_from = 8
+        scale_to = 12
+        amount_from = make_int(100, scale_from)
+        rate = make_int(0.1, scale_to)
+
+        amount_to = int((amount_from * rate) // (10**scale_from))
+        assert "100.00000000" == format_amount(amount_from, scale_from)
+        assert "10.000000000000" == format_amount(amount_to, scale_to)
+
+        rate_check = make_int((amount_to / amount_from), scale_from)
+        assert rate == rate_check
+
+        scale_from = 12
+        scale_to = 8
+        amount_from = make_int(1, scale_from)
+        rate = make_int(12, scale_to)
+
+        amount_to = int((amount_from * rate) // (10**scale_from))
+        assert "1.000000000000" == format_amount(amount_from, scale_from)
+        assert "12.00000000" == format_amount(amount_to, scale_to)
+
+        rate_check = make_int((amount_to / amount_from), scale_from)
+        assert rate == rate_check
+
+    def test_rate_tolerance_precision(self):
+        scale = 8
+        amount_from = make_int("0.001", scale)
+        offer_rate = make_int("0.354185354480", scale, r=1)
+        amount_to = int((amount_from * offer_rate) // (10**scale))
+        bid_rate = make_int(amount_to / amount_from, r=1)
+
+        rate_tolerance = max(1, offer_rate // 10000)
+        rate_diff = abs(bid_rate - offer_rate)
+        assert (
+            rate_diff <= rate_tolerance
+        ), f"Rate difference {rate_diff} exceeds tolerance {rate_tolerance}"
+
+        test_cases = [
+            ("0.001", "0.123456789"),
+            ("0.5", "1.23456789"),
+            ("0.00001", "999.99999999"),
+        ]
+
+        for amount_str, rate_str in test_cases:
+            amount_from = make_int(amount_str, scale)
+            offer_rate = make_int(rate_str, scale, r=1)
+            amount_to = int((amount_from * offer_rate) // (10**scale))
+            bid_rate = make_int(amount_to / amount_from, r=1)
+
+            rate_tolerance = max(1, offer_rate // 10000)
+            rate_diff = abs(bid_rate - offer_rate)
+
+            assert rate_diff <= rate_tolerance, (
+                f"Rate difference {rate_diff} exceeds tolerance {rate_tolerance} "
+                f"for amount {amount_str} at rate {rate_str}"
+            )
+
+        large_offer_rate = make_int("1.0", scale)
+        large_tolerance = max(1, large_offer_rate // 10000)
+        bad_bid_rate = large_offer_rate + large_tolerance + 1
+        rate_diff = abs(bad_bid_rate - large_offer_rate)
+        assert (
+            rate_diff > large_tolerance
+        ), "Test setup error: difference should exceed tolerance"
+
+    def test_rate_tolerance_helper_functions(self):
+        class MockBasicSwap:
+            def calculateRateTolerance(self, offer_rate: int) -> int:
+                return max(1, offer_rate // 10000)
+
+            def ratesMatch(self, rate1: int, rate2: int, offer_rate: int) -> bool:
+                tolerance = self.calculateRateTolerance(offer_rate)
+                return abs(rate1 - rate2) <= tolerance
+
+        mock_swap = MockBasicSwap()
+
+        assert mock_swap.calculateRateTolerance(100000000) == 10000
+        assert mock_swap.calculateRateTolerance(1000000) == 100
+        assert mock_swap.calculateRateTolerance(100) == 1
+        assert mock_swap.calculateRateTolerance(50) == 1
+
+        offer_rate = 100000000
+        tolerance = 10000
+
+        assert mock_swap.ratesMatch(offer_rate, offer_rate, offer_rate)
+        assert mock_swap.ratesMatch(offer_rate, offer_rate + tolerance, offer_rate)
+        assert mock_swap.ratesMatch(offer_rate, offer_rate - tolerance, offer_rate)
+        assert mock_swap.ratesMatch(offer_rate + tolerance // 2, offer_rate, offer_rate)
+
+        assert not mock_swap.ratesMatch(
+            offer_rate, offer_rate + tolerance + 1, offer_rate
+        )
+        assert not mock_swap.ratesMatch(
+            offer_rate, offer_rate - tolerance - 1, offer_rate
+        )
+
+        small_rate = 1000
+        assert mock_swap.ratesMatch(small_rate, small_rate + 1, small_rate)
+        assert not mock_swap.ratesMatch(small_rate, small_rate + 2, small_rate)
+
+        scale_from = 8
+        scale_to = 8
+        amount_from = make_int(0.073, scale_from)
+        amount_to = make_int(10, scale_to)
+        rate = make_int(amount_to / amount_from, scale_to, r=1)
+        amount_to_recreate = int((amount_from * rate) // (10**scale_from))
+        assert "10.00000000" == format_amount(amount_to_recreate, scale_to)
+
+        scale_from = 8
+        scale_to = 12
+        amount_from = make_int(10.0, scale_from)
+        amount_to = make_int(0.06935, scale_to)
+        rate = make_int(amount_to / amount_from, scale_from, r=1)
+        amount_to_recreate = int((amount_from * rate) // (10**scale_from))
+        assert "0.069350000000" == format_amount(amount_to_recreate, scale_to)
+
+        scale_from = 12
+        scale_to = 8
+        amount_from = make_int(0.06935, scale_from)
+        amount_to = make_int(10.0, scale_to)
+        rate = make_int(amount_to / amount_from, scale_from, r=1)
+        amount_to_recreate = int((amount_from * rate) // (10**scale_from))
+        assert "10.00000000" == format_amount(amount_to_recreate, scale_to)
+
+        ci_xmr = self.ci_xmr()
+        ci_btc = self.ci_btc()
+
+        for i in range(10000):
+            test_pairs = random.randint(0, 3)
+            if test_pairs == 0:
+                ci_from = ci_btc
+                ci_to = ci_xmr
+            elif test_pairs == 1:
+                ci_from = ci_xmr
+                ci_to = ci_btc
+            elif test_pairs == 2:
+                ci_from = ci_xmr
+                ci_to = ci_xmr
+            else:
+                ci_from = ci_btc
+                ci_to = ci_btc
+
+            test_range = random.randint(0, 5)
+            if test_range == 0:
+                amount_from = random.randint(10000, 1 * ci_from.COIN())
+            elif test_range == 1:
+                amount_from = random.randint(10000, 1000 * ci_from.COIN())
+            elif test_range == 2:
+                amount_from = random.randint(10000, 2100 * ci_from.COIN())
+            elif test_range == 3:
+                amount_from = random.randint(10000, 210000 * ci_from.COIN())
+            elif test_range == 4:
+                amount_from = random.randint(10000, 21000000 * ci_from.COIN())
+            else:
+                amount_from = random.randint(10000, 2100000000 * ci_from.COIN())
+
+            test_range = random.randint(0, 5)
+            if test_range == 0:
+                amount_to = random.randint(10000, 1 * ci_to.COIN())
+            elif test_range == 1:
+                amount_to = random.randint(10000, 1000 * ci_to.COIN())
+            elif test_range == 2:
+                amount_to = random.randint(10000, 2100 * ci_to.COIN())
+            elif test_range == 3:
+                amount_to = random.randint(10000, 210000 * ci_to.COIN())
+            elif test_range == 4:
+                amount_to = random.randint(10000, 21000000 * ci_to.COIN())
+            else:
+                amount_to = random.randint(10000, 2100000000 * ci_to.COIN())
+
+            offer_rate = ci_from.make_int(amount_to / amount_from, r=1)
+            amount_to_from_rate: int = int(
+                (int(amount_from) * offer_rate) // (10**scale_from)
+            )
+
+            scale_from = 24
+            offer_rate = make_int(amount_to, scale_from) // amount_from
+            amount_to_from_rate: int = int(
+                (int(amount_from) * offer_rate) // (10**scale_from)
+            )
+
+            if abs(amount_to - amount_to_from_rate) == 1:
+                offer_rate += 1
+
+            offer_rate_human_read: int = int(
+                offer_rate // (10 ** (scale_from - ci_from.exp()))
+            )
+            amount_to_from_rate: int = int(
+                (int(amount_from) * offer_rate) // (10**scale_from)
+            )
+
+            if amount_to != amount_to_from_rate:
+                print("from exp, amount", ci_from.exp(), amount_from)
+                print("to exp, amount", ci_to.exp(), amount_to)
+                print("offer_rate_human_read", offer_rate_human_read)
+                print("amount_to_from_rate", amount_to_from_rate)
+                raise ValueError("Bad amount_to")
+
+            scale_to = 24
+            reversed_rate = make_int(amount_from, scale_to) // amount_to
+
+            amount_from_from_rate: int = int(
+                (int(amount_to) * reversed_rate) // (10**scale_to)
+            )
+            if abs(amount_from - amount_from_from_rate) == 1:
+                reversed_rate += 1
+
+            amount_from_from_rate: int = int(
+                (int(amount_to) * reversed_rate) // (10**scale_to)
+            )
+
+            if amount_from != amount_from_from_rate:
+                print("from exp, amount", ci_from.exp(), amount_from)
+                print("to exp, amount", ci_to.exp(), amount_to)
+                print("amount_from_from_rate", amount_from_from_rate)
+                raise ValueError("Bad amount_from")
+
+    def test_rfc2440(self):
+        password = "test"
+        salt = bytes.fromhex("B7A94A7E4988630E")
+        password_hash = rfc2440_hash_password(password, salt=salt)
+
+        assert (
+            password_hash
+            == "16:B7A94A7E4988630E6095334BA67F06FBA509B2A7136A04C9C1B430F539"
+        )
+
+    def test_ripemd160(self):
+        input_data = b"hash this"
+        assert ripemd160(input_data).hex() == "d5443a154f167e2c1332f6de72cfb4c6ab9c8c17"
+
+    def test_hash160(self):
+        # hash160 is RIPEMD(SHA256(data))
+        input_data = b"hash this"
+        assert hash160(input_data).hex() == "072985b3583a4a71f548494a5e1d5f6b00d0fe13"
+        assert (
+            hash160_btc(input_data).hex() == "072985b3583a4a71f548494a5e1d5f6b00d0fe13"
+        )
+
+    def test_protobuf(self):
+        msg_buf = BidMessage()
+        msg_buf.protocol_version = 2
+        msg_buf.time_valid = 1024
+        serialised_msg = msg_buf.to_bytes()
+
+        msg_buf_2 = BidMessage()
+        msg_buf_2.from_bytes(serialised_msg)
+        assert msg_buf_2.protocol_version == 2
+        assert msg_buf_2.time_valid == 1024
+        assert msg_buf_2.amount == 0
+        assert msg_buf_2.pkhash_buyer is not None
+        assert len(msg_buf_2.pkhash_buyer) == 0
+
+        # Decode only the first field
+        msg_buf_3 = BidMessage()
+        msg_buf_3.from_bytes(serialised_msg[:2])
+        assert msg_buf_3.protocol_version == 2
+        assert msg_buf_3.time_valid == 0
+
+        try:
+            _ = BidMessage(doesnotexist=1)
+        except Exception as e:
+            assert "unexpected keyword argument" in str(e)
+        else:
+            raise ValueError("Should have errored.")
+
+    def test_is_private_ip_address(self):
+        test_addresses = [
+            ("localhost", True),
+            ("127.0.0.1", True),
+            ("10.0.0.0", True),
+            ("172.16.0.0", True),
+            ("192.168.0.0", True),
+            ("20.87.245.0", False),
+            ("particl.io", False),
+        ]
+        for addr, is_private in test_addresses:
+            assert is_private_ip_address(addr) is is_private
+
+    def test_is_loopback_address(self):
+        test_addresses = [
+            ("localhost", True),
+            ("127.0.0.1", True),
+            ("127.5.5.5", True),
+            ("::1", True),
+            ("::ffff:127.0.0.1", True),
+            ("10.0.0.4", False),
+            ("192.168.1.5", False),
+            ("0.0.0.0", False),
+            ("::ffff:10.0.0.4", False),
+            ("", False),
+            ("example.com", False),
+        ]
+        for addr, is_loopback in test_addresses:
+            assert is_loopback_address(addr) is is_loopback
+
+    def test_is_url_scheme_allowed(self):
+        test_urls = [
+            ("http://example.com", True),
+            ("https://example.com/path", True),
+            ("file:///etc/passwd", False),
+            ("ftp://example.com", False),
+            ("gopher://example.com", False),
+            ("/etc/passwd", False),
+        ]
+        for url, allowed in test_urls:
+            assert is_url_scheme_allowed(url) is allowed
+
+    def test_is_public_url(self):
+        # Non-http(s) schemes and internal hosts must be rejected; a public IP
+        # literal (resolves to itself, no DNS needed) must be accepted.
+        test_urls = [
+            ("file:///etc/passwd", False),
+            ("ftp://a", False),
+            ("http://127.0.0.1", False),
+            ("http://localhost", False),
+            ("http://169.254.169.254/latest/meta-data/", False),
+            ("http://10.0.0.5", False),
+            ("http://192.168.1.1/", False),
+            ("https://[::1]/", False),
+            ("https://8.8.8.8", True),
+        ]
+        for url, is_public in test_urls:
+            assert is_public_url(url) is is_public
+
+    def test_normalize_allowed_hosts(self):
+        from basicswap.util.network import normalize_allowed_hosts
+
+        self.assertEqual(normalize_allowed_hosts("*"), ["*"])
+        self.assertEqual(
+            normalize_allowed_hosts("swap.example.com"), ["swap.example.com"]
+        )
+        self.assertEqual(normalize_allowed_hosts(""), [])
+        self.assertEqual(normalize_allowed_hosts(None), [])
+        self.assertEqual(
+            normalize_allowed_hosts(["swap.example.com"]), ["swap.example.com"]
+        )
+        self.assertEqual(normalize_allowed_hosts([]), [])
+
+    def test_is_origin_allowed(self):
+        # (origin, html_host, html_port, allowed_hosts, expected)
+        cases = [
+            ("http://127.0.0.1:12700", "127.0.0.1", 12700, [], True),
+            ("http://localhost:12700", "127.0.0.1", 12700, [], True),
+            ("http://[::1]:12700", "127.0.0.1", 12700, [], True),
+            # Another port on an allowed host is rejected.
+            ("http://127.0.0.1:8080", "127.0.0.1", 12700, [], False),
+            # Scheme is enforced for the defaults.
+            ("https://127.0.0.1:12700", "127.0.0.1", 12700, [], False),
+            ("http://evil.com", "127.0.0.1", 12700, [], False),
+            ("null", "127.0.0.1", 12700, [], False),
+            ("not a url", "127.0.0.1", 12700, [], False),
+            # Bare configured host -> any scheme/port on that host.
+            (
+                "https://swap.example.com",
+                "127.0.0.1",
+                12700,
+                ["swap.example.com"],
+                True,
+            ),
+            (
+                "https://swap.example.com:8443",
+                "127.0.0.1",
+                12700,
+                ["swap.example.com"],
+                True,
+            ),
+            (
+                "http://swap.example.com:9000",
+                "127.0.0.1",
+                12700,
+                ["swap.example.com"],
+                True,
+            ),
+            # Full-origin entry -> exact scheme+host+port match.
+            (
+                "https://swap.example.com",
+                "127.0.0.1",
+                12700,
+                ["https://swap.example.com"],
+                True,
+            ),
+            (
+                "http://swap.example.com:12700",
+                "127.0.0.1",
+                12700,
+                ["https://swap.example.com"],
+                False,
+            ),
+            (
+                "https://swap.example.com:8443",
+                "127.0.0.1",
+                12700,
+                ["https://swap.example.com"],
+                False,
+            ),
+            # "host:port" entry -> that host on that port, any scheme.
+            (
+                "http://abc.onion:12700",
+                "127.0.0.1",
+                12700,
+                ["abc.onion:12700"],
+                True,
+            ),
+            (
+                "https://abc.onion:12700",
+                "127.0.0.1",
+                12700,
+                ["abc.onion:12700"],
+                True,
+            ),
+            (
+                "http://abc.onion:8080",
+                "127.0.0.1",
+                12700,
+                ["abc.onion:12700"],
+                False,
+            ),
+            ("http://abc.onion", "127.0.0.1", 12700, ["abc.onion:12700"], False),
+            # A bracketed IPv6 entry keeps working, with and without a port.
+            ("http://[fd00::1]:12700", "127.0.0.1", 12700, ["[fd00::1]"], True),
+            (
+                "http://[fd00::1]:12700",
+                "127.0.0.1",
+                12700,
+                ["[fd00::1]:12700"],
+                True,
+            ),
+            (
+                "http://[fd00::1]:8080",
+                "127.0.0.1",
+                12700,
+                ["[fd00::1]:12700"],
+                False,
+            ),
+            # Unbracketed IPv6 has no port to split off.
+            ("http://[fd00::1]:8080", "127.0.0.1", 12700, ["fd00::1"], True),
+            # A malformed port matches nothing.
+            ("http://abc.onion", "127.0.0.1", 12700, ["abc.onion:nope"], False),
+            # "*" is ignored by the origin check.
+            ("http://evil.com", "127.0.0.1", 12700, ["*"], False),
+            (
+                "https://swap.example.com",
+                "127.0.0.1",
+                12700,
+                ["*", "https://swap.example.com"],
+                True,
+            ),
+            # Concrete bind host on the html port; bind-all is never a valid host.
+            ("http://192.168.1.50:12700", "192.168.1.50", 12700, [], True),
+            ("http://192.168.1.50:12700", "0.0.0.0", 12700, [], False),
+            # html_port supplied as a string.
+            ("http://127.0.0.1:12700", "127.0.0.1", "12700", [], True),
+        ]
+        for origin, hh, hp, ah, expected in cases:
+            assert is_origin_allowed(origin, hh, hp, ah) is expected, (
+                origin,
+                hh,
+                hp,
+                ah,
+            )
+
+    def test_is_same_origin_request(self):
+        from basicswap.http_server import HttpHandler
+
+        class SwapClient:
+            def __init__(self, settings):
+                self.settings = settings
+
+        class Srv:
+            def __init__(self, host_name, port_no, settings):
+                self.host_name = host_name
+                self.port_no = port_no
+                self.swap_client = SwapClient(settings)
+
+        class Stub:
+            def __init__(
+                self, headers, host_name="127.0.0.1", port_no=12700, settings=None
+            ):
+                self.headers = headers
+                self.server = Srv(host_name, port_no, settings or {})
+
+        check = HttpHandler.is_same_origin_request
+        # A present Origin/Referer is validated as a full origin (scheme+host+port)
+        # against the allowed origins; "*" does not disable this check.
+        cases = [
+            ({}, {}, True),  # header-less (tests/curl/API scripts) -> allowed
+            ({"Origin": "http://127.0.0.1:12700"}, {}, True),
+            ({"Origin": "http://localhost:12700"}, {}, True),
+            ({"Origin": "http://127.0.0.1:8080"}, {}, False),  # other port blocked
+            ({"Origin": "http://evil.com"}, {}, False),
+            ({"Origin": "null"}, {}, False),
+            ({"Referer": "http://127.0.0.1:12700/rpc"}, {}, True),
+            ({"Referer": "http://evil.com/x"}, {}, False),
+            # Bare configured host -> any scheme/port on that host.
+            (
+                {"Origin": "https://swap.example.com"},
+                {"allowed_hosts": ["swap.example.com"]},
+                True,
+            ),
+            ({"Origin": "https://swap.example.com"}, {}, False),
+            # Full-origin entry -> exact match.
+            (
+                {"Origin": "https://swap.example.com"},
+                {"allowed_hosts": ["https://swap.example.com"]},
+                True,
+            ),
+            (
+                {"Origin": "http://swap.example.com:12700"},
+                {"allowed_hosts": ["https://swap.example.com"]},
+                False,
+            ),
+            # "*" no longer bypasses the origin check.
+            (
+                {"Origin": "http://evil.com", "Host": "evil.com"},
+                {"allowed_hosts": ["*"], "client_auth_hash": "x"},
+                False,
+            ),
+        ]
+        for headers, settings, expected in cases:
+            assert check(Stub(headers, settings=settings)) is expected, (
+                headers,
+                settings,
+            )
+
+    def test_ws_origin_allowed(self):
+        # Cross-site WebSocket hijacking guard: the handshake Origin is validated
+        # against the allowlist (verify-when-present). Headers use lowercased keys
+        # as the contrib websocket server provides them.
+        class Stub:
+            def __init__(self, settings):
+                self.settings = settings
+
+        check = BasicSwap._ws_origin_allowed
+        # The Origin is the html page that opened the socket, so it is matched
+        # against htmlhost/htmlport (not the WebSocket port).
+        loopback = {"htmlhost": "127.0.0.1", "htmlport": 12700}
+        cases = [
+            ({}, {}, True),  # no Origin (bots/scripts) -> allowed
+            ({"origin": "http://127.0.0.1:12700"}, loopback, True),
+            ({"origin": "http://localhost:12700"}, loopback, True),
+            ({"origin": "http://127.0.0.1:8080"}, loopback, False),  # other port
+            ({"origin": "http://evil.com"}, loopback, False),
+            ({"origin": "null"}, loopback, False),
+            (
+                {"origin": "https://swap.example.com"},
+                {"allowed_hosts": ["swap.example.com"]},
+                True,
+            ),
+            ({"origin": "https://swap.example.com"}, {}, False),
+            # Bind host (htmlhost) is accepted on the html port without an entry.
+            (
+                {"origin": "http://swap.example.com:12700"},
+                {"htmlhost": "swap.example.com", "htmlport": 12700},
+                True,
+            ),
+            # "*" does NOT disable the WS origin check.
+            (
+                {"origin": "http://evil.com"},
+                {"allowed_hosts": ["*"], "htmlhost": "127.0.0.1", "htmlport": 12700},
+                False,
+            ),
+        ]
+        for headers, settings, expected in cases:
+            assert check(Stub(settings), headers) is expected, (headers, settings)
+
+    def test_ws_handshake_bad_request(self):
+        # Anything that is not a websocket handshake (port scans, a client that
+        # closes before sending, a TLS hello) must close the connection instead
+        # of raising out of the request handler.
+        import io
+        from basicswap.contrib.websocket_server.websocket_server import (
+            WebSocketHandler,
+        )
+
+        def make_handler(data: bytes):
+            handler = WebSocketHandler.__new__(WebSocketHandler)
+            handler.rfile = io.BytesIO(data)
+            handler.keep_alive = True
+            handler.handshake_done = False
+            handler.valid_client = False
+            return handler
+
+        for data in (
+            b"",
+            b"\r\n",
+            b"\x16\x03\x01\x00\xa5\x01\x00\x00\xa1\x03\x03",
+            b"POST / HTTP/1.1\r\nUpgrade: websocket\r\n\r\n",
+        ):
+            handler = make_handler(data)
+            assert handler.read_http_headers() is None
+            handler.handshake()
+            assert handler.keep_alive is False
+
+        # A plain GET without the upgrade header is parsed, then rejected.
+        handler = make_handler(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nbroken\r\n\r\n")
+        assert handler.read_http_headers() == {"host": "127.0.0.1"}
+        handler = make_handler(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        handler.handshake()
+        assert handler.keep_alive is False
+
+    def test_is_allowed_host(self):
+        from basicswap.http_server import HttpHandler
+
+        class SwapClient:
+            def __init__(self, settings):
+                self.settings = settings
+
+        class Srv:
+            def __init__(self, host_name, settings):
+                self.host_name = host_name
+                self.swap_client = SwapClient(settings)
+
+        class Stub(HttpHandler):
+            def __init__(self, headers, host_name="127.0.0.1", settings=None):
+                self.headers = headers
+                self.server = Srv(host_name, settings or {})
+
+        check = HttpHandler.is_allowed_host
+        # (headers, host_name, settings, expected)
+        cases = [
+            ({"Host": "127.0.0.1:12700"}, "127.0.0.1", {}, True),
+            ({"Host": "localhost:12700"}, "127.0.0.1", {}, True),
+            ({"Host": "[::1]:12700"}, "127.0.0.1", {}, True),
+            ({"Host": "evil.com"}, "127.0.0.1", {}, False),  # rebinding shape
+            ({}, "127.0.0.1", {}, False),  # missing Host -> fail closed
+            (
+                {"Host": "swap.example.com"},
+                "0.0.0.0",
+                {"allowed_hosts": ["swap.example.com"]},
+                True,
+            ),
+            (
+                {"Host": "swap.example.com"},
+                "0.0.0.0",
+                {"allowed_hosts": ["https://swap.example.com"]},
+                True,  # scheme-form entry still matches the schemeless Host
+            ),
+            (
+                {"Host": "swap.example.com:8443"},
+                "0.0.0.0",
+                {"allowed_hosts": ["https://swap.example.com:8443"]},
+                True,  # hostname extracted from a scheme+port entry
+            ),
+            (
+                {"Host": "swap.example.com"},
+                "0.0.0.0",
+                {},
+                False,  # not configured
+            ),
+            (
+                {"Host": "0.0.0.0:12700"},
+                "0.0.0.0",
+                {},
+                False,  # bind-all is never a valid Host
+            ),
+            (
+                {"Host": "192.168.1.50:12700"},
+                "0.0.0.0",
+                {"allowed_hosts": ["192.168.1.50"]},
+                True,
+            ),
+            (
+                {"Host": "anything.example"},
+                "0.0.0.0",
+                {"allowed_hosts": ["*"]},
+                False,  # "*" alone does not disable — client_auth_hash required
+            ),
+            (
+                {"Host": "anything.example"},
+                "0.0.0.0",
+                {"allowed_hosts": ["*"], "client_auth_hash": "x"},
+                True,  # opt-out takes effect only with auth configured
+            ),
+            (
+                {},
+                "127.0.0.1",
+                {"allowed_hosts": ["*"], "client_auth_hash": "x"},
+                True,  # opt-out with auth, no Host
+            ),
+            (
+                {"Host": "anything.example"},
+                "0.0.0.0",
+                {"allowed_hosts": ["*"], "unsafe_allow_any_host_without_auth": True},
+                True,  # explicit unsafe override, no auth required
+            ),
+            (
+                {"Host": "anything.example"},
+                "0.0.0.0",
+                {"unsafe_allow_any_host_without_auth": True},
+                False,  # override alone does nothing without "*"
+            ),
+        ]
+        for headers, host_name, settings, expected in cases:
+            assert check(Stub(headers, host_name, settings)) is expected, (
+                headers,
+                host_name,
+                settings,
+            )
+
+    def test_checkform_csrf_token(self):
+        from basicswap.http_server import HttpHandler
+
+        class Srv:
+            session_tokens = {"csrf": "the-server-token"}
+
+        class Stub:
+            server = Srv()
+
+        check = HttpHandler.checkForm
+        msgs = []
+        # Correct token -> returns parsed form data.
+        fd = check(Stub(), b"formid=the-server-token&x=1", "rpc", msgs)
+        assert fd is not None and b"x" in fd
+        # Wrong / missing / empty -> rejected (None).
+        assert check(Stub(), b"formid=wrong&x=1", "rpc", msgs) is None
+        assert check(Stub(), b"x=1", "rpc", msgs) is None
+        assert check(Stub(), "", "rpc", msgs) is None
+
+    def test_varint(self):
+        test_vectors = [
+            (0, 1),
+            (1, 1),
+            (127, 1),
+            (128, 2),
+            (253, 2),
+            (8321, 2),
+            (16383, 2),
+            (16384, 3),
+            (2097151, 3),
+            (2097152, 4),
+        ]
+        for i, expect_length in test_vectors:
+            b = encode_varint(i)
+            assert len(b) == expect_length
+            assert decode_varint(b) == (i, expect_length)
+
+    def test_base58(self):
+        k = bytes.fromhex(
+            "0b4c6e34c21b910f92c7985a8093de526f5f8677a112a8c672d1098139b70e0f"
+        )
+        K = ed25519_get_pubkey(k)
+
+        addr: str = xmr_encode_address(K, K)
+        assert addr.startswith("4")
+        Ks, Kv = xmr_decode_address(addr)
+        assert Ks == K
+        assert Kv == K
+
+        addr = xmr_encode_address(K, K, 4146)
+        assert addr.startswith("Wo")
+        Ks, Kv = xmr_decode_address(addr, 4146)
+        assert Ks == K
+        assert Kv == K
+
+    def test_blake256(self):
+        test_vectors = [
+            ("716f6e863f744b9ac22c97ec7b76ea5f5908bc5b2f67c61510bfc4751384ea7a", b""),
+            (
+                "7576698ee9cad30173080678e5965916adbb11cb5245d386bf1ffda1cb26c9d7",
+                b"The quick brown fox jumps over the lazy dog",
+            ),
+        ]
+        for expect_hash, data in test_vectors:
+            assert blake256(data).hex() == expect_hash
+
+    def test_extkey(self):
+        test_key = "XPARHAr37YxmFP8wyjkaHAQWmp84GiyLikL7EL8j9BCx4LkB8Q1Bw5Kr8sA1GA3Ym53zNLcaxxFHr6u81JVTeCaD61c6fKS1YRAuti8Zu5SzJCjh"
+        test_key_c0 = "XPARHAt1XMcNYAwP5wEnQXknBAkGSzaetdZt2eoJZehdB4WXfV1xbSjpgHe44AivmumcSejW5KaYx6L5M6MyR1WyXrsWTwaiUEfHq2RrqCfXj3ZW"
+        test_key_c0_p = "PPARTKPL4rp5WLnrYP6jZfuRjx6jrmvbsz5QdHofPfFqJdm918mQwdPLq6Dd9TkdbQeKUqjbHWkyzWe7Pftd7itzm7ETEoUMq4cbG4fY9FKH1YSU"
+        test_key_c0h = "XPARHAt1XMcNgWbv48LwoQbjs1bC8kCXKomzvJLRT5xmbQ2GKf9e8Vfr1MMcfiWJC34RyDp5HvAfjeiNyLDfkFm1UrRCrPkVC9GGaAWa3nXMWew8"
+
+        ek_data = decodeAddress(test_key)[4:]
+
+        ek = ExtKeyPair()
+        ek.decode(ek_data)
+        assert ek.encode_v() == ek_data
+
+        m_0 = ek.derive(0)
+
+        ek_c0_data = decodeAddress(test_key_c0)[4:]
+        assert m_0.encode_v() == ek_c0_data
+
+        child_no: int = 0 | (1 << 31)
+        m_0h = ek.derive(child_no)
+
+        ek_c0h_data = decodeAddress(test_key_c0h)[4:]
+        assert m_0h.encode_v() == ek_c0h_data
+
+        ek.neuter()
+        assert ek.has_key() is False
+        m_0 = ek.derive(0)
+
+        ek_c0_p_data = decodeAddress(test_key_c0_p)[4:]
+        assert m_0.encode_p() == ek_c0_p_data
+
+    def test_extkey_set_seed(self):
+        # BIP32 test vector 1, without the version prefix.
+        ek = ExtKeyPair()
+        ek.set_seed(bytes.fromhex("000102030405060708090a0b0c0d0e0f"))
+        assert (
+            ek.encode_v().hex()
+            == "000000000000000000873dff81c02f525623fd1fe5167eac3a55a049de3d314bb4"
+            "2ee227ffed37d50800e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35"
+        )
+
+        # A master key of zero or above the group order is invalid, and BIP32 says
+        # to discard the seed rather than clamp the key. No reachable seed hashes
+        # to one, so the hmac output has to be driven directly to get there.
+        import basicswap.util.extkey as extkey_module
+
+        real_hmac_sha512 = extkey_module.hmac_sha512
+        try:
+            for bad_key in (
+                bytes(32),
+                bytes.fromhex(
+                    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+                ),
+            ):
+                extkey_module.hmac_sha512 = lambda k, d, key=bad_key: key + bytes(32)
+                self.assertRaises(ValueError, ExtKeyPair().set_seed, b"seed")
+        finally:
+            extkey_module.hmac_sha512 = real_hmac_sha512
+
+        # The patch must not have leaked into the module.
+        ek_after = ExtKeyPair()
+        ek_after.set_seed(bytes.fromhex("000102030405060708090a0b0c0d0e0f"))
+        assert ek_after.encode_v() == ek.encode_v()
+
+    def test_mnemonic(self):
+        entropy0: bytes = Mnemonic("english").to_entropy(mnemonics[0])
+        assert entropy0.hex() == "0002207e9b744ea2d7ab41702f31f000"
+        mnemonic_recovered: str = Mnemonic("english").to_mnemonic(entropy0)
+        assert mnemonic_recovered == mnemonics[0]
+
+    def test_db(self):
+        db_test = DBMethods()
+        db_test.sqlite_file = ":memory:"
+        db_test.mxDB = threading.RLock()
+        cursor = db_test.openDB()
+        try:
+            create_db_(db_test._db_con, logger)
+            # Test upsert
+            ki = KnownIdentity()
+            ki.address = "test"
+            ki.label = "test"
+            db_test.add(ki, cursor)
+            ki.record_id = 1
+            ki.address = "test1"
+            ki.label = "test1"
+            ki.note = "note1"
+            try:
+                db_test.add(ki, cursor, upsert=False)
+            except Exception as e:
+                assert "UNIQUE constraint failed" in str(e)
+            else:
+                raise ValueError("Should have errored.")
+            db_test.add(ki, cursor, upsert=True)
+
+            # Test columns list
+            ki_test = db_test.queryOne(
+                KnownIdentity,
+                cursor,
+                {"address": "test1"},
+                columns_list=[
+                    "label",
+                ],
+            )
+            assert ki_test.label == "test1"
+            assert ki_test.address is None
+
+            # Test updating partial row
+            ki_test.label = "test2"
+            ki_test.record_id = 1
+            db_test.add(
+                ki_test,
+                cursor,
+                upsert=True,
+                columns_list=[
+                    "record_id",
+                    "label",
+                ],
+            )
+            ki_test = db_test.queryOne(KnownIdentity, cursor, {"address": "test1"})
+            assert ki_test.record_id == 1
+            assert ki_test.address == "test1"
+            assert ki_test.label == "test2"
+            assert ki_test.note == "note1"
+
+            ki_test.note = "test2"
+            ki_test.label = "test3"
+
+            db_test.updateDB(
+                ki_test,
+                cursor,
+                ["record_id"],
+                columns_list=[
+                    "label",
+                ],
+            )
+            ki_test = db_test.queryOne(KnownIdentity, cursor, {"address": "test1"})
+            assert ki_test.record_id == 1
+            assert ki_test.address == "test1"
+            assert ki_test.label == "test3"
+            assert ki_test.note == "note1"
+
+            # Test partially initialised object
+            ki_test_p = KnownIdentity(
+                _init_all_columns=False, record_id=1, label="test4"
+            )
+            db_test.add(ki_test_p, cursor, upsert=True)
+            ki_test = db_test.queryOne(KnownIdentity, cursor, {"address": "test1"})
+            assert ki_test.record_id == 1
+            assert ki_test.address == "test1"
+            assert ki_test.label == "test4"
+            assert ki_test.note == "note1"
+
+        finally:
+            db_test.closeDB(cursor)
+
+    def test_db_savepoint(self):
+        db_test = DBMethods()
+        db_test.sqlite_file = ":memory:"
+        db_test.mxDB = threading.RLock()
+        cursor = db_test.openDB()
+        try:
+            cursor.execute("CREATE TABLE sp_test (v INTEGER)")
+            cursor.execute("INSERT INTO sp_test VALUES (1)")
+            try:
+                with db_test.dbSavepoint(cursor, "sp"):
+                    cursor.execute("INSERT INTO sp_test VALUES (2)")
+                    raise ValueError("Roll back")
+            except ValueError:
+                pass
+            assert db_test._db_con.in_transaction
+            cursor.execute("INSERT INTO sp_test VALUES (3)")
+            db_test.commitDB()
+
+            # Release must not commit
+            with db_test.dbSavepoint(cursor, "sp"):
+                cursor.execute("INSERT INTO sp_test VALUES (4)")
+            assert db_test._db_con.in_transaction
+            db_test.rollbackDB()
+
+            rows = [r[0] for r in cursor.execute("SELECT v FROM sp_test ORDER BY v")]
+            assert rows == [1, 3]
+        finally:
+            db_test.closeDB(cursor)
+
+    def test_tx_hashes(self):
+        tx = CTransaction()
+        tx.nVersion = 2
+        tx.nLockTime = 0
+        tx.vout.append(CTxOut(1, bytes.fromhex("a15143aa086e05e3b5a73046")))
+        tx.vout.append(CTxOut(2, bytes.fromhex("eed7d63fd86225f7159ed7e5")))
+        tx.vin.append(
+            CTxIn(
+                COutPoint(
+                    uint256_from_str(
+                        bytes.fromhex(
+                            "0101010101010101010101010101010101010010101010101010101010101010"
+                        )
+                    ),
+                    1,
+                ),
+                bytes.fromhex("c2dca8ecbcf058b79f188692"),
+            )
+        )
+        assert (
+            tx.rehash()
+            == "28d0e9afad2740504eb9d0428352bc77a7b94eaafa364ef4cc07aeeff0c631a2"
+        )
+        sighash = SegwitV0SignatureHash(
+            bytes.fromhex("a15143aa086e05e3b5a73046"), tx, 0, SIGHASH_ALL, 3
+        )
+        assert (
+            sighash.hex()
+            == "252cd6e85b99e0fd554c44d5fe638923f7ef563048362406a665cf3400feb1bd"
+        )
+
+    def test_validateSwapType(self):
+        logging.info("---------- Test validateSwapType")
+        basicswap_dir = "/tmp/bsx_test_other"
+        if not os.path.exists(basicswap_dir):
+            os.makedirs(basicswap_dir)
+
+        k = PrivateKey()
+        settings = {
+            "network_key": toWIF(PREFIX_SECRET_KEY_REGTEST, k.secret),
+            "network_pubkey": k.public_key.format().hex(),
+        }
+
+        sc = BasicSwap(
+            basicswap_dir,
+            settings,
+            "regtest",
+            log_name="bsx_test_other",
+        )
+
+        should_pass = [
+            (Coins.BTC, Coins.XMR, SwapTypes.XMR_SWAP),
+            (Coins.XMR, Coins.BTC, SwapTypes.XMR_SWAP),
+            (Coins.BTC, Coins.FIRO, SwapTypes.XMR_SWAP),
+            (Coins.FIRO, Coins.BTC, SwapTypes.XMR_SWAP),
+            (Coins.PIVX, Coins.BTC, SwapTypes.XMR_SWAP),
+            (Coins.BTC, Coins.PIVX, SwapTypes.XMR_SWAP),
+            (Coins.DASH, Coins.PIVX, SwapTypes.SELLER_FIRST),
+            (Coins.PIVX, Coins.DASH, SwapTypes.SELLER_FIRST),
+        ]
+        should_fail = [
+            (Coins.BTC, Coins.XMR, SwapTypes.SELLER_FIRST),
+            (Coins.XMR, Coins.PART_ANON, SwapTypes.XMR_SWAP),
+            (Coins.FIRO, Coins.PART_ANON, SwapTypes.XMR_SWAP),
+            (Coins.PART_ANON, Coins.FIRO, SwapTypes.XMR_SWAP),
+            (Coins.FIRO, Coins.BTC, SwapTypes.SELLER_FIRST),
+            (Coins.BTC, Coins.FIRO, SwapTypes.SELLER_FIRST),
+        ]
+
+        for case in should_pass:
+            sc.validateSwapType(case[0], case[1], case[2])
+        for case in should_fail:
+            self.assertRaises(
+                ValueError, sc.validateSwapType, case[0], case[1], case[2]
+            )
+        sc.chain = "mainnet"
+        for case in should_pass:
+            try:
+                sc.validateSwapType(case[0], case[1], case[2])
+            except Exception as e:
+                assert "Coin pair should use adaptor sig swap type" in str(e)
+            else:
+                if case[2] != SwapTypes.XMR_SWAP:
+                    if (
+                        case[0] not in sc.coins_without_segwit
+                        or case[1] not in sc.coins_without_segwit
+                    ):
+                        raise ValueError(f"Invalid swap pair in strict mode {case}")
+        for case in should_fail:
+            self.assertRaises(
+                ValueError, sc.validateSwapType, case[0], case[1], case[2]
+            )
+
+        sc.settings["strict_swap_type"] = False
+        for case in should_pass:
+            sc.validateSwapType(case[0], case[1], case[2])
+
+        del sc
+
+    def test_validateOfferLockValue(self):
+        logging.info("---------- Test validateOfferLockValue")
+        basicswap_dir = "/tmp/bsx_test_other"
+        if not os.path.exists(basicswap_dir):
+            os.makedirs(basicswap_dir)
+
+        k = PrivateKey()
+        settings = {
+            "network_key": toWIF(PREFIX_SECRET_KEY_REGTEST, k.secret),
+            "network_pubkey": k.public_key.format().hex(),
+        }
+
+        sc = BasicSwap(
+            basicswap_dir,
+            settings,
+            "regtest",
+            log_name="bsx_test_other",
+        )
+
+        # use_csv is the only coin_clients entry validateOfferLockValue reads
+        sc.coin_clients[Coins.BTC] = {"use_csv": True}
+        sc.coin_clients[Coins.XMR] = {"use_csv": True}
+        sc.coin_clients[Coins.PIVX] = {"use_csv": False}
+
+        seq_time = (
+            SwapTypes.XMR_SWAP,
+            Coins.BTC,
+            Coins.XMR,
+            TxLockTypes.SEQUENCE_LOCK_TIME,
+        )
+        seq_blocks = (
+            SwapTypes.XMR_SWAP,
+            Coins.BTC,
+            Coins.XMR,
+            TxLockTypes.SEQUENCE_LOCK_BLOCKS,
+        )
+        # The absolute lock types require at least one coin without CSV
+        abs_time = (
+            SwapTypes.SELLER_FIRST,
+            Coins.PIVX,
+            Coins.BTC,
+            TxLockTypes.ABS_LOCK_TIME,
+        )
+        abs_blocks = (
+            SwapTypes.SELLER_FIRST,
+            Coins.PIVX,
+            Coins.BTC,
+            TxLockTypes.ABS_LOCK_BLOCKS,
+        )
+
+        time_locks = [seq_time + (24 * 60 * 60,), abs_time + (24 * 60 * 60,)]
+        block_locks = [seq_blocks + (100,), abs_blocks + (100,)]
+
+        for case in time_locks + block_locks:
+            sc.validateOfferLockValue(*case)
+
+        out_of_range = [
+            seq_time + (sc.min_sequence_lock_seconds - 1,),
+            seq_time + (sc.max_sequence_lock_seconds + 1,),
+            seq_blocks + (4,),
+            seq_blocks + (1001,),
+            abs_time + (4 * 60 * 60 - 1,),
+            abs_time + (96 * 60 * 60 + 1,),
+            abs_blocks + (9,),
+            abs_blocks + (1001,),
+        ]
+        for case in out_of_range:
+            self.assertRaises(ValueError, sc.validateOfferLockValue, *case)
+
+        self.assertRaises(
+            ValueError,
+            sc.validateOfferLockValue,
+            SwapTypes.XMR_SWAP,
+            Coins.BTC,
+            Coins.XMR,
+            0,
+            100,
+        )
+
+        # Block count lock types are only valid on regtest
+        sc.chain = "mainnet"
+        for case in time_locks:
+            sc.validateOfferLockValue(*case)
+        for case in block_locks:
+            self.assertRaisesRegex(
+                ValueError,
+                "for testing only",
+                sc.validateOfferLockValue,
+                *case,
+            )
+
+        del sc
+
+    def test_jsonrpc(self):
+        logging.info("---------- Test Jsonrpc")
+        host = "127.0.0.1"
+        port = 1234
+        auth = escape_rpcauth("user:p@ss")
+        url = Jsonrpc.constructUrl(auth, host, port)
+        assert url == "http://user:p%40ss@127.0.0.1:1234/"
+
+        host = "https://127.0.0.1"
+        url = Jsonrpc.constructUrl(auth, host, port, "new_wallet")
+        assert url == "https://user:p%40ss@127.0.0.1:1234/wallet/new_wallet"
+
+
+if __name__ == "__main__":
+    unittest.main()

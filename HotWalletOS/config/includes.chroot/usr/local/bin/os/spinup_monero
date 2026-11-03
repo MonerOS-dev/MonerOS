@@ -150,12 +150,23 @@ if [ "$MONERO_EXISTS" = true ]; then
     # SCENARIO B: SUFFICIENT SPACE AVAILABLE (PROMPT FOR SETUP TYPE)
     else
     
-        MSG_NODE="System storage is verified. Would you like to host your own node locally (Self-Sync) or connect to an remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy but can take up to 1-3 days to sync."
+        if [ ! -f /mnt/sallyport/config/monero.self ]; then
+            DEFAULT_FLAG=""
+            
+            # Ask the user if they want to enable atomic swaps since they have enough space
+            MSG_NODE="Would you like to host your own Monero node locally (Self-Sync) or connect to a remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy but can take up to 4 days on typical hardware for the initial sync."
+        else
+            DEFAULT_FLAG="--defaultno"
+            
+            # We've already synced so warn about enabling
+            MSG_NODE="Would you like to continue running your own Monero node (Self-Sync) or connect to a remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy and is highly recommended."  
+        fi
     
         while true; do
             # Flip the buttons: "Remote Node" is now the default (Yes-button)
             if run_whiptail whiptail --title " Node Synchronization Engine " \
                 --yesno "$MSG_NODE" 15 50 --fb \
+                $DEFAULT_FLAG \
                 --yes-button "Remote Node" --no-button "Self-Sync"; then
     
                 # If they press Enter (Default), it hits 'Yes' (Remote Node)

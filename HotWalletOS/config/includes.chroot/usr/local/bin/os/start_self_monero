@@ -152,6 +152,11 @@ else
     pkill -f "tail -F -n 0 $LOG_FILE" 2>/dev/null
 fi
 
+# let next boot know we enabled self sync
+sudo mkdir -p /mnt/sallyport/config
+if [ ! -f /mnt/sallyport/config/monero.self ]; then
+    sudo touch /mnt/sallyport/config/monero.self
+fi
 
 
 echo "-------------------------------------------------------"

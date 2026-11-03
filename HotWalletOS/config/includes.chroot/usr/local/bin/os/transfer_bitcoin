@@ -3,9 +3,8 @@
 # --- Configuration ---
 WATCH_DIR="/mnt/sallyport/watch_bitcoin"
 CONFIG_FILE="/home/user/password.cfg"
-TIP_ADDRESS="bc1qhru5m45693hx5l4wcq88xvgust6zddf49ramwx"
+TIP_ADDRESS="bc1qea0lkrsqd3eyee8k3zw56fg6zxwfppq3t62w40"
 ELECTRUM_PATH="/usr/local/bin/electrum"
-LOG_FILE="/tmp/logs/transfer_btc.log"
 
 # Arguments
 ADDRESS=$1
@@ -17,79 +16,222 @@ INPUT_PASS=$5
 # Paths
 WALLET_DIR="${WATCH_DIR}/${ADDRESS}"
 WALLET_FILE="${WALLET_DIR}/electrum_watch"
-mkdir -p "$(dirname "$LOG_FILE")"
+TIMESTAMP=$(date +%s)
+LOG_FILE="${WALLET_DIR}/hot_process.log"
+DEBUG_FILE="${WALLET_DIR}/debug.log"
+
+mkdir -p "$WALLET_DIR"
+rm -f "$LOG_FILE"
+
+# Initialize Debug Log
+cat <<EOF > "$DEBUG_FILE"
+=== TRANSACTION DEBUG LOG ===
+Timestamp: $TIMESTAMP
+Address: $ADDRESS
+Destination: $DEST
+Amount Input: $AMOUNT
+Tip Percent: $TIP_PERCENT
+---------------------------------------------
+EOF
 
 log_msg() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ADDR: $ADDRESS] $1" >> "$LOG_FILE"; }
+debug_msg() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$DEBUG_FILE"; }
 
-# 1. Verification
-STORED_PASS=$(cat "$CONFIG_FILE" | tr -d '\r\n' | xargs)
-if [[ "$INPUT_PASS" != "$STORED_PASS" ]]; then
+# Save original terminal output file descriptor for PHP response
+exec 3>&1 4>&2
+
+# Helper function to return data to PHP frontend
+msg() {
+    echo "$1" >&3
+}
+
+cd "$WALLET_DIR" || { echo "FAILURE: Critical execution directory not found: $WALLET_DIR"; exit 1; }
+
+# --- 1. Password Verification (Hashed) ---
+if [ ! -f "$CONFIG_FILE" ]; then
+    exec 1>&3 2>&4
+    echo "FAILURE: Password configuration file not found."
+    debug_msg "ERROR: Password configuration file not found at $CONFIG_FILE"
+    exit 1
+fi
+
+STORED_PASS_HASH=$(cat "$CONFIG_FILE" | tr -d '\r\n' | xargs)
+INPUT_PASS_HASH=$(echo -n "$INPUT_PASS" | sha256sum | awk '{print $1}')
+
+if [[ "$INPUT_PASS_HASH" != "$STORED_PASS_HASH" ]]; then
+    exec 1>&3 2>&4
     echo "FAILURE: Incorrect Wallet Password."
     log_msg "FAILURE: Incorrect Password."
+    debug_msg "ERROR: Password hash mismatch."
     exit 1
 fi
 
-# 2. Queue Check
-if ls "${WALLET_DIR}"/unsigned_tx_*.psbt >/dev/null 2>&1 || ls "${WALLET_DIR}"/signed_tx_*.json >/dev/null 2>&1; then
-    echo "ABORTING: A pending transaction already exists! Please sign and submit that one first."
-    exit 1
-fi
+# --- 2. Queue Check ---
+cd "$WALLET_DIR" || { echo "FAILURE: Critical execution directory not found: $WALLET_DIR"; exit 1; }
 
-# 3. Daemon & Wallet Load
+# Defensive Cleanup: Purge legacy transaction artifacts automatically
+rm -f unsigned_tx_*.psbt unsigned_record_*
+debug_msg "Queue checked and legacy artifacts purged."
+
+# --- 3. Daemon & Wallet Load ---
 if ! "$ELECTRUM_PATH" daemon status > /dev/null 2>&1; then
     "$ELECTRUM_PATH" daemon -d > /dev/null 2>&1
     sleep 2
+    debug_msg "Started Electrum daemon."
 fi
 "$ELECTRUM_PATH" load_wallet -w "$WALLET_FILE" > /dev/null 2>&1
 sleep 1
+debug_msg "Wallet loaded successfully."
 
-# 4. Calculation & Command Construction
-TIMESTAMP=$(date +%s)
+# --- 4. Calculation & Command Construction ---
+TIP_PERCENT_CLEAN=$(echo "$TIP_PERCENT" | tr -cd '0-9.')
+[ -z "$TIP_PERCENT_CLEAN" ] && TIP_PERCENT_CLEAN=0
 
 if [[ "$AMOUNT" == "sweep_all" ]]; then
     FULL_BAL=$("$ELECTRUM_PATH" getbalance -w "$WALLET_FILE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('confirmed', '0'))")
-    SHOULD_TIP=$(python3 -c "print(1 if float($FULL_BAL) > 0.00025 else 0)")
+    SHOULD_TIP=$(python3 -c "print(1 if float('$FULL_BAL') > 0.00025 and float('$TIP_PERCENT_CLEAN') > 0 else 0)")
+
+    debug_msg "Sweep All detected. Full Balance: $FULL_BAL, Should Tip: $SHOULD_TIP"
 
     if [[ "$SHOULD_TIP" == "1" ]]; then
-        MAIN_VAL=$(python3 -c "print(round($FULL_BAL / (1 + ($TIP_PERCENT / 100)), 8))")
-        TIP_VAL=$(python3 -c "print(round($FULL_BAL - $MAIN_VAL, 8))")
+        MAIN_VAL=$(python3 -c "print(round(float('$FULL_BAL') / (1 + (float('$TIP_PERCENT_CLEAN') / 100)), 8))")
+        TIP_VAL=$(python3 -c "print(round(float('$FULL_BAL') - float('$MAIN_VAL'), 8))")
         
-        if python3 -c "exit(0 if $TIP_VAL >= 0.00000546 else 1)"; then
+        if python3 -c "exit(0 if float('$TIP_VAL') >= 0.00000546 else 1)"; then
             CMD="$ELECTRUM_PATH paytomany -w \"$WALLET_FILE\" '[[\"$DEST\", $MAIN_VAL], [\"$TIP_ADDRESS\", \"!\"]]' --unsigned"
         else
+            TIP_VAL=0
+            MAIN_VAL=$FULL_BAL
             CMD="$ELECTRUM_PATH payto -w \"$WALLET_FILE\" \"$DEST\" ! --unsigned"
         fi
     else
+        TIP_VAL=0
+        MAIN_VAL=$FULL_BAL
         CMD="$ELECTRUM_PATH payto -w \"$WALLET_FILE\" \"$DEST\" ! --unsigned"
     fi
 else
     MAIN_VAL=$AMOUNT
-    TIP_VAL=$(python3 -c "print(round($MAIN_VAL * ($TIP_PERCENT / 100), 8))")
+    if [ "$(python3 -c "print(1 if float('$TIP_PERCENT_CLEAN') > 0 else 0)")" -eq 1 ]; then
+        TIP_VAL=$(python3 -c "print(round(float('$MAIN_VAL') * (float('$TIP_PERCENT_CLEAN') / 100), 8))")
+    else
+        TIP_VAL=0
+    fi
 
-    if python3 -c "exit(0 if $TIP_VAL >= 0.00000546 else 1)"; then
+    if python3 -c "exit(0 if float('$TIP_VAL') >= 0.00000546 else 1)"; then
         CMD="$ELECTRUM_PATH paytomany -w \"$WALLET_FILE\" '[[\"$DEST\", $MAIN_VAL], [\"$TIP_ADDRESS\", $TIP_VAL]]' --unsigned"
     else
+        TIP_VAL=0
         CMD="$ELECTRUM_PATH payto -w \"$WALLET_FILE\" \"$DEST\" \"$MAIN_VAL\" --unsigned"
     fi
 fi
 
-# 5. Execute & Save
+debug_msg "Constructed Command: $CMD"
+debug_msg "Main Val: $MAIN_VAL | Tip Val: $TIP_VAL"
+
+# --- 5. Execute & Save ---
 OUTPUT=$(eval "$CMD" 2>&1)
-RAW_DATA=$(echo "$OUTPUT" | python3 -c "import sys, json; data=sys.stdin.read(); 
+echo "--- RAW ELECTRUM OUTPUT ---" >> "$DEBUG_FILE"
+echo "$OUTPUT" >> "$DEBUG_FILE"
+echo "--------------------------" >> "$DEBUG_FILE"
+
+RAW_DATA=$(echo "$OUTPUT" | python3 -c "import sys, json; data=sys.stdin.read().strip(); 
 try:
-    obj=json.loads(data)
+    obj = json.loads(data)
     print(obj.get('PSBT') or obj.get('hex') or data)
 except:
-    print(data.strip())")
+    print(data)")
 
 if [[ "$RAW_DATA" == cHNid* ]]; then
     FILENAME="unsigned_tx_${TIMESTAMP}.psbt"
     echo "$RAW_DATA" > "${WALLET_DIR}/${FILENAME}"
+    debug_msg "Successfully wrote PSBT to $FILENAME"
     
-    echo "SUCCESS: Created ${FILENAME}"
-    echo "NEXT: Sign this PSBT on your cold-storage device."
-    log_msg "SUCCESS: Created $FILENAME"
+    # Allow PHP to read files in directory
+    sudo setfacl -m g:www-data:rx "$WALLET_DIR"
+
+    # Execute all calculations, deserialization, and record writing inside Python safely
+    python3 -c "
+import subprocess, json
+
+psbt_hex = '$RAW_DATA'
+electrum_path = '$ELECTRUM_PATH'
+wallet_dir = '$WALLET_DIR'
+timestamp = '$TIMESTAMP'
+dest_addr = '$DEST'
+is_sweep = ('$AMOUNT' == 'sweep_all')
+full_bal = float('$FULL_BAL') if is_sweep else 0.0
+main_val_input = float('$MAIN_VAL')
+tip_val_input = float('$TIP_VAL')
+
+fee_sats = 0
+deserialize_json = {}
+try:
+    res = subprocess.run([electrum_path, 'deserialize', psbt_hex], capture_output=True, text=True, timeout=5)
+    if res.returncode == 0 and res.stdout.strip():
+        deserialize_json = json.loads(res.stdout)
+        total_in = sum(i.get('value_sats', 0) for i in deserialize_json.get('inputs', []))
+        total_out = sum(o.get('value_sats', 0) for o in deserialize_json.get('outputs', []))
+        if total_in > 0 and total_out > 0:
+            fee_sats = total_in - total_out
+except Exception as e:
+    print(f'Deserialize error: {e}')
+
+fee_btc = fee_sats / 100000000.0
+
+tip_btc = tip_val_input
+if is_sweep:
+    # Sweep all: recipient absorbs fee and tip
+    dest_btc = round(full_bal - fee_btc - tip_btc, 8)
+else:
+    dest_btc = main_val_input
+
+total_btc = round(dest_btc + tip_btc + fee_btc, 8)
+
+# Format values to 8 decimal places
+btc_dest_str = f'{dest_btc:.8f}'
+btc_tip_str = f'{tip_btc:.8f}'
+btc_fee_str = f'{fee_btc:.8f}'
+btc_total_str = f'{total_btc:.8f}'
+short_dest = f'{dest_addr[:8]}...{dest_addr[-8:]}'
+
+record_filename = f'{wallet_dir}/unsigned_record_{timestamp}'
+record_content = f'''Transfer Address: {short_dest}
+Transfer Amount: {btc_dest_str} BTC
+Development Contribution: {btc_tip_str} BTC
+Processing Fees: {btc_fee_str} BTC
+Total Amount: {btc_total_str} BTC'''
+
+with open(record_filename, 'w') as f:
+    f.write(record_content)
+
+print(f'CALC_SUCCESS|{btc_dest_str}|{btc_tip_str}|{btc_fee_str}|{btc_total_str}')
+" > "${WALLET_DIR}/py_result.log"
+
+    PY_RESULT=$(cat "${WALLET_DIR}/py_result.log")
+    rm -f "${WALLET_DIR}/py_result.log"
+
+    if [[ "$PY_RESULT" == CALC_SUCCESS* ]]; then
+        IFS='|' read -r _ BTC_DEST BTC_TIP BTC_FEE BTC_TOTAL <<< "$PY_RESULT"
+        
+        RECORD_FILE="unsigned_record_${TIMESTAMP}"
+        sudo setfacl -m u:www-data:r "$RECORD_FILE" 2>/dev/null || true
+
+        log_msg "SUCCESS: Created $FILENAME and $RECORD_FILE with True Fee: $BTC_FEE BTC"
+        debug_msg "SUCCESS: Transaction record created successfully. Dest: $BTC_DEST | Fee: $BTC_FEE | Total: $BTC_TOTAL"
+        
+        # Return formatted record to PHP page
+        msg "$(cat "$RECORD_FILE")"
+    else
+        msg "FAILURE: Python calculation script failed."
+        log_msg "FAILURE: Python calculation script failed."
+        exit 1
+    fi
 else
-    echo "FAILURE: $(echo "$OUTPUT" | tr '\n' ' ')"
+    msg "FAILURE: $(echo "$OUTPUT" | tr '\n' ' ')"
+    log_msg "FAILURE: $(echo "$OUTPUT" | tr '\n' ' ')"
+    debug_msg "ERROR: Failed to parse PSBT from raw output. Raw Data was: $RAW_DATA"
     exit 1
 fi
+
+# remove debug file by default. Comment out if you want to see what's going on
+rm -f "$DEBUG_FILE"

@@ -1,0 +1,1293 @@
+{% include 'header.html' %}
+{% from 'style.html' import input_arrow_down_svg %}
+{% from 'macros.html' import breadcrumb %}
+<div class="container mx-auto">
+ <section class="p-5 mt-5">
+  <div class="flex flex-wrap items-center -m-2">
+   <div class="w-full md:w-1/2 p-2">
+    {{ breadcrumb([
+      {'text': 'Home', 'url': '/'},
+      {'text': 'Settings', 'url': '/settings'}
+    ]) }}
+   </div>
+  </div>
+ </section>
+ <section class="py-3">
+  <div class="container px-4 mx-auto">
+   <div class="relative py-11 px-16 bg-coolGray-900 dark:bg-blue-500 rounded-md overflow-hidden">
+    <img class="absolute z-10 left-4 top-4" src="/static/images/elements/dots-red.svg" alt="">
+    <img class="absolute z-10 right-4 bottom-4" src="/static/images/elements/dots-red.svg" alt="">
+    <img class="absolute h-64 left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 object-cover" src="/static/images/elements/wave.svg" alt="">
+    <div class="relative z-20 flex flex-wrap items-center -m-3">
+     <div class="w-full md:w-1/2 p-3">
+      <h2 class="mb-6 text-4xl font-bold text-white tracking-tighter">Settings</h2>
+      <p class="font-normal text-coolGray-200 dark:text-white">Manage your BasicSwap client and coins settings.</p>
+     </div>
+    </div>
+   </div>
+  </div>
+ </section>
+ {% include 'inc_messages.html' %}
+
+
+
+ {% set current_tab = active_tab if active_tab in ['coins', 'networks', 'general', 'security', 'notifications', 'tor'] else 'coins' %}
+ {% set tab_on = 'tab-button border-b-2 border-blue-500 text-blue-600 dark:text-blue-400 py-4 px-1 text-sm font-medium focus:outline-none focus:ring-0' %}
+ {% set tab_off = 'tab-button border-b-2 border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 py-4 px-1 text-sm font-medium focus:outline-none focus:ring-0' %}
+ <section class="py-4">
+  <div class="container px-4 mx-auto">
+   <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl  ">
+    <div class="">
+     <nav id="settings-tabs" class="flex space-x-8 px-6" aria-label="Tabs" data-initial-tab="{{ current_tab }}">
+      <button class="{{ tab_on if current_tab == 'coins' else tab_off }}" data-tab="coins" id="coins-tab">
+       Coins
+      </button>
+      <button class="{{ tab_on if current_tab == 'networks' else tab_off }}" data-tab="networks" id="networks-tab">
+       Networks
+      </button>
+      <button class="{{ tab_on if current_tab == 'general' else tab_off }}" data-tab="general" id="general-tab">
+       General
+      </button>
+      <button class="{{ tab_on if current_tab == 'security' else tab_off }}" data-tab="security" id="security-tab">
+       Security
+      </button>
+      <button class="{{ tab_on if current_tab == 'notifications' else tab_off }}" data-tab="notifications" id="notifications-tab">
+       Notifications
+      </button>
+      <button class="{{ tab_on if current_tab == 'tor' else tab_off }}" data-tab="tor" id="tor-tab">
+       Tor
+      </button>
+     </nav>
+    </div>
+   </div>
+  </div>
+ </section>
+
+ <div class="container px-4 mx-auto">
+
+  <div class="tab-content{% if current_tab != 'coins' %} hidden{% endif %}" id="coins" role="tabpanel" aria-labelledby="coins-tab">
+   <form method="post" id="coins-form">
+    <div class="space-y-6">
+     {% for c in chains %}
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl  overflow-hidden coin-card" data-coin="{{ c.name }}">
+
+      <div class="px-6 py-4 cursor-pointer coin-header" data-coin="{{ c.name }}">
+       <div class="flex items-center justify-between">
+        <div class="flex items-center">
+         <div class="flex-shrink-0">
+          <img class="h-10 w-10" src="/static/images/coins/{{ c.display_name }}.png" alt="{{ c.display_name }}">
+         </div>
+         <div class="ml-4">
+          <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ c.display_name }}</h3>
+         </div>
+        </div>
+
+        <div class="flex items-center space-x-4">
+         {% if c.connection_type != "none" %}
+         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+          <svg class="w-2 h-2 mr-1" fill="currentColor" viewBox="0 0 8 8">
+           <circle cx="4" cy="4" r="3"/>
+          </svg>
+          Enabled
+         </span>
+         {% else %}
+         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300">
+          <svg class="w-2 h-2 mr-1" fill="currentColor" viewBox="0 0 8 8">
+           <circle cx="4" cy="4" r="3"/>
+          </svg>
+          Disabled
+         </span>
+         {% endif %}
+
+         <svg class="w-5 h-5 transform transition-transform toggle-arrow text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+         </svg>
+        </div>
+       </div>
+      </div>
+
+      <div class="coin-details hidden" id="details-{{ c.name }}">
+       <div class="px-6 py-6">
+
+        {% if c.connection_type %}
+        <div class="mb-6">
+         <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+          Connection
+         </h4>
+
+         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Connection Type</label>
+            {% if c.supports_electrum %}
+            <div class="relative">
+             <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="connection_type_{{ c.name }}" data-original-value="{{ c.connection_type }}">
+              <option value="rpc" {% if c.connection_type == 'rpc' %} selected{% endif %}>Full Node (RPC)</option>
+              <option value="electrum" {% if c.connection_type == 'electrum' %} selected{% endif %}>Light Wallet (Electrum)</option>
+             </select>
+             <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+              <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+              </svg>
+             </div>
+            </div>
+            {% else %}
+            <div class="px-3 py-2 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-lg text-sm text-gray-900 dark:text-gray-100">
+             {{ c.connection_type }}
+            </div>
+            {% endif %}
+           </div>
+
+           {% if c.manage_daemon is defined %}
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Manage Daemon</label>
+            {% if c.name in ('wownero', 'monero') %}
+            <div class="relative">
+             <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="managedaemon_{{ c.name }}">
+              <option value="true" {% if c.manage_daemon==true %} selected{% endif %}>True</option>
+              <option value="false" {% if c.manage_daemon==false %} selected{% endif %}>False</option>
+             </select>
+             <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+              <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+              </svg>
+             </div>
+            </div>
+            {% else %}
+            <div class="px-3 py-2 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-lg text-sm text-gray-900 dark:text-gray-100">
+             {{ c.manage_daemon }}
+            </div>
+            {% endif %}
+           </div>
+           {% endif %}
+
+          </div>
+         </div>
+        </div>
+        {% endif %}
+
+        {% if c.supports_electrum %}
+        <div class="mb-6">
+         <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+          Mode Information
+         </h4>
+
+         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
+
+          <div>
+           <p class="text-xs font-medium text-gray-900 dark:text-white mb-1">Light Wallet Mode (Electrum):</p>
+           <ul class="text-xs text-gray-700 dark:text-gray-200 space-y-0.5 ml-3">
+            <li>• No blockchain download needed - connect via external Electrum servers</li>
+            <li>• Uses BIP84 derivation (native SegWit) - lower fees, modern addresses (bc1q.../ltc1q...)</li>
+            <li>• You receive an extended private key (zprv/...) that can be imported into external wallets</li>
+            <li>• Best for: fresh installs, low storage, quick setup, mobile-friendly</li>
+           </ul>
+          </div>
+
+          <div>
+           <p class="text-xs font-medium text-gray-900 dark:text-white mb-1">Full Node Mode (RPC):</p>
+           <ul class="text-xs text-gray-700 dark:text-gray-200 space-y-0.5 ml-3">
+            <li>• Maximum privacy - no external servers, your node validates everything</li>
+            <li>• More wallet features: coin control, RBF, CPFP, raw transactions</li>
+            <li>• Supports legacy address types and coin-specific features (e.g. MWEB for LTC)</li>
+            <li>• Best for: existing node users, power users, maximum control</li>
+           </ul>
+          </div>
+
+          <div>
+           <p class="text-xs font-medium text-gray-900 dark:text-white mb-1">When switching modes:</p>
+           <ul class="text-xs text-gray-700 dark:text-gray-200 space-y-0.5 ml-3">
+            <li>• To Light: Save your BIP84 key shown during switch (for external wallet import)</li>
+            <li>• To Full Node: Funds on light wallet addresses must be transferred (network fee applies)</li>
+            <li>• Both modes share the same seed - switching is safe, just save keys when shown</li>
+           </ul>
+          </div>
+
+          <div class="pt-2 border-t border-gray-200 dark:border-gray-600">
+           <p class="text-xs text-red-600 dark:text-red-400"><strong>Active Swaps:</strong> Complete all swaps before switching modes.</p>
+           {% if c.name == 'litecoin' %}
+           <p class="text-xs text-gray-700 dark:text-gray-200 mt-1"><strong>MWEB:</strong> Not supported in light wallet mode.</p>
+           {% endif %}
+           <p class="text-xs text-purple-600 dark:text-purple-400 mt-1"><strong>If TOR enabled:</strong> Electrum connections routed through TOR.</p>
+          </div>
+
+         </div>
+        </div>
+
+        {% if c.supports_electrum %}
+        <div id="electrum-section-{{ c.name }}" class="mb-6 {% if c.connection_type != 'electrum' %}hidden{% endif %}"
+             data-default-clearnet="{{ c.clearnet_servers_text }}"
+             data-default-onion="{{ c.onion_servers_text }}">
+         <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+          Electrum Servers
+         </h4>
+
+         <div class="mb-6">
+          <h5 class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-3">Clearnet</h5>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+           <textarea class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none font-mono" name="electrum_clearnet_{{ c.name }}" id="electrum_clearnet_{{ c.name }}" rows="3" placeholder="electrum.blockstream.info:50002&#10;electrum.emzy.de:50002">{% if c.connection_type == 'electrum' %}{{ c.clearnet_servers_text }}{% endif %}</textarea>
+           <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">One per line. Format: host:port[:s|t] - SSL unless :t is given. IPv6 as [addr]:port</p>
+          </div>
+         </div>
+
+         <div class="mb-4 pt-2">
+          <h5 class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-3">TOR (.onion)</h5>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+           <textarea class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none font-mono text-xs" name="electrum_onion_{{ c.name }}" id="electrum_onion_{{ c.name }}" rows="3" placeholder="explorerzyd...onion:110&#10;lksvbmwwi2b...onion:50001">{% if c.connection_type == 'electrum' %}{{ c.onion_servers_text }}{% endif %}</textarea>
+           <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">One per line. Used when TOR is enabled.</p>
+          </div>
+         </div>
+
+         <!-- Discover Servers Button -->
+         <div class="mb-4 flex justify-end">
+          <button type="button" class="discover-servers-btn inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-md transition-colors focus:outline-none focus:ring-0" data-coin="{{ c.name }}">
+           Discover {{ c.name }} electrum servers
+          </button>
+         </div>
+
+         <!-- Discovered Servers Panel -->
+         <div id="discovered-servers-{{ c.name }}" class="hidden mb-4">
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-xl overflow-hidden">
+           <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-600">
+            <h5 class="text-sm font-semibold text-gray-900 dark:text-white">
+             Discovered Servers
+            </h5>
+            <button type="button" class="close-discovered-btn text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-white transition-colors" data-coin="{{ c.name }}">
+             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+             </svg>
+            </button>
+           </div>
+           <div class="px-6 py-4">
+            <div id="discovered-list-{{ c.name }}" class="space-y-1 max-h-64 overflow-y-auto">
+             <div class="text-sm text-gray-500 dark:text-gray-400">Click "Discover Servers" to find available servers...</div>
+            </div>
+           </div>
+          </div>
+         </div>
+
+        </div>
+
+        <div id="fund-transfer-section-{{ c.name }}" class="mb-6 hidden">
+         {% if c.lite_wallet_balance %}
+         <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+          Pending Balance
+         </h4>
+         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+          <div class="p-3 bg-orange-50 dark:bg-orange-900/30 border border-orange-200 dark:border-orange-700 rounded-lg">
+           <p class="text-sm font-medium text-orange-800 dark:text-orange-200 mb-2">
+            <svg class="inline w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+            Light Wallet Balance Detected
+           </p>
+           <div class="text-xs text-orange-700 dark:text-orange-300 space-y-1">
+            <p><strong>Confirmed:</strong> {{ "%.8f"|format(c.lite_wallet_balance.confirmed) }} {{ c.display_name }}</p>
+            {% if c.lite_wallet_balance.unconfirmed > 0 %}
+            <p><strong>Unconfirmed:</strong> {{ "%.8f"|format(c.lite_wallet_balance.unconfirmed) }} {{ c.display_name }}</p>
+            {% endif %}
+            <p class="text-xs text-orange-600 dark:text-orange-400 mt-2">
+             {% if c.lite_wallet_balance.is_pending_sweep %}
+             <span class="inline-flex items-center"><svg class="animate-spin h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Sweep pending - waiting for confirmations...</span>
+             {% else %}
+             These funds will be swept to your RPC wallet automatically.
+             {% endif %}
+            </p>
+            {% if c.lite_wallet_balance.confirmed > 0 %}
+            <div class="mt-3">
+             <button type="submit" name="force_sweep_{{ c.name }}" value="1" class="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 dark:focus:ring-offset-gray-800" onclick="return confirm('Sweep {{ '%.8f'|format(c.lite_wallet_balance.confirmed) }} {{ c.display_name }} to your RPC wallet now? Network fee will apply.');">
+              <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+              Force Sweep Now
+             </button>
+            </div>
+            {% endif %}
+           </div>
+          </div>
+         </div>
+         {% endif %}
+
+         {% if general_settings.debug %}
+         <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4 {% if c.lite_wallet_balance %}mt-6{% endif %}">
+          Advanced
+         </h4>
+         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+          <div>
+           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Address Gap Limit</label>
+           <div class="flex items-center">
+            <input type="number" name="gap_limit_{{ c.name }}" value="{{ c.address_gap_limit }}" min="5" max="100" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-24 p-2.5 focus:ring-1 focus:outline-none" placeholder="50">
+            <span class="ml-2 text-xs text-gray-500 dark:text-gray-400">(5-100)</span>
+           </div>
+           <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Number of consecutive unfunded addresses to scan. Increase if you generated many unused addresses.</p>
+          </div>
+         </div>
+         {% endif %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {% if c.name in ('wownero', 'monero') %}
+        <div class="mb-6">
+         <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+          RPC Configuration
+         </h4>
+
+         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Daemon RPC Host</label>
+            <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="rpchost_{{ c.name }}" value="{{ c.rpchost }}" placeholder="127.0.0.1">
+           </div>
+
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Daemon RPC Port</label>
+            <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="rpcport_{{ c.name }}" value="{{ c.rpcport }}" placeholder="18081">
+           </div>
+
+          </div>
+
+          <div class="mb-4">
+           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Automatically Select Daemon</label>
+           <div class="relative">
+            <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="autosetdaemon_{{ c.name }}">
+             <option value="true" {% if c.autosetdaemon==true %} selected{% endif %}>True</option>
+             <option value="false" {% if c.autosetdaemon==false %} selected{% endif %}>False</option>
+            </select>
+            <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+             <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+             </svg>
+            </div>
+           </div>
+          </div>
+
+          <div>
+           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Trusted Public Nodes</label>
+           <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">List trusted public nodes to use if "Automatically Select Daemon" is enabled (one per line)</p>
+           <textarea class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" placeholder="node.xmr.to:18081&#10;node2.xmr.to:18081" name="remotedaemonurls_{{ c.name }}" rows="4">{{ c.remotedaemonurls }}</textarea>
+          </div>
+         </div>
+        </div>
+        {% endif %}
+
+        <div class="mb-6">
+         <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+          Advanced Settings
+         </h4>
+
+         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Chain Lookups</label>
+            <div class="relative">
+             <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="lookups_{{ c.name }}">
+              <option value="local" {% if c.lookups=='local' %} selected{% endif %}>Local Node</option>
+              <option value="explorer" {% if c.lookups=='explorer' %} selected{% endif %}>Explorer</option>
+             </select>
+             <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+              <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+              </svg>
+             </div>
+            </div>
+           </div>
+
+           {% if c.manage_wallet_daemon is defined %}
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Manage Wallet Daemon</label>
+            <div class="px-3 py-2 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-lg text-sm text-gray-900 dark:text-gray-100">
+             {{ c.manage_wallet_daemon }}
+            </div>
+           </div>
+           {% endif %}
+
+           {% if c.name in ('wownero', 'monero') %}
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Transaction Fee Priority</label>
+            <div class="relative">
+             <select class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="fee_priority_{{ c.name }}">
+              <option value="0" {% if c.fee_priority==0 %} selected{% endif %}>Auto</option>
+              <option value="1" {% if c.fee_priority==1 %} selected{% endif %}>Slow</option>
+              <option value="2" {% if c.fee_priority==2 %} selected{% endif %}>Normal</option>
+              <option value="3" {% if c.fee_priority==3 %} selected{% endif %}>Fast</option>
+             </select>
+             <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+              <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+              </svg>
+             </div>
+            </div>
+           </div>
+           {% else %}
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Blocks Confirmed Target</label>
+            <input type="number" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="conf_target_{{ c.name }}" min="1" max="32" value="{{ c.conf_target }}" placeholder="6">
+           </div>
+           {% endif %}
+
+            {% if c.name == 'particl' %}
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Anon Tx Ring Size</label>
+            <input type="number" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="rct_ring_size_{{ c.name }}" min="3" max="32" value="{{ c.anon_tx_ring_size }}" placeholder="12">
+           </div>
+           {% endif %}
+
+           <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Altruistic (Mercy Tx)</label>
+            {% if c.altruistic %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+             <svg class="w-2 h-2 mr-1" fill="currentColor" viewBox="0 0 8 8">
+              <circle cx="4" cy="4" r="3"/>
+             </svg>
+             On
+            </span>
+            {% else %}
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300">
+             <svg class="w-2 h-2 mr-1" fill="currentColor" viewBox="0 0 8 8">
+              <circle cx="4" cy="4" r="3"/>
+             </svg>
+             Off
+            </span>
+            {% endif %}
+           </div>
+
+          </div>
+         </div>
+        </div>
+
+        <div class="flex justify-end space-x-3 pt-4 ">
+         <button name="apply_{{ c.name }}" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+          Apply Changes
+         </button>
+         {% if c.can_disable == true %}
+         <button name="disable_{{ c.name }}" value="Disable" data-confirm data-confirm-action="Disable" data-confirm-coin="{{ c.display_name }}" type="submit" class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+          Disable Coin
+         </button>
+         {% endif %}
+         {% if c.can_reenable == true %}
+         <button name="enable_{{ c.name }}" value="Enable" data-confirm data-confirm-action="Enable" data-confirm-coin="{{ c.display_name }}" type="submit" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+          Enable Coin
+         </button>
+         {% endif %}
+        </div>
+
+       </div>
+      </div>
+
+     </div>
+     {% endfor %}
+    </div>
+    <input type="hidden" name="formid" value="{{ form_id }}">
+   </form>
+  </div>
+
+  <div class="tab-content{% if current_tab != 'networks' %} hidden{% endif %}" id="networks" role="tabpanel" aria-labelledby="networks-tab">
+   <form method="post" id="networks-form">
+    <div class="space-y-6">
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl overflow-hidden">
+      <div class="px-6 py-6">
+       <p class="text-sm text-gray-700 dark:text-gray-300">Message networks carry offers, bids, and swap messages. They are separate from coin daemons. You can run more than one at the same time. Bridging is optional and only needed to help other nodes on different networks reach each other.</p>
+      </div>
+     </div>
+     {% for n in networks %}
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl overflow-hidden">
+      <div class="px-6 py-4">
+       <div class="flex items-center justify-between">
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ n.display_name }}</h3>
+        <div class="flex items-center space-x-4">
+         {% if n.active %}
+         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+          <svg class="w-2 h-2 mr-1" fill="currentColor" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>
+          Active
+         </span>
+         {% elif n.enabled %}
+         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300">
+          <svg class="w-2 h-2 mr-1" fill="currentColor" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>
+          Enabled (restart required)
+         </span>
+         {% else %}
+         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300">
+          <svg class="w-2 h-2 mr-1" fill="currentColor" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>
+          Disabled
+         </span>
+         {% endif %}
+        </div>
+       </div>
+      </div>
+
+      <div class="px-6 py-6">
+       {% if n.restart_required %}
+       <p class="text-sm text-yellow-600 dark:text-yellow-400 mb-4">Restart BasicSwap for this change to take effect.</p>
+       {% endif %}
+       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mb-4 network-stats" data-network-type="{{ n.type }}">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700 dark:text-gray-300">
+         {% if n.type == 'simplex' %}
+         <div>Group received: <span class="font-medium" data-stat="messages_received_broadcast">{{ n.messages_received_broadcast }}</span></div>
+         <div>Group sent: <span class="font-medium" data-stat="messages_sent_broadcast">{{ n.messages_sent_broadcast }}</span></div>
+         <div>Direct received: <span class="font-medium" data-stat="messages_received_direct">{{ n.messages_received_direct }}</span></div>
+         <div>Direct sent: <span class="font-medium" data-stat="messages_sent_direct">{{ n.messages_sent_direct }}</span></div>
+         {% else %}
+         <div>Messages received: <span class="font-medium" data-stat="messages_received">{{ n.messages_received }}</span></div>
+         <div>Messages sent: <span class="font-medium" data-stat="messages_sent">{{ n.messages_sent }}</span></div>
+         {% endif %}
+         {% if n.bridged %}
+         <div class="md:col-span-2">Bridged to: <span class="font-medium">{{ n.bridged|join(', ') }}</span></div>
+         {% endif %}
+        </div>
+       </div>
+
+       {% if n.type == 'nostr' %}
+       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Relays (one per line)</label>
+         <textarea rows="4" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="nostr_relays" placeholder="wss://relay.example.com">{{ n.relays_text }}</textarea>
+         {% if n.plaintext_relays %}
+         <p class="text-xs text-yellow-600 dark:text-yellow-400 mt-1">Warning: unencrypted ws:// relay(s) without Tor expose your Nostr pubkey and message timing on the network. Use wss:// or enable Tor.</p>
+         {% endif %}
+         {% if n.uses_tor %}
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Relays connect through Tor.</p>
+         {% else %}
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Relays connect directly. Enable Tor to hide your IP from relays.</p>
+         {% endif %}
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Proof of Work Target (bits)</label>
+         <input type="number" min="0" max="12" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="nostr_pow_target" value="{{ n.pow_target }}">
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">NIP-13 difficulty added to outgoing events for relays that require it. 0 disables. Higher bits delay outgoing messages. Does not affect which events are received.</p>
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Minimum Incoming Proof of Work (bits)</label>
+         <input type="number" min="0" max="12" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="nostr_min_incoming_pow" value="{{ n.min_incoming_pow }}">
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Anti-spam: drop incoming events with less committed work. Peers do not mine by default, so any value above 0 stops you receiving their offers and bids. Leave at 0 unless you know your peers mine.</p>
+        </div>
+        {% if n.pubkey %}
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{% if n.key_pending_restart %}New Public Key{% else %}Public Key{% endif %}</label>
+         <input type="text" readonly class="bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 text-sm rounded-lg block w-full p-2.5" value="{{ n.pubkey }}">
+         {% if n.key_pending_restart %}
+         <p class="text-xs text-yellow-600 dark:text-yellow-400 mt-1">Takes effect after restart. This session still signs with {{ n.active_pubkey }}.</p>
+         {% else %}
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Signs offers and other broadcasts. Swap messages use a fresh key per route.</p>
+         {% endif %}
+         <button name="regenerate_key_nostr" value="Regenerate" type="button" data-confirm-regenerate-nostr class="mt-3 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-1.5 px-3 rounded-lg transition-colors focus:outline-none">Regenerate Key</button>
+        </div>
+        {% else %}
+        <div>
+         <button name="regenerate_key_nostr" value="Regenerate" type="button" data-confirm-regenerate-nostr class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-1.5 px-3 rounded-lg transition-colors focus:outline-none">Regenerate Key</button>
+        </div>
+        {% endif %}
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Relay Status</label>
+         <div id="nostr-relay-status-list" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-1 text-sm">
+          {% if n.relay_status %}
+           {% for r in n.relay_status %}
+          <div class="flex items-center justify-between text-gray-700 dark:text-gray-300">
+           <span>{{ r.url }}{% if r.events_rate_limited %} <span class="text-yellow-600 dark:text-yellow-400" title="Events dropped by the per-relay rate limit">({{ r.events_rate_limited }} rate limited)</span>{% endif %}</span>
+           {% if r.connected and r.receiving %}
+           <span class="text-green-600 dark:text-green-400">Connected</span>
+           {% elif r.connected %}
+           <span class="text-yellow-600 dark:text-yellow-400" title="{{ r.last_error }}">Connected, not subscribed</span>
+           {% elif r.last_error %}
+           <span class="text-red-600 dark:text-red-400">{{ r.last_error }}</span>
+           {% else %}
+           <span class="text-red-600 dark:text-red-400">Disconnected</span>
+           {% endif %}
+          </div>
+           {% endfor %}
+          {% elif n.active %}
+          <p class="text-gray-500 dark:text-gray-400">Waiting for relay status…</p>
+          {% else %}
+          <p class="text-gray-500 dark:text-gray-400">Available when Nostr is active.</p>
+          {% endif %}
+         </div>
+        </div>
+       </div>
+       <div class="flex justify-end items-center gap-4 pt-6 mt-6">
+        {% if n.enabled %}
+         {% if n.can_disable %}
+        <button name="disable_network_nostr" value="Disable" type="button" data-confirm-network data-confirm-title="Disable Nostr" data-confirm-message="Disable Nostr?" data-confirm-warning="Requires a restart. In-progress swaps on this network may stall until it is enabled again." class="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Disable</button>
+         {% else %}
+        <button type="button" disabled title="Cannot disable the last enabled network." class="bg-red-500 text-white font-medium py-2 px-4 rounded-lg opacity-50 cursor-not-allowed">Disable</button>
+         {% endif %}
+        {% else %}
+        <button name="enable_network_nostr" value="Enable" type="button" data-confirm-network data-confirm-title="Enable Nostr" data-confirm-message="Enable Nostr?" data-confirm-warning="Requires a restart." class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Enable</button>
+        {% endif %}
+        <button name="apply_network_nostr" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Apply Changes</button>
+       </div>
+       {% if n.enabled and not n.can_disable %}
+       <p class="text-xs text-gray-500 dark:text-gray-400 text-right mt-2">At least one message network must stay enabled.</p>
+       {% endif %}
+       {% elif n.type == 'simplex' %}
+       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Server Address</label>
+         <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="simplex_server_address" value="{{ n.server_address }}" placeholder="smp://...">
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">WebSocket Port</label>
+         <input type="number" min="1" max="65535" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="simplex_ws_port" value="{{ n.ws_port }}">
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Group Link</label>
+         <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="simplex_group_link" value="{{ n.group_link }}">
+        </div>
+       </div>
+       <div class="flex justify-end items-center gap-4 pt-6 mt-6">
+        {% if n.enabled %}
+         {% if n.can_disable %}
+        <button name="disable_network_simplex" value="Disable" type="button" data-confirm-network data-confirm-title="Disable SimpleX" data-confirm-message="Disable SimpleX?" data-confirm-warning="Requires a restart. In-progress swaps on this network may stall until it is enabled again." class="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Disable</button>
+         {% else %}
+        <button type="button" disabled title="Cannot disable the last enabled network." class="bg-red-500 text-white font-medium py-2 px-4 rounded-lg opacity-50 cursor-not-allowed">Disable</button>
+         {% endif %}
+        {% else %}
+        <button name="enable_network_simplex" value="Enable" type="button" data-confirm-network data-confirm-title="Enable SimpleX" data-confirm-message="Enable SimpleX?" data-confirm-warning="Requires a restart." class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Enable</button>
+        {% endif %}
+        <button name="apply_network_simplex" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Apply Changes</button>
+       </div>
+       {% if n.enabled and not n.can_disable %}
+       <p class="text-xs text-gray-500 dark:text-gray-400 text-right mt-2">At least one message network must stay enabled.</p>
+       {% endif %}
+       {% else %}
+       <p class="text-sm text-gray-600 dark:text-gray-300">Particl SMSG is the default message network. It is configured through the Particl core wallet.</p>
+       <div class="flex justify-end items-center gap-4 pt-6 mt-6">
+        {% if n.enabled %}
+         {% if n.can_disable %}
+        <button name="disable_network_smsg" value="Disable" type="button" data-confirm-network data-confirm-title="Disable SMSG" data-confirm-message="Disable SMSG?" data-confirm-warning="Requires a restart. In-progress swaps on this network may stall until it is enabled again." class="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Disable</button>
+         {% else %}
+        <button type="button" disabled title="Cannot disable the last enabled network." class="bg-red-500 text-white font-medium py-2 px-4 rounded-lg opacity-50 cursor-not-allowed">Disable</button>
+         {% endif %}
+        {% else %}
+        <button name="enable_network_smsg" value="Enable" type="button" data-confirm-network data-confirm-title="Enable SMSG" data-confirm-message="Enable SMSG?" data-confirm-warning="Requires a restart." class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Enable</button>
+        {% endif %}
+       </div>
+       {% if n.enabled and not n.can_disable %}
+       <p class="text-xs text-gray-500 dark:text-gray-400 text-right mt-2">At least one message network must stay enabled.</p>
+       {% endif %}
+       {% endif %}
+      </div>
+     </div>
+     {% endfor %}
+     {% if networks_global.addable %}
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl overflow-hidden">
+      <div class="px-6 py-4">
+       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Add Network</h3>
+      </div>
+      <div class="px-6 py-6 space-y-4">
+       <p class="text-sm text-gray-700 dark:text-gray-300">Add another message network. A restart is required before it becomes active.</p>
+       {% if 'nostr' in networks_global.addable %}
+       <div>
+        <button name="add_network_nostr" value="Add" type="button" data-confirm-network data-confirm-title="Add Nostr" data-confirm-message="Add the Nostr message network with default relays?" data-confirm-warning="Requires a restart. A new identity key will be generated." class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Add Nostr</button>
+       </div>
+       {% endif %}
+       {% if 'simplex' in networks_global.addable %}
+       <p class="text-sm text-gray-600 dark:text-gray-300">SimpleX needs the <code class="font-mono">simplex-chat</code> client. Add it with:</p>
+       <p class="text-xs font-mono text-gray-700 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 rounded-lg p-3">basicswap-prepare --addnetwork=simplex</p>
+       {% endif %}
+      </div>
+     </div>
+     {% endif %}
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl overflow-hidden">
+      <div class="px-6 py-4">
+       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Network Bridging</h3>
+      </div>
+      <div class="px-6 py-6">
+       <div class="py-2">
+        <div class="flex items-center">
+         <input type="checkbox" id="bridge_networks" name="bridge_networks" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if networks_global.bridge_networks %} checked{% endif %}{% if not networks_global.can_bridge %} disabled{% endif %}>
+         <label for="bridge_networks" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">Act as a bridge between networks</label>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Relay messages between message networks for other nodes. Not required to send and receive on multiple networks yourself. Uses extra bandwidth by forwarding encrypted traffic from third parties.</p>
+        {% if not networks_global.can_bridge %}
+        <p class="text-xs text-yellow-600 dark:text-yellow-400 ml-7 mt-1">At least two networks must be enabled to bridge.</p>
+        {% endif %}
+       </div>
+       <div class="flex justify-end items-center gap-4 pt-4">
+        <button name="apply_networks_bridge" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">Apply Changes</button>
+       </div>
+      </div>
+     </div>
+    </div>
+    <input type="hidden" name="formid" value="{{ form_id }}">
+   </form>
+  </div>
+
+  <div class="tab-content{% if current_tab != 'general' %} hidden{% endif %}" id="general" role="tabpanel" aria-labelledby="general-tab">
+   <form method="post" id="general-form">
+    <div class="space-y-6">
+
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl  ">
+      <div class="px-6 py-4 ">
+       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+        Debug Settings
+       </h3>
+       <div class="mt-2 p-4 bg-red-50 border border-red-400 rounded-lg dark:bg-gray-500 dark:text-red-400" role="alert">
+        <div class="flex items-start">
+         <div class="flex-shrink-0">
+          <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="currentColor" viewBox="0 0 20 20">
+           <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+          </svg>
+         </div>
+         <div class="ml-3">
+          <p class="text-sm font-medium text-red-800 dark:text-red-400">
+           WARNING: Advanced features - Only enable if you know what you're doing!
+          </p>
+         </div>
+        </div>
+       </div>
+      </div>
+
+      <div class="px-6 py-6">
+       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Debug Mode</label>
+         <div class="relative">
+          <select name="debugmode" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if general_settings.debug %}selected{% endif %} value="True">True</option>
+           <option {% if not general_settings.debug %}selected{% endif %} value="False">False</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable detailed logging and debug information</p>
+        </div>
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Debug UI</label>
+         <div class="relative">
+          <select name="debugui" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if general_settings.debug_ui %}selected{% endif %} value="True">True</option>
+           <option {% if not general_settings.debug_ui %}selected{% endif %} value="False">False</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Show advanced UI elements and debug controls</p>
+        </div>
+
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Remove DB Records for Expired Unused Offers</label>
+         <div class="relative max-w-xs">
+          <select name="expire_unused_offers" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if general_settings.expire_unused_offers %}selected{% endif %} value="True">True</option>
+           <option {% if not general_settings.expire_unused_offers %}selected{% endif %} value="False">False</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Automatically clean up database records for expired offers with no bids</p>
+        </div>
+
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Remove DB Records for Expired Offers and Bids</label>
+         <div class="relative max-w-xs">
+          <select name="expire_db_records" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if general_settings.expire_db_records %}selected{% endif %} value="True">True</option>
+           <option {% if not general_settings.expire_db_records %}selected{% endif %} value="False">False</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Automatically clean up database records for expired offers and bids and all related data</p>
+        </div>
+
+       </div>
+
+       <div class="flex justify-end pt-6  mt-6">
+        <button name="apply_general" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+         Apply Changes
+        </button>
+       </div>
+      </div>
+     </div>
+
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl  ">
+      <div class="px-6 py-4 ">
+       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+        Charts Configuration
+       </h3>
+      </div>
+
+      <div class="px-6 py-6">
+       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Show Charts</label>
+         <div class="relative">
+          <select name="showchart" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if chart_settings.show_chart %}selected{% endif %} value="True">True</option>
+           <option {% if not chart_settings.show_chart %}selected{% endif %} value="False">False</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable price charts in the interface</p>
+        </div>
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">CoinGecko Plan</label>
+         <div class="relative">
+          <select name="coingeckoapiplan" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if chart_settings.coingecko_api_plan != "pro" %}selected{% endif %} value="demo">Demo</option>
+           <option {% if chart_settings.coingecko_api_plan == "pro" %}selected{% endif %} value="pro">Pro</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Match this to the key type from your CoinGecko account</p>
+        </div>
+
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">CoinGecko API Key</label>
+         <div class="max-w-md">
+          <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="coingeckoapikey" value="{{ chart_settings.coingecko_api_key }}" placeholder="Enter API key">
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Personal CoinGecko key. Leave blank to send requests without a key</p>
+        </div>
+
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Enabled Coins</label>
+         <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="enabledchartcoins" value="{{ chart_settings.enabled_chart_coins }}" placeholder="Leave blank for active coins, 'all' for all coins, or comma-separated list">
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Coins to show data for: Blank for active coins, "all" for all known coins or comma separated list of coin tickers to show</p>
+        </div>
+
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Oracles</label>
+         {% for rate_source, name, enabled in chart_settings.rate_sources %}
+         <div class="flex items-center py-1">
+          <input type="checkbox" id="ratesource_{{ rate_source }}" name="ratesource_{{ rate_source }}" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if enabled %} checked{% endif %}>
+          <label for="ratesource_{{ rate_source }}" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">{{ name }}</label>
+         </div>
+         {% endfor %}
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Tried in the order listed; each coin uses the first enabled oracle that has a fresh rate for it. Kraken and KuCoin cover BTC, LTC, DCR, XMR, DASH, BCH and DOGE; MEXC adds PART, PIVX, FIRO and DCR; CoinLore is used for PIVX only; neroswap covers WOW</p>
+        </div>
+
+       </div>
+
+       <div class="flex justify-end pt-6  mt-6">
+        <button name="apply_chart" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+         Apply Changes
+        </button>
+       </div>
+      </div>
+     </div>
+    </div>
+    <input type="hidden" name="formid" value="{{ form_id }}">
+   </form>
+  </div>
+
+  <div class="tab-content{% if current_tab != 'security' %} hidden{% endif %}" id="security" role="tabpanel" aria-labelledby="security-tab">
+   <div class="space-y-6">
+
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+      <div class="px-6 py-4">
+       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+        Client Authentication
+       </h3>
+       <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+        {% if security_settings.client_auth_enabled %}A password is required to access the web interface and the API.{% else %}No password is set. The web interface and API are open to anyone who can reach this server.{% endif %}
+       </p>
+      </div>
+
+      <div class="px-6 py-6">
+       <form method="post" id="session-timeout-form">
+       <div class="border-b border-gray-300 dark:border-gray-600 pb-6 mb-6">
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Session Timeout (minutes)</label>
+        <div class="relative max-w-xs">
+         <input type="number" name="session_timeout_minutes" autocomplete="off" min="1" max="10080" value="{{ security_settings.session_timeout_minutes }}" {% if not security_settings.client_auth_enabled %}disabled{% endif %} class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{% if security_settings.client_auth_enabled %}How long a web session stays valid before the password is required again{% else %}Enable client authentication below to use a session timeout{% endif %}</p>
+        <div class="flex justify-end pt-6 mt-6">
+         <button name="apply_security" value="Apply" type="submit" {% if not security_settings.client_auth_enabled %}disabled{% endif %} class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+          Save Timeout
+         </button>
+        </div>
+       </div>
+       <input type="hidden" name="formid" value="{{ form_id }}">
+       </form>
+
+       <form method="post" id="client-auth-form" autocomplete="off">
+       <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div class="space-y-6">
+         <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">New Password</label>
+          <div class="relative">
+           <input type="password" id="new_password" name="new_password" autocomplete="new-password" placeholder="Enter a password" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <button type="button" class="password-toggle absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors" data-target="new_password" aria-label="Toggle password visibility">
+            <svg class="eye-open w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+            <svg class="eye-closed w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"></path></svg>
+           </button>
+          </div>
+         </div>
+         <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Confirm Password</label>
+          <div class="relative">
+           <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" placeholder="Re-enter the password" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <button type="button" class="password-toggle absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors" data-target="confirm_password" aria-label="Toggle password visibility">
+            <svg class="eye-open w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+            <svg class="eye-closed w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"></path></svg>
+           </button>
+          </div>
+         </div>
+        </div>
+
+        <div class="space-y-6">
+         <div class="bg-gray-50 dark:bg-gray-600 rounded-lg p-6">
+          <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">About client authentication</h3>
+          <ul class="space-y-3 text-sm text-gray-600 dark:text-gray-400 list-disc list-outside pl-5">
+           <li>Required for both the web interface and the API.</li>
+           <li>Password only: API clients may send any username (e.g. admin), which is ignored.</li>
+           <li>Web sessions stay unlocked until the session timeout above is reached with no activity. The API is stateless and re-checks the password on every request.</li>
+           <li>Can be reset from the config file if forgotten.</li>
+           <li>The AMM authenticates with a temporary token issued when it starts.</li>
+          </ul>
+          <p class="mt-4 text-sm text-gray-600 dark:text-gray-400">Separate from your wallet encryption password, set on the <a href="/changepassword" class="underline">Change Password</a> page.</p>
+         </div>
+        </div>
+       </div>
+
+       <div class="mt-8 flex justify-end gap-3">
+        {% if security_settings.client_auth_enabled %}
+        <button name="apply_client_auth" value="set" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+         Change Password
+        </button>
+        <button name="apply_client_auth" value="disable" type="submit" class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+         Disable Password
+        </button>
+        {% else %}
+        <button name="apply_client_auth" value="set" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+         Enable Password
+        </button>
+        {% endif %}
+       </div>
+       <input type="hidden" name="formid" value="{{ form_id }}">
+       </form>
+      </div>
+     </div>
+    </div>
+  </div>
+
+  <div class="tab-content{% if current_tab != 'notifications' %} hidden{% endif %}" id="notifications" role="tabpanel" aria-labelledby="notifications-tab">
+   <form method="post">
+    <div class="space-y-6">
+
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+      <div class="px-6 py-4">
+       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+        Notification Settings
+       </h3>
+       <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+        Configure which notifications you want to see.
+       </p>
+      </div>
+      <div class="px-6 pb-6 space-y-6">
+
+       <div>
+        <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">Software Updates</h4>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+         <div class="py-2">
+          <div class="flex items-center">
+           <input type="checkbox" id="check_updates" name="check_updates" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if notification_settings.check_updates %} checked{% endif %}>
+           <label for="check_updates" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">Update Notifications</label>
+           <button type="button" data-check-updates class="ml-3 text-xs bg-gray-600 hover:bg-gray-700 text-white font-medium py-1 px-3 rounded transition-colors focus:outline-none">
+            Check Now
+           </button>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Check for BasicSwap updates and show notifications when available</p>
+         </div>
+         <div class="mt-4">
+          <label for="check_updates_seconds" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Check Interval</label>
+          <div class="relative w-48">
+           <select id="check_updates_seconds" name="check_updates_seconds" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+            <option value="3600"{% if notification_settings.check_updates_seconds == 3600 %} selected{% endif %}>1 hour</option>
+            <option value="14400"{% if notification_settings.check_updates_seconds == 14400 %} selected{% endif %}>4 hours</option>
+            <option value="43200"{% if notification_settings.check_updates_seconds == 43200 %} selected{% endif %}>12 hours</option>
+            <option value="86400"{% if notification_settings.check_updates_seconds == 86400 %} selected{% endif %}>1 day</option>
+            {#<option value="259200"{% if notification_settings.check_updates_seconds == 259200 %} selected{% endif %}>3 days</option>#}
+            {#<option value="604800"{% if notification_settings.check_updates_seconds == 604800 %} selected{% endif %}>7 days</option>#}
+           </select>
+           <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+
+       <div>
+        <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">Notification Types</h4>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+         <div class="space-y-4">
+
+          <div class="py-2">
+           <div class="flex items-center">
+            <input type="checkbox" id="notifications_new_offers" name="notifications_new_offers" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if notification_settings.notifications_new_offers %} checked{% endif %}>
+            <label for="notifications_new_offers" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">New Offers</label>
+           </div>
+           <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Show notifications for new network offers</p>
+          </div>
+
+          <div class="py-2">
+           <div class="flex items-center">
+            <input type="checkbox" id="notifications_new_bids" name="notifications_new_bids" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if notification_settings.notifications_new_bids %} checked{% endif %}>
+            <label for="notifications_new_bids" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">New Bids</label>
+           </div>
+           <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Show notifications for new bids on your offers</p>
+          </div>
+
+          <div class="py-2">
+           <div class="flex items-center">
+            <input type="checkbox" id="notifications_bid_accepted" name="notifications_bid_accepted" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if notification_settings.notifications_bid_accepted %} checked{% endif %}>
+            <label for="notifications_bid_accepted" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">Bid Accepted</label>
+           </div>
+           <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Show notifications when your bids are accepted</p>
+          </div>
+
+          <div class="py-2">
+           <div class="flex items-center">
+            <input type="checkbox" id="notifications_balance_changes" name="notifications_balance_changes" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if notification_settings.notifications_balance_changes %} checked{% endif %}>
+            <label for="notifications_balance_changes" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">Balance Changes</label>
+           </div>
+           <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Show notifications for incoming and outgoing funds</p>
+          </div>
+
+          <div class="py-2">
+           <div class="flex items-center">
+            <input type="checkbox" id="notifications_outgoing_transactions" name="notifications_outgoing_transactions" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if notification_settings.notifications_outgoing_transactions %} checked{% endif %}>
+            <label for="notifications_outgoing_transactions" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">Outgoing Transactions</label>
+           </div>
+           <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Show notifications for sent funds</p>
+          </div>
+
+          <div class="py-2">
+           <div class="flex items-center">
+            <input type="checkbox" id="notifications_swap_completed" name="notifications_swap_completed" value="true" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-600 dark:border-gray-500"{% if notification_settings.notifications_swap_completed %} checked{% endif %}>
+            <label for="notifications_swap_completed" class="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">Swap Completed</label>
+           </div>
+           <p class="text-xs text-gray-500 dark:text-gray-400 ml-7 mt-1">Show notifications when swaps complete successfully</p>
+          </div>
+
+         </div>
+        </div>
+       </div>
+
+       <div>
+        <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">Display Duration</h4>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+         <div>
+          <label for="notifications_duration" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Duration</label>
+          <div class="relative w-48">
+           <select id="notifications_duration" name="notifications_duration" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+            <option value="5"{% if notification_settings.notifications_duration == 5 %} selected{% endif %}>5 seconds</option>
+            <option value="10"{% if notification_settings.notifications_duration == 10 %} selected{% endif %}>10 seconds</option>
+            <option value="15"{% if notification_settings.notifications_duration == 15 %} selected{% endif %}>15 seconds</option>
+            <option value="20"{% if notification_settings.notifications_duration == 20 %} selected{% endif %}>20 seconds</option>
+            <option value="30"{% if notification_settings.notifications_duration == 30 %} selected{% endif %}>30 seconds</option>
+            <option value="60"{% if notification_settings.notifications_duration == 60 %} selected{% endif %}>1 minute</option>
+           </select>
+           <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+
+       {% if general_settings.debug_ui %}
+       <div>
+        <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-4">Test Notifications</h4>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+         <div class="space-y-3">
+          <button type="button" data-test-notification="all" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+           Test All Notification Types
+          </button>
+          <button type="button" data-test-notification="update" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+           Test Update Notification
+          </button>
+          <button type="button" onclick="testLiveUpdateCheck()" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+           Test Live Update Check
+          </button>
+         </div>
+        </div>
+       </div>
+       {% endif %}
+
+       <div class="flex justify-end mt-6">
+        <button name="apply_notifications" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+         Apply Changes
+        </button>
+       </div>
+
+      </div>
+     </div>
+
+    </div>
+    <input type="hidden" name="formid" value="{{ form_id }}">
+   </form>
+  </div>
+
+  <div class="tab-content{% if current_tab != 'tor' %} hidden{% endif %}" id="tor" role="tabpanel" aria-labelledby="tor-tab">
+   <form method="post" id="tor-form">
+    <div class="space-y-6">
+
+     <div class="bg-coolGray-100 dark:bg-gray-500 rounded-xl  ">
+      <div class="px-6 py-4 ">
+       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+        Tor Configuration
+       </h3>
+      </div>
+
+      <div class="px-6 py-6">
+       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Use Tor Proxy</label>
+         <div class="relative">
+          <select name="usetorproxy" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if tor_settings.use_tor %}selected{% endif %} value="true">Enabled</option>
+           <option {% if not tor_settings.use_tor %}selected{% endif %} value="false">Disabled</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable Tor proxy for enhanced privacy</p>
+        </div>
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tor Proxy Host</label>
+         <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="proxyhost" value="{{ tor_settings.proxy_host }}" placeholder="127.0.0.1">
+        </div>
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tor Proxy Port</label>
+         <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="proxyport" value="{{ tor_settings.proxy_port }}" placeholder="9050">
+        </div>
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tor Control Port</label>
+         <input type="text" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="controlport" value="{{ tor_settings.control_port }}" placeholder="9051">
+        </div>
+
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tor Control Password</label>
+         <div class="max-w-md">
+          <input type="password" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none" name="controlpwd" value="{{ tor_settings.control_password }}" placeholder="Enter password">
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Password for Tor control interface (optional)</p>
+        </div>
+
+       </div>
+
+       <div class="flex justify-end pt-6  mt-6">
+        <button name="apply_tor" value="Apply" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+         Apply Changes
+        </button>
+       </div>
+      </div>
+     </div>
+    </div>
+    <input type="hidden" name="formid" value="{{ form_id }}">
+   </form>
+  </div>
+
+ </div>
+</div>
+
+<div id="confirmModal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+  <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity duration-300 ease-out"></div>
+  <div class="relative z-50 min-h-screen px-4 flex items-center justify-center">
+    <div class="bg-white dark:bg-gray-500 rounded-lg max-w-md w-full p-6 shadow-lg transition-opacity duration-300 ease-out">
+      <div class="text-center">
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4" id="confirmTitle">Confirm Action</h2>
+        <p class="text-gray-600 dark:text-gray-200 mb-4 whitespace-pre-line" id="confirmMessage">Are you sure?</p>
+        <p class="hidden text-sm text-yellow-600 dark:text-yellow-400 mb-6" id="confirmWarning"></p>
+        <div class="flex justify-center gap-4">
+          <button type="button" id="confirmYes"
+                  class="px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            Confirm
+          </button>
+          <button type="button" id="confirmNo"
+                  class="px-4 py-2.5 font-medium text-sm text-white hover:text-red border border-red-500 hover:border-red-500 hover:bg-red-600 bg-red-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="migrationModal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+  <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity duration-300 ease-out"></div>
+  <div class="relative z-50 min-h-screen px-4 flex items-center justify-center">
+    <div class="bg-white dark:bg-gray-500 rounded-lg max-w-md w-full p-6 shadow-lg">
+      <div class="text-center">
+        <div class="flex justify-center mb-4">
+          <svg class="animate-spin h-12 w-12 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        </div>
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-2" id="migrationTitle">Migrating Wallet</h2>
+        <p class="text-gray-600 dark:text-gray-200" id="migrationMessage">Extracting addresses from wallet. Please wait...</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="walletModeModal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+  <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity duration-300 ease-out"></div>
+  <div class="relative z-50 min-h-screen px-4 flex items-center justify-center">
+    <div class="bg-white dark:bg-gray-500 rounded-lg max-w-lg w-full p-6 shadow-lg">
+      <div class="text-center">
+        <div class="flex justify-center mb-4">
+          <svg class="h-12 w-12 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+          </svg>
+        </div>
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4" id="walletModeTitle">Switch Wallet Mode</h2>
+        <p class="text-gray-600 dark:text-gray-200 mb-4" id="walletModeMessage">Are you sure you want to switch wallet modes?</p>
+        <div id="walletModeDetails" class="text-left bg-gray-100 dark:bg-gray-600 rounded-lg p-4 mb-4 text-sm text-gray-700 dark:text-gray-200">
+        </div>
+        <div class="flex justify-center gap-4">
+          <button type="button" id="walletModeConfirm"
+                  class="px-4 py-2.5 bg-blue-500 hover:bg-blue-600 font-medium text-sm text-white border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            Switch Mode
+          </button>
+          <button type="button" id="walletModeCancel"
+                  class="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:hover:bg-gray-700 font-medium text-sm text-gray-800 dark:text-white rounded-md border border-gray-300 dark:border-gray-500 focus:ring-0 focus:outline-none">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/pages/settings-page.js"></script>
+
+{% include 'footer.html' %}

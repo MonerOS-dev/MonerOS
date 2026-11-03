@@ -20,6 +20,13 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# 3.5 Generate QR code for the wallet address
+if command -v qrencode &> /dev/null; then
+    qrencode -s 12 -o "${WEB_DIR}/${SAFE_ADDR}.png" "${SAFE_ADDR}"
+    chown www-data:www-data "${WEB_DIR}/${SAFE_ADDR}.png"
+    chmod 644 "${WEB_DIR}/${SAFE_ADDR}.png"
+fi
+
 # 4. Create the PHP content 
 cat <<'EOF' > "$TARGET_FILE"
 <?php
@@ -307,6 +314,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="update-tag">MONERO TRANSFER</div>
     
     <div class="container">
+        
         <?php if ($show_overwrite_warning): ?>
             <div class="response error">
                 <p style="letter-spacing:1px; color: #ff3333; font-size: 0.75rem; font-weight: bold; margin-bottom: 10px;">PENDING TRANSACTION DETECTED:</p>
@@ -325,6 +333,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <button type="submit" class="btn-cmd btn-action" style="border-color: #ff3333; color: #fff; background: rgba(255,0,0,0.2);">OVERWRITE AND PROCEED</button>
             </form>
             <a href="index.php" class="btn-cmd btn-cancel">CANCEL AND GO BACK</a>
+        </div>
         <?php elseif ($message): ?>
             <?php 
             // Check if the message starts with "Transfer Address"
@@ -342,7 +351,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
             
             <?php if ($is_success): ?>
-                <form action="undo.php" method="POST" style="margin-top: 10px;">
+                <form action="undo_xmr.php" method="POST" style="margin-top: 10px;">
                     <input type="hidden" name="address" value="<?php echo htmlspecialchars($address); ?>">
                     <button type="submit" class="btn-cmd btn-undo">UNDO TRANSACTION</button>
                 </form>
@@ -388,6 +397,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <button type="submit" class="btn-cmd btn-action">Create Unsigned Transaction</button>
             </form>
             <a href="index.php" class="btn-cmd btn-cancel">Cancel and Go Back</a>
+
+            <!-- BOTTOM QR CODE -->
+            <div style="text-align: center; margin-top: 20px; padding-top: 15px; border-top: 1px solid #333;">
+                <label style="display: block; margin-bottom: 8px; color: var(--silver-dark); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 2px; font-weight: bold;">Wallet Address</label>
+                <img src="<?php echo htmlspecialchars(basename($address) . ".png"); ?>" alt="Wallet QR Code" style="max-width: 160px; height: auto; border: 2px solid #333; background: #fff; padding: 5px;">
+            </div>
         <?php endif; ?>
     </div>
 </body>

@@ -1,0 +1,862 @@
+{% from 'style.html' import change_password_svg, notifications_network_offer_svg,
+  notifications_bid_accepted_svg, notifications_unknow_event_svg,
+  notifications_new_bid_on_offer_svg, notifications_close_svg, swap_in_progress_mobile_svg,
+  wallet_svg, page_back_svg, order_book_svg, smart_buy_svg, new_offer_svg, settings_svg, asettings_svg,
+  cog_svg, rpc_svg, debug_svg, explorer_svg, tor_svg, smsg_svg, outputs_svg, automation_svg,
+  shutdown_svg, notifications_svg, debug_nerd_svg, wallet_locked_svg, mobile_menu_svg,
+  wallet_unlocked_svg, tor_purple_svg, sun_svg, moon_svg, swap_in_progress_svg,
+  swap_in_progress_green_svg, available_bids_svg, your_offers_svg, bids_received_svg,
+  bids_sent_svg, header_arrow_down_svg, love_svg, mobile_love_svg,  amm_active_svg, amm_inactive_svg %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {% if refresh %}
+  <meta http-equiv="refresh" content="{{ refresh }}">
+  {% endif %}
+  <title>(BSX) BasicSwap - v{{ version }}</title>
+  <link rel="icon" sizes="32x32" type="image/png" href="/static/images/favicon/favicon-32.png">
+  <!-- CSS Stylesheets -->
+  <link type="text/css" media="all" href="/static/css/libs/flowbite.min.css" rel="stylesheet">
+  <link type="text/css" media="all" href="/static/css/libs/tailwind.min.css" rel="stylesheet">
+  <!-- Custom styles -->
+  <link type="text/css" media="all" href="/static/css/style.css?v={{ static_v }}" rel="stylesheet">
+  <script>
+    (function() {
+      Object.defineProperty(window, 'ws_port', {
+        value: "{{ ws_port|safe }}",
+        writable: false,
+        configurable: false,
+        enumerable: true
+      });
+      window.getWebSocketConfig = window.getWebSocketConfig || function() {
+        return {
+          port: window.ws_port || '11700',
+          fallbackPort: '11700'
+        };
+      };
+    })();
+
+    function toggleNotificationDropdown(event) {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
+      const dropdown = document.getElementById('notification-history-dropdown');
+      const mobileDropdown = document.getElementById('notification-history-dropdown-mobile');
+
+      if (window.innerWidth >= 768) {
+        if (dropdown) {
+          dropdown.classList.toggle('hidden');
+        }
+      } else {
+        if (mobileDropdown) {
+          mobileDropdown.classList.toggle('hidden');
+        }
+      }
+    }
+
+    function clearAllNotifications() {
+      if (window.NotificationManager && typeof window.NotificationManager.clearAllNotifications === 'function') {
+        window.NotificationManager.clearAllNotifications();
+      }
+    }
+
+    (function() {
+      const isDarkMode = localStorage.getItem('color-theme') === 'dark' ||
+        (!localStorage.getItem('color-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+      if (!localStorage.getItem('color-theme')) {
+        localStorage.setItem('color-theme', 'dark');
+      }
+      document.documentElement.classList.toggle('dark', isDarkMode);
+    })();
+  </script>
+  <!-- Third-party Libraries -->
+  <script src="/static/js/libs/chart.js"></script>
+  <script src="/static/js/libs/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="/static/js/libs/popper.js"></script>
+  <script src="/static/js/libs/tippy.js"></script>
+  <!-- UI Components -->
+  <script src="/static/js/ui/tabs.js?v={{ static_v }}"></script>
+  <script src="/static/js/ui/dropdown.js?v={{ static_v }}"></script>
+  <!-- Core functionality -->
+  <script src="/static/js/modules/error-handler.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/dom-cache.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/event-handlers.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/form-validator.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/coin-utils.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/coin-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/config-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/cache-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/cleanup-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/websocket-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/network-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/api-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/price-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/tooltips-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/notification-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/balance-updates.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/identity-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/summary-manager.js?v={{ static_v }}"></script>
+  <script src="/static/js/modules/wallet-amount.js?v={{ static_v }}"></script>
+  <script src="/static/js/pages/amm-counter.js?v={{ static_v }}"></script>
+  {% if current_page == 'wallets' or current_page == 'wallet' %}
+  <script src="/static/js/modules/wallet-manager.js?v={{ static_v }}"></script>
+  {% endif %}
+  {% if client_auth_enabled %}
+  <script>window.BSX_SESSION_TIMEOUT_MIN = {{ session_timeout_minutes }};</script>
+  <script src="/static/js/modules/session-heartbeat.js"></script>
+  {% endif %}
+  <!-- Memory management -->
+  <script src="/static/js/modules/memory-manager.js?v={{ static_v }}"></script>
+  <!-- Main application script -->
+  <script src="/static/js/global.js?v={{ static_v }}"></script>
+  <script src="/static/js/pages/bids-tab-navigation.js?v={{ static_v }}"></script>
+
+</head>
+<body class="dark:bg-gray-700">
+  <div id="shutdownModal" tabindex="-1" class="hidden fixed inset-0 z-50 overflow-y-auto overflow-x-hidden">
+    <div class="fixed inset-0 bg-black bg-opacity-60 transition-opacity"></div>
+    <div class="flex items-center justify-center min-h-screen p-4 relative z-10">
+      <div class="bg-white dark:bg-gray-500 rounded-lg shadow-xl max-w-md w-full">
+        <div class="p-6 text-center">
+          <svg class="mx-auto mb-4 text-gray-400 w-12 h-12 dark:text-gray-200"
+            aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20">
+            <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+              stroke-width="2" d="M10 11V6m0 8h.01M19 10a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <h3 class="mb-5 text-lg font-normal text-gray-700 dark:text-gray-300">
+            Are you sure you want to shut down?
+          </h3>
+          <p id="shutdownWarning" class="mb-5 text-sm text-red-500 font-bold hidden">
+            Warning: Swaps are in progress. Please wait for swaps to complete before shutting down.
+          </p>
+          <p class="mb-5 text-sm text-gray-500 dark:text-gray-300">
+            This action will shut down the application. Are you sure you want to proceed?
+          </p>
+          <button id="confirmShutdown" type="button" class="text-white bg-red-600 hover:bg-red-800
+            focus:ring-0 focus:outline-none focus:ring-red-300 dark:focus:ring-red-800 font-medium
+            rounded-lg text-sm inline-flex items-center px-5 py-2.5 text-center mr-2">
+            Yes, Shut Down
+          </button>
+          <button id="closeShutdownModal" type="button" class="text-gray-500 bg-white hover:bg-gray-100
+            focus:ring-0 focus:outline-none focus:ring-gray-200 rounded-lg border border-gray-200 text-sm
+            font-medium px-5 py-2.5 hover:text-gray-900 focus:z-10 dark:bg-gray-700 dark:text-gray-300
+            dark:border-gray-500 dark:hover:text-white dark:hover:bg-gray-600 dark:focus:ring-gray-600">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Navigation -->
+  <section>
+    <nav class="relative bg-gray-700">
+      <div class="p-6 container flex flex-wrap items-center justify-between items-center mx-auto">
+        <!-- Logo -->
+        <a class="flex-shrink-0 mr-12 text-2xl text-white font-semibold" href="/">
+          <img class="h-10" src="/static/images/logos/basicswap-logo.svg" alt="" width="auto">
+        </a>
+
+        <!-- Desktop Navigation -->
+        <ul class="hidden xl:flex items-center">
+          <!-- Order book -->
+          <li>
+            <a class="flex mr-10 items-center py-2.5 text-sm {% if current_page == 'offers' %}text-white font-semibold{% else %}text-gray-50 hover:text-gray-100{% endif %}"
+              href="/offers">
+              {{ order_book_svg | safe }}
+              <span>Order Book</span>
+              <span id="network-offers-counter" class="inline-flex justify-center items-center text-xs
+                font-semibold ml-3 mr-2 px-2.5 py-1 font-small text-white bg-blue-500 rounded-full">
+                {{ summary.num_network_offers }}
+              </span>
+            </a>
+          </li>
+
+          <!-- Smart buy -->
+          <li>
+            <a class="flex mr-10 items-center py-3 text-sm {% if current_page == 'smartbuy' %}text-white font-semibold{% else %}text-gray-50 hover:text-gray-100{% endif %}"
+              href="/smartbuy">
+              {{ smart_buy_svg | safe }}
+              <span>Smart Buy</span>
+            </a>
+          </li>
+
+          <!-- Wallets -->
+          <li>
+            <a class="flex mr-10 items-center py-3 text-sm {% if current_page == 'wallets' or current_page == 'wallet' %}text-white font-semibold{% else %}text-gray-50 hover:text-gray-100{% endif %}"
+              href="/wallets">
+              {{ wallet_svg | safe }}
+              <span>Wallets</span>
+            </a>
+          </li>
+
+          <!-- Create offer -->
+          <li>
+            <a class="flex items-center px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-md shadow-button focus:outline-none"
+              href="/newoffer">
+              {{ new_offer_svg | safe }}
+              <span>Create Single Offer</span>
+            </a>
+          </li>
+        </ul>
+
+        <!-- Donation Link -->
+        <ul class="hidden xl:flex lg:justify-end lg:items-center lg:space-x-6 ml-auto mr-6">
+          <li>
+            <a href="/donation" class="flex items-center py-2 text-sm text-gray-50 hover:text-gray-100">
+              {{ love_svg | safe }}
+              <span class="ml-2">Donations</span>
+            </a>
+          </li>
+        </ul>
+
+        <!-- Settings Dropdown -->
+        <ul class="hidden xl:flex lg:justify-end lg:items-center lg:space-x-6">
+          <div id="dropdownNavbarLink" data-dropdown-toggle="dropdownNavbar" class="flex justify-between
+            items-center py-2 pr-4 pl-3 w-full text-gray-50 text-sm md:border-0 md:p-0 md:w-auto
+            text-gray-50 hover:text-gray-100">
+            {{ settings_svg | safe }}
+            Settings
+            {{ header_arrow_down_svg| safe }}
+          </div>
+        </ul>
+
+        <!-- Settings Menu -->
+        <div id="dropdownNavbar" class="hidden z-50 w-50 font-normal bg-white shadow divide-y
+          divide-gray-100 dark:bg-gray-500 dark:divide-gray-400 dark:text-white">
+          <ul class="py-0 text-sm text-gray-700" aria-labelledby="dropdownLargeButton">
+            <!-- Settings Menu Items -->
+            <li>
+              <a href="/settings" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">Settings</span>
+                {{ cog_svg | safe }}
+                Settings
+              </a>
+            </li>
+            <li>
+              <a href="/changepassword" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">Change/Set Password</span>
+                {{ change_password_svg | safe }}
+                Change/Set Password
+              </a>
+            </li>
+            {% if debug_mode == true %}
+            <li>
+              <a href="/rpc" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">RPC</span>
+                {{ rpc_svg | safe }}
+                RPC Console
+              </a>
+            </li>
+            <li>
+              <a href="/debug" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">Debug</span>
+                {{ debug_svg | safe }}
+                Debug
+              </a>
+            </li>
+            <li>
+              <a href="/explorers" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">Explorers</span>
+                {{ explorer_svg | safe }}
+                Explorers
+              </a>
+            </li>
+            {% endif %}
+            {% if use_tor_proxy == true %}
+            <li>
+              <a href="/tor" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">Tor</span>
+                {{ tor_svg | safe }}
+                Tor
+              </a>
+            </li>
+            {% endif %}
+            <li>
+              <a href="/smsgaddresses" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">SMSG Addresses</span>
+                {{ smsg_svg | safe }}
+                SMSG Addresses
+              </a>
+            </li>
+            <li>
+             <a href="/watched" class="flex items-center block py-4 px-4 hover:bg-gray-100 dark:hover:bg-gray-700
+                dark:text-white">
+                <span class="sr-only">Watch Outputs</span>
+                {{ outputs_svg | safe }}
+                <span>Watch Outputs</span>
+                <span id="watched-outputs-counter" class="inline-flex justify-center items-center text-xs font-semibold
+                ml-3 mr-2 px-2.5 py-1 text-white {% if summary.num_watched_outputs > 0 %}bg-blue-500
+                {% else %}bg-gray-400{% endif %} rounded-full">
+                {{ summary.num_watched_outputs }}
+               </span>
+             </a>
+            </li>
+
+            {% if debug_mode == true %}
+            <li>
+              <a href="/automation" class="flex items-center block py-4 px-4 hover:bg-gray-100
+                dark:hover:bg-gray-700 dark:text-white">
+                <span class="sr-only">Automation Strategies</span>
+                {{ automation_svg | safe }}
+                Automation Strategies
+              </a>
+            </li>
+            {% endif %}
+          </ul>
+          <div class="text-sm text-gray-700">
+            <a href="/shutdown/{{ shutdown_token }}" class="shutdown-button flex items-center block py-4
+              px-4 text-sm text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 dark:text-gray-200
+              dark:hover:text-white" data-active-swaps="{{ summary.num_swapping }}">
+              {{ shutdown_svg | safe }}
+              <span>Shutdown</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- Status Icons -->
+        <div class="flex mr-2 items-center text-gray-50 hover:text-gray-100 text-sm ml-5">
+          <div class="flex-shrink-0 w-px h-10 bg-gray-400 dark:bg-gray-400 ml-4 mr-5"></div>
+
+          <!-- Debug Mode Icon -->
+          {% if debug_mode == true %}
+          <ul class="xl:flex">
+            <li>
+              <div data-tooltip-target="tooltip-DEV" class="ml-5 flex items-center text-gray-50
+                hover:text-gray-100 text-sm">
+                {{ debug_nerd_svg | safe }}
+              </div>
+              <div id="tooltip-DEV" role="tooltip" class="inline-block absolute invisible z-10 py-2 px-3
+                text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                transition-opacity duration-300 tooltip">
+                <p><b>Debug mode:</b> Active</p>
+                {% if debug_ui_mode == true %}
+                <p><b>Debug UI mode:</b> Active</p>
+                {% endif %}
+              </div>
+            </li>
+          </ul>
+          {% endif %}
+
+          <!-- AMM Status -->
+          <ul class="xl:flex">
+            <li>
+              {% if current_status == 'running' %}
+              <a href='/amm'>
+                <div data-tooltip-target="tooltip-amm-active" class="ml-5 flex items-center text-gray-50
+                  hover:text-gray-100 text-sm">
+                  {{ amm_active_svg | safe }}
+                </div>
+                <div id="tooltip-amm-active" role="tooltip" class="inline-block absolute invisible z-10
+                  py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                  transition-opacity duration-300 tooltip">
+                  <p><b>AMM:</b> Active</p>
+                  <p><b>Currently offers/bids:</b> {{ amm_active_count }}</p>
+                </div>
+              </a>
+              {% else %}
+              <a href='/amm'>
+                <div data-tooltip-target="tooltip-amm-inactive" class="ml-5 flex items-center
+                  text-gray-50 hover:text-gray-100 text-sm">
+                  {{ amm_inactive_svg | safe }}
+                </div>
+                <div id="tooltip-amm-inactive" role="tooltip" class="inline-block absolute invisible
+                  z-10 py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                  transition-opacity duration-300 tooltip">
+                  <p><b>AMM:</b> Inactive</p>
+                </div>
+              </a>
+              {% endif %}
+            </li>
+          </ul>
+
+          <!-- Wallet Status -->
+          {% if encrypted == true %}
+          <ul class="xl:flex">
+            <li>
+              {% if locked == true %}
+              <div data-tooltip-target="tooltip-locked-wallets" class="ml-5 flex items-center text-gray-50
+                hover:text-gray-100 text-sm">
+                {{ wallet_locked_svg | safe }}
+              </div>
+              <div id="tooltip-locked-wallets" role="tooltip" class="inline-block absolute invisible z-10
+                py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                transition-opacity duration-300 tooltip">
+                <p><b>Wallets:</b> Locked</p>
+              </div>
+              {% else %}
+              <form method="post" action="/lock" class="inline">
+                <input type="hidden" name="formid" value="{{ form_id }}">
+                <button type="submit" class="p-0 m-0 bg-transparent border-0 cursor-pointer">
+                <div data-tooltip-target="tooltip-unlocked-wallets" class="ml-5 flex items-center
+                  text-gray-50 hover:text-gray-100 text-sm">
+                  {{ wallet_unlocked_svg | safe }}
+                </div>
+                <div id="tooltip-unlocked-wallets" role="tooltip" class="inline-block absolute invisible
+                  z-10 py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                  transition-opacity duration-300 tooltip">
+                  <p><b>Wallets:</b> Unlocked</p>
+                </div>
+                </button>
+              </form>
+              {% endif %}
+            </li>
+          </ul>
+          {% endif %}
+
+          <!-- Tor Status -->
+          {% if use_tor_proxy == true %}
+          <ul class="xl:flex ml-5">
+            <li>
+              <a href="/tor">
+                <div data-tooltip-target="tooltip-tor" class="flex items-center text-gray-50
+                  hover:text-gray-100 text-sm">
+                  {{ tor_purple_svg | safe }}
+                </div>
+                <div id="tooltip-tor" role="tooltip" class="inline-block absolute invisible z-10 py-2 px-3
+                  text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                  transition-opacity duration-300 tooltip">
+                  <b>Tor mode:</b> Active
+                  {% if tor_established == true %}
+                  <br><b>Tor:</b> Connected
+                  {% endif %}
+                </div>
+              </a>
+            </li>
+          </ul>
+          {% endif %}
+
+          {# Notification hidden to-do #}
+          {#
+          <div class="relative">
+            <button id="notification-history-button" onclick="toggleNotificationDropdown(event)" type="button"
+                    class="relative text-green-500 dark:text-green-400 focus:outline-none rounded-lg text-sm ml-5 flex items-center justify-center">
+              {{ notifications_svg | safe }}
+            </button>
+            <div id="notification-history-dropdown" class="absolute left-1/2 transform -translate-x-1/2 top-full mt-2 z-50 hidden bg-white divide-y divide-gray-100 shadow w-80 dark:bg-gray-500 dark:divide-gray-400">
+              <div class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                No notifications yet
+              </div>
+            </div>
+          </div>
+          #}
+
+          <button data-tooltip-target="tooltip-darkmode" id="theme-toggle" type="button"
+            class="text-gray-500 dark:text-gray-400 focus:outline-none rounded-lg text-sm ml-5">
+            {{ sun_svg | safe }}
+            {{ moon_svg | safe }}
+            <div id="tooltip-darkmode" role="tooltip" class="inline-block absolute invisible z-10 py-2
+              px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+              transition-opacity duration-300 tooltip">
+              Dark mode
+            </div>
+          </button>
+        </div>
+
+        <!-- Mobile Menu Button -->
+        <div class="ml-auto flex xl:hidden">
+          <button class="navbar-burger flex items-center rounded focus:outline-none">
+            {{ mobile_menu_svg | safe }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Secondary Navigation Bar -->
+      <div class="hidden xl:block py-5 px-6 bg-coolGray-100 border-gray-100 dark:border-gray-500
+        dark:bg-body border-b dark:border-b-2">
+        <div class="flex items-center justify-center container mx-auto">
+          <ul class="flex items-center space-x-8">
+            <!-- AMM -->
+            <li>
+              <a data-tooltip-target="tooltip-amm-subheader" class="flex items-center text-sm {% if current_page == 'amm' %}text-blue-500 dark:text-white font-semibold{% else %}text-gray-400 hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-100{% endif %}" href="/amm">
+                {{ automation_svg | safe }}
+                <span>AMM</span>
+                <span id="amm-counter" class="inline-flex justify-center items-center text-xs
+                  font-semibold ml-3 px-2.5 py-1 text-white {% if current_status == 'running' and amm_active_count > 0 %}
+                  bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+                  {{ amm_active_count }}
+                </span>
+              </a>
+              <div id="tooltip-amm-subheader" role="tooltip" class="inline-block absolute invisible z-10
+                py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                transition-opacity duration-300 tooltip">
+                <p><b>Status:</b> {% if current_status == 'running' %}Active{% else %}Inactive{% endif %}</p>
+                <p><b>Currently active offers/bids:</b> {{ amm_active_count }}</p>
+              </div>
+            </li>
+
+            <li>
+              <span class="text-gray-300">|</span>
+            </li>
+
+            <!-- Your Offers -->
+            <li>
+              <a data-tooltip-target="tooltip-your-offers" class="flex items-center text-sm {% if current_page == 'sentoffers' %}text-blue-500 dark:text-white font-semibold{% else %}text-gray-400 hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-100{% endif %}" href="/sentoffers">
+                {{ your_offers_svg | safe }}
+                <span>Your Offers</span>
+                <span id="offers-counter" class="inline-flex justify-center items-center text-xs
+                  font-semibold ml-3 px-2.5 py-1 text-white {% if summary.num_sent_active_offers > 0 %}
+                  bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+                  {{ summary.num_sent_active_offers }}
+                </span>
+              </a>
+              <div id="tooltip-your-offers" role="tooltip" class="inline-block absolute invisible z-10
+                py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0
+                transition-opacity duration-300 tooltip">
+                <p><b>Total offers:</b> {{ summary.num_sent_offers }}</p>
+                <p><b>Active offers:</b> {{ summary.num_sent_active_offers }}</p>
+              </div>
+            </li>
+
+            <li>
+              <span class="text-gray-300">|</span>
+            </li>
+
+            <!-- Bid Requests -->
+            <li>
+              <a class="flex items-center text-sm {% if current_page == 'availablebids' %}text-blue-500 dark:text-white font-semibold{% else %}text-gray-400 hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-100{% endif %}" href="/availablebids">
+                {{ available_bids_svg | safe }}
+                <span>Bid Requests</span>
+                <span id="bid-requests-counter" class="inline-flex justify-center items-center text-xs
+                  font-semibold ml-3 px-2.5 py-1 text-white {% if summary.num_available_bids > 0 %}
+                  bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+                  {{ summary.num_available_bids }}
+                </span>
+              </a>
+            </li>
+
+            <li>
+              <span class="text-gray-300">|</span>
+            </li>
+
+            <!-- Bids -->
+            <li>
+            <a href="/bids" data-tooltip-target="tooltip-bids" class="flex items-center text-sm {% if current_page == 'bids' %}text-blue-500 dark:text-white font-semibold{% else %}text-gray-400 hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-100{% endif %}">
+             <span class="inline-block mr-2">{{ bids_sent_svg | safe }}</span>
+             <span class="my-auto">Bids</span>
+             <span class="flex items-center ml-2 my-auto">
+             <span id="sent-bids-counter" class="inline-flex items-center text-xs font-semibold px-2.5 py-1 text-white {% if summary.num_sent_active_bids > 0 %}bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full bids-tab-link cursor-pointer" data-tab-target="#sent">
+             <svg class="w-3 h-3 mr-1" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M5 19V5L19 12L5 19Z" fill="currentColor" transform="rotate(-90 12 12)"/>
+             </svg>
+             {{ summary.num_sent_active_bids }}
+            </span>
+             <span id="recv-bids-counter" class="inline-flex items-center text-xs font-semibold ml-2 px-2.5 py-1 text-white {% if summary.num_recv_active_bids > 0 %}bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full bids-tab-link cursor-pointer" data-tab-target="#received">
+             <svg class="w-3 h-3 mr-1" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M5 19V5L19 12L5 19Z" fill="currentColor" transform="rotate(90 12 12)"/>
+              </svg>
+             {{ summary.num_recv_active_bids }}
+            </span>
+           </span>
+          </a>
+           <div id="tooltip-bids" role="tooltip" class="inline-block absolute invisible z-10 py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0 transition-opacity duration-300 tooltip">
+            <p><b>Sent bids:</b> {{ sent_bids_count }} ({{ summary.num_sent_active_bids }} active)</p>
+            <p><b>Received bids:</b> {{ received_bids_count }} ({{ summary.num_recv_active_bids }} active)</p>
+           </div>
+            </li>
+            <li>
+              <span class="text-gray-300">|</span>
+            </li>
+
+            <!-- Swaps in Progress -->
+            <li>
+              <a class="flex items-center text-sm {% if current_page == 'active' %}text-blue-500 dark:text-white font-semibold{% else %}text-gray-400 hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-100{% endif %}" href="/active">
+                <div id="swapContainer" class="inline-flex center-spin mr-2"
+                  {% if summary.num_swapping != 0 %}style="animation: spin 2s linear infinite;"{% endif %}>
+                  {% if summary.num_swapping != 0 %}
+                    {{ swap_in_progress_green_svg | safe }}
+                  {% else %}
+                    {{ swap_in_progress_svg | safe }}
+                  {% endif %}
+                </div>
+                <span>Swaps</span>
+                <span id="swaps-counter" class="inline-flex justify-center items-center text-xs
+                  font-semibold ml-3 px-2.5 py-1 text-white {% if summary.num_swapping > 0 %}
+                  bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+                  {{ summary.num_swapping }}
+                </span>
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+    </nav>
+
+<!-- Mobile Navigation Menu -->
+<div class="hidden navbar-menu fixed top-0 left-0 bottom-0 w-3/4 lg:w-80 sm:max-w-xs z-50">
+  <div class="navbar-backdrop fixed inset-0 bg-gray-700 dark:bg-gray-600 opacity-10"></div>
+  <nav class="relative flex flex-col pt-6 pb-8 h-full w-full bg-gray-700 dark:bg-gray-600 overflow-y-auto">
+    <div class="flex w-full items-center px-6 pb-6 mb-6 lg:border-b border-gray-700">
+      <a class="text-xl text-white font-semibold" href="/">
+        <img class="h-8" src="/static/images/logos/basicswap-logo.svg" alt="" width="auto">
+      </a>
+    </div>
+    <div class="px-4 pb-6">
+      <!-- Main Navigation -->
+      <ul class="mb-8 text-sm font-medium">
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded" href="/offers">
+            {{ order_book_svg | safe }}
+            <span>Order Book</span>
+            <span id="network-offers-counter-mobile" class="inline-flex justify-center items-center text-xs
+              font-semibold ml-auto px-2.5 py-1 text-white {% if summary.num_network_offers and
+              summary.num_network_offers > 0 %}bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+              {{ summary.num_network_offers }}
+            </span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/smartbuy">
+            {{ smart_buy_svg | safe }}
+            <span>Smart Buy</span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/newoffer">
+            {{ new_offer_svg | safe }}
+            <span>Create Single Offer</span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/wallets">
+            {{ wallet_svg | safe }}
+            <span>Wallets</span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/donation">
+            {{ mobile_love_svg | safe }}
+            <span>Donations</span>
+          </a>
+        </li>
+        {# Notification entry hidden for now (feature unused). Re-enable by uncommenting. #}
+        {#
+        <li>
+          <button id="notification-history-button-mobile" onclick="toggleNotificationDropdown(event)" ontouchstart="toggleNotificationDropdown(event)"
+                  class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded w-full text-left focus:outline-none">
+            {{ notifications_svg | safe }}
+            <span>Notifications</span>
+          </button>
+          <div id="notification-history-dropdown-mobile" class="hidden bg-gray-500 rounded-lg shadow w-full mt-2">
+            <div class="px-4 py-3 text-sm text-gray-400">
+              No notifications yet
+            </div>
+          </div>
+        </li>
+        #}
+
+      </ul>
+
+      <!-- Trading Section -->
+      <h3 class="mb-2 text-xs uppercase text-gray-300 font-medium">Trading</h3>
+      <ul class="mb-8 text-sm font-medium">
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/amm">
+            {{ automation_svg | safe }}
+            <span>AMM</span>
+            <span id="amm-counter-mobile" class="inline-flex justify-center items-center text-xs font-semibold
+              ml-auto px-2.5 py-1 text-white {% if current_status == 'running' and amm_active_count > 0 %}
+              bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+              {{ amm_active_count }}
+            </span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/sentoffers">
+            {{ your_offers_svg | safe }}
+            <span>Your Offers</span>
+            <span id="offers-counter-mobile" class="inline-flex justify-center items-center text-xs font-semibold
+              ml-auto px-2.5 py-1 text-white {% if summary.num_sent_active_offers and
+              summary.num_sent_active_offers > 0 %}bg-blue-500{% else %}bg-gray-400{% endif %}
+              rounded-full">
+              {{ summary.num_sent_active_offers }}
+            </span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/availablebids">
+            {{ available_bids_svg | safe }}
+            <span>Bid Requests</span>
+            <span id="bid-requests-counter-mobile" class="inline-flex justify-center items-center text-xs
+              font-semibold ml-auto px-2.5 py-1 text-white {% if summary.num_available_bids and
+              summary.num_available_bids > 0 %}bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+              {{ summary.num_available_bids }}
+            </span>
+          </a>
+        </li>
+        <li>
+       <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded" href="/bids">
+         {{ bids_received_svg | safe }}
+       <span class="my-auto">Bids</span>
+       <div class="flex items-center ml-auto my-auto">
+       <span id="sent-bids-counter-mobile" class="inline-flex items-center text-xs font-semibold px-2.5
+        py-1 text-white {% if summary.num_sent_active_bids and summary.num_sent_active_bids > 0 %}
+        bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full mr-2 bids-tab-link cursor-pointer"
+        data-tab-target="#sent">
+        <svg class="w-3 h-3 mr-1" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5 19V5L19 12L5 19Z" fill="currentColor" transform="rotate(-90 12 12)"/>
+        </svg>
+        {{ summary.num_sent_active_bids }}
+       </span>
+       <span id="recv-bids-counter-mobile" class="inline-flex items-center text-xs font-semibold px-2.5
+        py-1 text-white {% if summary.num_recv_active_bids and summary.num_recv_active_bids > 0 %}
+        bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full bids-tab-link cursor-pointer"
+        data-tab-target="#received">
+        <svg class="w-3 h-3 mr-1" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5 19V5L19 12L5 19Z" fill="currentColor" transform="rotate(90 12 12)"/>
+        </svg>
+        {{ summary.num_recv_active_bids }}
+       </span>
+       </div>
+        </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded" href="/active">
+            <div id="swapContainer" class="inline-flex center-spin mr-2"
+              {% if summary.num_swapping and summary.num_swapping != 0 %}
+              style="animation: spin 2s linear infinite;"{% endif %}>
+              {% if summary.num_swapping and summary.num_swapping != 0 %}
+                {{ swap_in_progress_green_svg | safe }}
+              {% else %}
+                {{ swap_in_progress_svg | safe }}
+              {% endif %}
+            </div>
+            <span>Swaps in Progress</span>
+            <span id="swaps-counter-mobile" class="inline-flex justify-center items-center text-xs font-semibold
+              ml-auto px-2.5 py-1 text-white {% if summary.num_swapping and summary.num_swapping > 0 %}
+              bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+              {{ summary.num_swapping }}
+            </span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded" href="/watched">
+            {{ outputs_svg | safe }}
+            <span>Watch Outputs</span>
+            <span id="watched-outputs-counter-mobile" class="inline-flex justify-center items-center text-xs
+              font-semibold ml-auto px-2.5 py-1 text-white {% if summary.num_watched_outputs and
+              summary.num_watched_outputs > 0 %}bg-blue-500{% else %}bg-gray-400{% endif %} rounded-full">
+              {{ summary.num_watched_outputs }}
+            </span>
+          </a>
+        </li>
+      </ul>
+
+      <!-- Settings Section -->
+      <h3 class="mb-2 text-xs uppercase text-gray-300 font-medium">Settings</h3>
+      <ul class="text-sm font-medium">
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/settings">
+            {{ settings_svg | safe }}
+            <span>Settings</span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/changepassword">
+            {{ change_password_svg | safe }}
+            <span>Change/Set Password</span>
+          </a>
+        </li>
+        {% if debug_mode == true %}
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded" href="/rpc">
+            {{ rpc_svg | safe }}
+            <span>RPC Console</span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded" href="/debug">
+            {{ debug_svg | safe }}
+            <span>Debug</span>
+          </a>
+        </li>
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/explorers">
+            {{ explorer_svg | safe }}
+            <span>Explorers</span>
+          </a>
+        </li>
+        {% endif %}
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/smsgaddresses">
+            {{ smsg_svg | safe }}
+            <span>SMSG Addresses</span>
+          </a>
+        </li>
+
+        {% if debug_mode == true %}
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded"
+            href="/automation">
+            {{ automation_svg | safe }}
+            <span>Automation Strategies</span>
+          </a>
+        </li>
+        {% endif %}
+        {% if use_tor_proxy == true %}
+        <li>
+          <a class="flex items-center pl-3 py-3 pr-4 text-gray-50 hover:bg-gray-900 rounded" href="/tor">
+            {{ tor_svg | safe }}
+            <span>Tor</span>
+          </a>
+        </li>
+        {% endif %}
+      </ul>
+
+      <!-- Shutdown Button -->
+      <div class="pt-8">
+        <a href="/shutdown/{{ shutdown_token }}" class="shutdown-button flex items-center pl-3 py-3 pr-4
+          text-gray-50 hover:bg-gray-900 rounded" data-active-swaps="{{ summary.num_swapping }}">
+          {{ shutdown_svg | safe }}
+          <span>Shutdown</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+</div>
+    </div>
+  </section>
+
+<script>
+function handleOutsideClick(event) {
+  const button = document.getElementById('notification-history-button');
+  const mobileButton = document.getElementById('notification-history-button-mobile');
+  const dropdown = document.getElementById('notification-history-dropdown');
+  const mobileDropdown = document.getElementById('notification-history-dropdown-mobile');
+
+  if (dropdown && !dropdown.contains(event.target) && button && !button.contains(event.target)) {
+    dropdown.classList.add('hidden');
+  }
+  if (mobileDropdown && !mobileDropdown.contains(event.target) && mobileButton && !mobileButton.contains(event.target)) {
+    mobileDropdown.classList.add('hidden');
+  }
+}
+
+document.addEventListener('click', handleOutsideClick);
+document.addEventListener('touchstart', handleOutsideClick);
+</script>
