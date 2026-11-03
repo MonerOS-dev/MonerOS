@@ -1,0 +1,416 @@
+{% include 'header.html' %}
+{% from 'style.html' import place_new_offer_svg, page_back_svg, page_forwards_svg, filter_clear_svg, filter_apply_svg, input_arrow_down_svg, arrow_right_svg %}
+{% from 'macros.html' import page_header %}
+
+<script>
+  window.offersTableConfig = {
+    jsonData: {{ offers|tojson|safe }},
+    isSentOffers: {{ sent_offers|tojson }}
+  };
+</script>
+
+{{ page_header(page_type, page_type_description, dark_bg='dark:bg-gray-500') }}
+
+{% include 'inc_messages.html' %}
+
+{% if show_chart %}
+<section class="relative hidden md:block">
+  <div class="px-6 py-0 mt-5 h-full overflow-hidden">
+    <div class="pb-6 border-coolGray-100">
+      <div class="flex flex-wrap items-center justify-between">
+        <div class="w-full pt-2">
+          <div class="lg:container mx-auto">
+            <div class="pt-6 pb-8 bg-coolGray-100 dark:bg-gray-500 rounded-xl container-to-blur">
+              <div class="flex justify-between items-center mb-4 mr-10 ml-10">
+                <div class="flex items-center justify-between">
+                  <h2 class="text-xl font-bold dark:text-white" id="chart-title">Price Chart</h2>
+                  <div class="flex items-center space-x-4">
+                    <button id="resolution-year" class="ml-5 resolution-button">1Y</button>
+                    <button id="resolution-sixMonths" class="resolution-button">6M</button>
+                    <button id="resolution-day" class="resolution-button">24H</button>
+                  </div>
+                </div>
+                <div class="flex items-center">
+                  <span id="load-time hidden" class="mr-2 text-sm text-gray-600 dark:text-gray-300"></span>
+                  <span id="last-refreshed-time hidden" class="mr-2 text-sm text-gray-600 dark:text-gray-300"></span>
+                  <span id="cache-status hidden" class="mr-4 text-sm text-gray-600 dark:text-gray-300"></span>
+                  <span id="tor-status" class="mr-4 text-sm hidden {% if tor_established %}text-green-500{% else %}text-red-500{% endif %}">
+                    Tor {% if tor_established %}ON{% else %}OFF{% endif %}
+                    <a href="https://academy.particl.io/en/latest/basicswap-guides/basicswapguides_tor.html" target="_blank" rel="noopener noreferrer" class="underline">(?)</a>
+                  </span>
+                  <span id="next-refresh-time" class="mr-4 text-sm text-gray-600 dark:text-gray-300">
+                    <span id="next-refresh-label"></span>
+                    <span id="next-refresh-value"></span>
+                  </span>
+                  <div id="tooltip-volume" role="tooltip" class="inline-block absolute invisible z-10 py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0 transition-opacity duration-300 tooltip">Toggle Coin Volume</div>
+                  <button id="toggle-volume" data-tooltip-target="tooltip-volume" class="text-white font-bold py-2 px-4 rounded mr-2 focus:outline-none focus:ring-0 transition-colors duration-200" title="Toggle Volume">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
+                    </svg>
+                  </button>
+                  <div id="tooltip-refresh" role="tooltip" class="inline-block absolute invisible z-10 py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0 transition-opacity duration-300 tooltip">Refresh Charts/Prices & Clear Cache</div>
+                  <button id="refresh-all" data-tooltip-target="tooltip-refresh" class="text-gray-600 dark:text-gray-400 font-bold py-2 px-4 rounded mr-2 focus:outline-none focus:ring-0 transition-colors duration-200" title="Refresh Data & Clear Cache">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  </button>
+                  <div id="tooltip-auto" role="tooltip" class="inline-block absolute invisible z-10 py-2 px-3 text-sm font-medium text-white bg-blue-500 rounded-lg shadow-sm opacity-0 transition-opacity duration-300 tooltip">Auto Refresh Enable/Disable</div>
+                  <button id="toggle-auto-refresh" data-enabled="false" data-tooltip-target="tooltip-auto" class="text-white font-bold py-2 px-4 rounded mr-2 focus:outline-none focus:ring-0 transition-colors duration-200" title="Enable Auto-Refresh">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div class="w-full mt-6 ml-6 mr-10 overflow-x-auto">
+                <div class="chart-container relative" style="max-width: 96%; height: 250px;">
+                  <div id="chart-loader" class="absolute inset-0 flex items-center justify-center z-10 bg-coolGray-100 dark:bg-gray-500">
+                    <div style="width: 300px; height: 4px; background-color: #3B82F6;" class="rounded-full animate-pulse"></div>
+                  </div>
+                  <canvas id="coin-chart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="error-overlay" class="notice-overlay hidden absolute inset-0 bg-opacity-30 backdrop-blur-sm flex items-center justify-center">
+            <div id="error-content" class="notice-content bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-2xl mx-4 relative shadow-lg">
+              <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600"></div>
+              <button id="close-error" class="absolute top-3 right-3 text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-white rounded-full p-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors focus:outline-none">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <div class="flex items-center gap-3 mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                <p class="text-lg font-medium text-gray-900 dark:text-gray-100">Notice</p>
+              </div>
+              <p id="error-message" class="text-gray-600 dark:text-gray-300 text-base mb-6"></p>
+              <div class="text-sm text-gray-500 dark:text-gray-400">
+                Need to update your (API) settings?
+                <a href="/settings" class="text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 font-medium ml-1 hover:underline">Go to Settings -> General</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-4 px-3 flex-wrap overflow-hidden container-to-blur">
+ <div class="lg:container mx-auto">
+  <div class="flex flex-wrap justify-center lg:justify-start xl:justify-center" id="coin-container">
+{% set coin_data = {
+    'BTC': {'name': 'Bitcoin', 'symbol': 'BTC', 'image': 'Bitcoin.png', 'show': true},
+    'XMR': {'name': 'Monero', 'symbol': 'XMR', 'image': 'Monero.png', 'show': true},
+    'PART': {'name': 'Particl', 'symbol': 'PART', 'image': 'Particl.png', 'show': true},
+    'LTC': {'name': 'Litecoin', 'symbol': 'LTC', 'image': 'Litecoin.png', 'show': true},
+    'BCH': {'name': 'Bitcoin Cash', 'symbol': 'BCH', 'image': 'Bitcoin-Cash.png', 'show': true},
+    'FIRO': {'name': 'Firo', 'symbol': 'FIRO', 'image': 'Firo.png', 'show': true},
+    'PIVX': {'name': 'PIVX', 'symbol': 'PIVX', 'image': 'PIVX.png', 'show': true},
+    'DASH': {'name': 'Dash', 'symbol': 'DASH', 'image': 'Dash.png', 'show': true},
+    'ETH': {'name': 'Ethereum', 'symbol': 'ETH', 'image': 'Ethereum.png', 'show': false},
+    'DOGE': {'name': 'Dogecoin', 'symbol': 'DOGE', 'image': 'Dogecoin.png', 'show': true},
+    'DCR': {'name': 'Decred', 'symbol': 'DCR', 'image': 'Decred.png', 'show': true},
+    'NMC': {'name': 'Namecoin', 'symbol': 'NMC', 'image': 'Namecoin.png', 'show': true},
+    'ZANO': {'name': 'Zano', 'symbol': 'ZANO', 'image': 'Zano.png', 'show': false},
+    'WOW': {'name': 'Wownero', 'symbol': 'WOW', 'image': 'Wownero.png', 'show': true}
+    }
+  %}
+  {% set custom_order = ['BTC', 'ETH', 'XMR', 'PART', 'LTC', 'BCH', 'FIRO', 'PIVX', 'DASH', 'DOGE', 'DCR', 'NMC', 'ZANO', 'WOW'] %}
+
+  {% if enabled_chart_coins is string %}
+    {% if enabled_chart_coins == "" %}
+      {% set display_coins = coin_data.keys()|list %}
+    {% elif enabled_chart_coins == "all" %}
+      {% set display_coins = custom_order %}
+    {% else %}
+      {% set display_coins = enabled_chart_coins.split(',') %}
+    {% endif %}
+  {% else %}
+    {% set display_coins = enabled_chart_coins %}
+  {% endif %}
+
+  {% for coin_symbol in custom_order %}
+    {% if coin_symbol in display_coins and coin_data[coin_symbol]['show'] %}
+    <div class="w-full sm:w-1/2 md:w-1/4 lg:w-1/5 xl:w-1/6 p-3" id="{{ coin_symbol.lower() }}-container">
+        <div class="px-5 py-3 h-full bg-coolGray-100 dark:bg-gray-500 rounded-2xl dark:text-white {% if coin_symbol == 'BTC' %}active-container{% endif %}" style="min-height: 180px;">
+         <div class="flex items-center h-10">
+          <img src="/static/images/coins/{{ coin_data[coin_symbol]['image'] }}" class="rounded-xl" style="width: 28px; height: 28px; object-fit: contain;" alt="{{ coin_data[coin_symbol]['name'] }}">
+          <p class="ml-1 text-black text-sm dark:text-white">
+         {{ coin_data[coin_symbol]['name'] }} {% if coin_data[coin_symbol]['symbol'] != coin_data[coin_symbol]['name'] %}({{ coin_data[coin_symbol]['symbol'] }}){% endif %}
+          </p>
+         </div>
+         <div class="flex flex-col justify-start relative">
+          <div id="{{ coin_symbol.lower() }}-loader" class="absolute inset-0 flex items-center justify-center bg-coolGray-100 dark:bg-gray-500 z-10 hidden">
+           <div class="w-16 h-1 bg-blue-500 rounded-full animate-pulse"></div>
+          </div>
+          <p class="my-2 text-xl font-bold text-left monospace text-gray-700 dark:text-gray-100" id="{{ coin_symbol.lower() }}-price-usd"> <span id="{{ coin_symbol.lower() }}-price-usd-value" {% if coin_symbol in ['DCR', 'ZANO', 'WOW'] %}style="min-width: 80px;"{% endif %}></span>
+          </p>
+          <div class="flex items-center text-sm">
+           <div class="w-auto">
+            <div id="{{ coin_symbol.lower() }}-price-change-container" class="w-auto p-1"></div>
+           </div>
+          </div>
+          {% if coin_symbol != 'BTC' %}
+          <div id="{{ coin_symbol.lower() }}-btc-price-div" class="flex items-center text-xs text-gray-600 dark:text-gray-300 mt-2 {% if coin_symbol == 'WOW' %}hidden{% endif %}">
+           <span class="bold mr-2 ml-1">BTC:</span>
+           <span id="{{ coin_symbol.lower() }}-price-btc"></span>
+          </div>
+          {% endif %}
+          <div id="{{ coin_symbol.lower() }}-volume-div" class="flex items-center text-xs text-gray-600 dark:text-gray-300 mt-2">
+           <span class="bold mr-2 ml-1">VOL:</span>
+           <span id="{{ coin_symbol.lower() }}-volume-24h"></span>
+          </div>
+         </div>
+        </div>
+    </div>
+    {% endif %}
+  {% endfor %}
+  </div>
+ </div>
+</section>
+<script src="/static/js/pages/offers-pricechart.js"></script>
+{% endif %}
+
+
+<section>
+  <div class="px-6 py-0 h-full overflow-hidden">
+    <div class="border-coolGray-100">
+      <div class="flex flex-wrap items-center justify-between">
+        <div class="w-full mx-auto pt-2">
+          <form method="post" id="filterForm">
+            <div class="pb-6 mt-6 border-coolGray-100">
+              <div class="flex flex-wrap justify-center -m-1.5">
+                <div class="w-full md:w-auto p-1.5 hover-container">
+                  <div class="flex justify-center md:justify-start">
+                    <div class="relative">
+                      {{ input_arrow_down_svg | safe }}
+                      <button type="button" id="coin_to_button" class="bg-gray-50 text-gray-900 appearance-none pr-10 pl-5 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none block w-full p-2.5 text-left focus:ring-0 whitespace-nowrap">
+                        <span id="coin_to_text" class="filter-button-text">Filter {% if sent_offers %}Receiving{% else %}Bids{% endif %}</span>
+                      </button>
+                      <div id="coin_to_dropdown" class="multi-select-dropdown bg-gray-50 dark:bg-gray-500 border border-gray-300 dark:border-gray-400 rounded-lg shadow-lg max-h-64 overflow-y-auto" style="display: none; position: absolute; z-index: 1000; min-width: 200px; top: 100%; left: 0;">
+                        <div class="p-2">
+                          <label class="flex items-center p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded cursor-pointer">
+                            <input type="checkbox" name="coin_to" value="any" class="mr-3 coin-to-checkbox" {% if filters.coin_to==-1 %}checked{% endif %}>
+                            <span class="text-sm text-gray-900 dark:text-white">Any (clear all)</span>
+                          </label>
+                          {% for c in coins %}
+                          <label class="flex items-center p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded cursor-pointer">
+                            <input type="checkbox" name="coin_to" value="{{ c[0] }}" class="mr-3 coin-to-checkbox" {% if filters.coin_to==c[0] %}checked{% endif %}>
+                            <img src="/static/images/coins/{{ c[1]|replace(" ", "%20") }}.png" class="w-4 h-4 mr-2" alt="{{ c[1] }}">
+                            <span class="text-sm text-gray-900 dark:text-white">{{ c[1] }}</span>
+                          </label>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    </div>
+                    <div class="flex items-center">
+                      <div class="w-full md:w-auto p-1.5">
+                        <p class="text-sm font-heading text-gray-500 dark:text-white">{{ arrow_right_svg | safe }}</p>
+                      </div>
+                    </div>
+                    <div class="relative">
+                      {{ input_arrow_down_svg | safe }}
+                      <button type="button" id="coin_from_button" class="bg-gray-50 text-gray-900 appearance-none pr-10 pl-5 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none block w-full p-2.5 text-left focus:ring-0 whitespace-nowrap">
+                        <span id="coin_from_text" class="filter-button-text">Filter {% if sent_offers %}Sending{% else %}Offers{% endif %}</span>
+                      </button>
+                      <div id="coin_from_dropdown" class="multi-select-dropdown bg-gray-50 dark:bg-gray-500 border border-gray-300 dark:border-gray-400 rounded-lg shadow-lg max-h-64 overflow-y-auto" style="display: none; position: absolute; z-index: 1000; min-width: 200px; top: 100%; left: 0;">
+                        <div class="p-2">
+                          <label class="flex items-center p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded cursor-pointer">
+                            <input type="checkbox" name="coin_from" value="any" class="mr-3 coin-from-checkbox" {% if filters.coin_from==-1 %}checked{% endif %}>
+                            <span class="text-sm text-gray-900 dark:text-white">Any (clear all)</span>
+                          </label>
+                          {% for c in coins_from %}
+                          <label class="flex items-center p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded cursor-pointer">
+                            <input type="checkbox" name="coin_from" value="{{ c[0] }}" class="mr-3 coin-from-checkbox" {% if filters.coin_from==c[0] %}checked{% endif %}>
+                            <img src="/static/images/coins/{{ c[1]|replace(" ", "%20") }}.png" class="w-4 h-4 mr-2" alt="{{ c[1] }}">
+                            <span class="text-sm text-gray-900 dark:text-white">{{ c[1] }}</span>
+                          </label>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {% if sent_offers %}
+                <div class="w-full md:w-auto p-1.5">
+                  <div class="relative">
+                    {{ input_arrow_down_svg | safe }}
+                    <select name="status" id="status" class="bg-gray-50 text-gray-900 appearance-none pr-10 pl-5 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none block w-full p-2.5 focus:ring-0">
+                      <option value="any" {% if not filters.status %} selected{% endif %}>Filter Status</option>
+                      <option value="active" {% if filters.status == 'active' %} selected{% endif %}>Active</option>
+                      <option value="expired" {% if filters.status == 'expired' %} selected{% endif %}>Expired</option>
+                      <option value="revoked" {% if filters.status == 'revoked' %} selected{% endif %}>Revoked</option>
+                    </select>
+                  </div>
+                </div>
+                {% endif %}
+
+                <div class="w-full md:w-auto p-1.5">
+                  <div class="relative">
+                    {{ input_arrow_down_svg | safe }}
+                    <select name="auto_accept_type" id="auto_accept_type" class="bg-gray-50 text-gray-900 appearance-none pr-10 pl-5 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none block w-full p-2.5 focus:ring-0">
+                      <option value="any" {% if filters.auto_accept_type == 'any' %} selected{% endif %}>Auto Accept Type</option>
+                      <option value="0" {% if filters.auto_accept_type == 0 %} selected{% endif %}>Manual</option>
+                      <option value="1" {% if filters.auto_accept_type == 1 %} selected{% endif %}>Automatic</option>
+                      <option value="2" {% if filters.auto_accept_type == 2 %} selected{% endif %}>Known Identities</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="w-full md:w-auto p-1.5">
+                  <div class="relative">
+                    {{ input_arrow_down_svg | safe }}
+                    <select name="sent_from" id="sent_from" class="bg-gray-50 text-gray-900 appearance-none pr-10 pl-5 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none block w-full p-2.5 focus:ring-0">
+                      <option value="any" {% if not filters.sent_from %} selected{% endif %}>All Offers</option>
+                      <option value="public" {% if filters.sent_from == 'public' %} selected{% endif %}>Public</option>
+                      <option value="private" {% if filters.sent_from == 'private' %} selected{% endif %}>Private</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="w-full md:w-auto p-1.5">
+                  <div class="relative">
+                    <button type="button" id="clearFilters" class="transition-opacity duration-200 flex justify-center w-full px-4 py-2.5 font-medium text-sm hover:text-white dark:text-white dark:bg-gray-500 bg-coolGray-200 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-coolGray-200 dark:border-gray-400 rounded-md shadow-button focus:ring-0 focus:outline-none" disabled>
+                      <span>Clear Filters</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="w-full md:w-auto p-1.5">
+                  <div class="relative">
+                    <button type="button" id="refreshOffers" class="flex justify-center w-full px-4 py-2.5 font-medium text-sm text-white bg-blue-600 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+                      <svg id="refreshIcon" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                      </svg>
+                      <span id="refreshText">Refresh</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </form>
+          <div id="selected_coins_container" class="w-full py-3" style="display: none;">
+            <div class="flex flex-wrap justify-center gap-2">
+              <div id="coin_to_badges" class="flex flex-wrap gap-1"></div>
+              <div id="coin_from_badges" class="flex flex-wrap gap-1"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="lg:container mx-auto lg:px-0 px-6">
+    <div class="pt-0 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+      <div class="px-0">
+       <div class="w-auto mt-6 overflow-auto lg:overflow-hidden">
+          <table class="w-full min-w-max">
+            <thead class="uppercase">
+              <tr>
+                <th class="p-0" data-sortable="true" data-column-index="0">
+                  <div class="py-3 pl-4 justify-center rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                    <span class="text-sm mr-1 text-gray-600 dark:text-gray-300 font-semibold"></span>
+                  </div>
+                </th>
+                <th class="p-0" data-sortable="true" data-column-index="0">
+                  <div class="py-3 pl-4 justify-center bg-coolGray-200 dark:bg-gray-600">
+                    <span class="text-sm mr-1 text-gray-600 dark:text-gray-300 font-semibold">Time</span>
+                     <span class="sort-icon ml-1 text-gray-600 dark:text-gray-400" id="sort-icon-0">↓</span>
+                  </div>
+                </th>
+                <th class="p-0 hidden xl:block">
+                  <div class="py-3 px-4 text-left bg-coolGray-200 dark:bg-gray-600">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Details</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-left">
+                    {% if sent_offers %}
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Max Recv</span>
+                    {% else %}
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Max Send</span>
+                    {% endif %}
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Swap</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right">
+                    {% if sent_offers %}
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold pr-2">Your Liq.</span>
+                    {% else %}
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold pr-2">Max Recv</span>
+                    {% endif %}
+                  </div>
+                </th>
+                <th class="p-0" data-sortable="true" data-column-index="6">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right flex items-center justify-end">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Rate</span>
+                    <span class="sort-icon ml-1 text-gray-600 dark:text-gray-400" id="sort-icon-6">↓</span>
+                  </div>
+                </th>
+                <th class="p-0" data-sortable="true" data-column-index="7">
+                  <div class="py-3 bg-coolGray-200 dark:bg-gray-600 text-center flex items-center justify-center">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Market +/-</span>
+                    <span class="sort-icon ml-1 text-gray-600 dark:text-gray-400" id="sort-icon-7">↓</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 rounded-tr-xl">
+                  <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Trade</span>
+                 </div>
+               </th>
+              </tr>
+            </thead>
+            <tbody id="offers-body">
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="rounded-b-md">
+        <div class="w-full">
+          <div class="flex flex-wrap justify-between items-center pl-6 pt-6 pr-6 border-t border-gray-100 dark:border-gray-400">
+          <div class="flex items-center">
+           <div class="flex items-center mr-4">
+            <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-gray-500 mr-2"></span>
+            <span id="status-text" class="text-sm text-gray-500">Connecting...</span>
+           </div>
+             <p class="text-sm font-heading dark:text-gray-400 mr-4">
+              Last refreshed: <span id="lastRefreshTime">Never</span>
+             </p>
+             <p class="text-sm font-heading dark:text-gray-400 mr-4">
+             <span data-listing-label>Listings: </span>
+             <span id="newEntriesCount"></span>
+             </p>
+           </div>
+            <div class="flex items-center space-x-2">
+              <button type="button" id="prevPage" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+                {{ page_back_svg | safe }}
+                <span class="ml-1">Previous</span>
+              </button>
+              <p class="text-sm font-heading dark:text-white">Page:<span class="ml-1" id="currentPage">1</span> of <span id="totalPages">1</span></p>
+              <button type="button" id="nextPage" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+                <span class="mr-1">Next</span>{{ page_forwards_svg | safe }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<input type="hidden" name="formid" value="{{ form_id }}">
+<script src="/static/js/pages/offers-page.js"></script>
+
+ {% include 'footer.html' %}

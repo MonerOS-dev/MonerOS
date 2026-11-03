@@ -2,7 +2,7 @@
 # --- /usr/local/bin/os/start_monero_daemons ---
 
 BASE_DIR="/mnt/sallyport/watch_monero"
-START_PORT=18084
+START_PORT=18090
 NODE_CACHE_FILE="/home/user/monero_node.cfg"
 TOR_PROXY="127.0.0.1:9050"
 LOCAL_TOR_NODE="127.0.0.1:18081"

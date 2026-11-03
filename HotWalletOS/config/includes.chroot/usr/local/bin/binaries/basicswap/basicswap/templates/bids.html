@@ -1,0 +1,464 @@
+{% include 'header.html' %}
+{% from 'style.html' import page_back_svg, page_forwards_svg, filter_clear_svg, filter_apply_svg, circular_arrows_svg, input_arrow_down_svg, arrow_right_svg %}
+{% from 'macros.html' import page_header %}
+
+{{ page_header('All Bids / Sent Bids / Received Bids', 'View, and manage bids.') }}
+
+ {% include 'inc_messages.html' %}
+
+<div class="xl:container mx-auto">
+<section>
+  <div class="pl-6 pr-6 pt-0 mt-5 h-full overflow-hidden">
+   <div class="flex flex-wrap items-center justify-between -m-2">
+    <div class="w-full pt-2">
+     <div class="mb-4 border-b pb-5 border-gray-200 dark:border-gray-500">
+      <ul class="flex flex-wrap text-sm font-medium text-center text-gray-500 dark:text-gray-400" id="myTab" data-tabs-toggle="#bidstab" role="tablist">
+       <li class="mr-2">
+        <button class="inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="all-tab" data-tabs-target="#all" type="button" role="tab" aria-controls="all" aria-selected="true">
+         All Bids <span class="text-gray-500 dark:text-gray-400">({{ sent_bids_count + received_bids_count }})</span>
+        </button>
+       </li>
+       <li class="mr-2">
+        <button class="inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="sent-tab" data-tabs-target="#sent" type="button" role="tab" aria-controls="sent" aria-selected="false">
+         Sent Bids <span class="text-gray-500 dark:text-gray-400">({{ sent_bids_count }})</span>
+        </button>
+       </li>
+       <li class="mr-2">
+        <button class="inline-block px-4 py-3 rounded-lg hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white focus:outline-none focus:ring-0" id="received-tab" data-tabs-target="#received" type="button" role="tab" aria-controls="received" aria-selected="false">
+         Received Bids <span class="text-gray-500 dark:text-gray-400">({{ received_bids_count }})</span>
+        </button>
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </div>
+</section>
+</div>
+
+ <section>
+  <div class="px-6 py-0 h-full overflow-hidden">
+   <div class="pb-6 mt-6 border-coolGray-100">
+    <div class="flex flex-wrap justify-center -m-1.5">
+     <div class="w-full md:w-auto p-1.5">
+      <div class="relative">
+       <input type="text"
+           id="searchInput"
+           name="search"  autocomplete="off" placeholder="Search bid ID, offer ID, address or label..."
+           class="w-full md:w-96 hover:border-blue-500 dark:hover:bg-gray-50 text-gray-900 pl-4 pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-400 text-sm rounded-lg outline-none block p-2.5 focus:ring-blue-500 focus:border-blue-500 focus:ring-0 dark:focus:bg-gray-500 dark:focus:text-white">
+       <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+        <svg class="w-5 h-5 text-gray-500 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+        </svg>
+       </div>
+      </div>
+     </div>
+
+     <div class="p-1.5 md:w-auto hover-container">
+      <div class="flex">
+       <button id="coin_from_button" class="bg-gray-50 text-gray-900 appearance-none w-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-l-lg flex items-center" disabled></button>
+       <div class="relative">
+        {{ input_arrow_down_svg | safe }}
+        <select name="coin_from" id="coin_from" class="bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-r-lg outline-none block w-full p-2.5 focus:ring-0 border-l-0">
+         <option value="any" {% if filters.coin_from==-1 %} selected{% endif %}>You Send</option>
+         {% for c in coins_from %}
+         <option class="text-sm" value="{{ c[0] }}" {% if filters.coin_from==c[0] %} selected{% endif %} data-image="/static/images/coins/{{ c[1]|replace(" ", "-") }}.png">{{ c[1] }}</option>
+         {% endfor %}
+        </select>
+       </div>
+       <div class="flex items-center">
+        <div class="w-full md:w-auto p-1.5">
+         <p class="text-sm font-heading text-gray-500 dark:text-white">{{ arrow_right_svg | safe }}</p>
+        </div>
+       </div>
+       <button id="coin_to_button" class="bg-gray-50 text-gray-900 appearance-none w-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-l-lg flex items-center" disabled></button>
+       <div class="relative">
+        {{ input_arrow_down_svg | safe }}
+        <select name="coin_to" id="coin_to" class="bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-r-lg outline-none block w-full p-2.5 focus:ring-0 border-l-0">
+         <option value="any" {% if filters.coin_to==-1 %} selected{% endif %}>You Receive</option>
+         {% for c in coins %}
+         <option class="text-sm" value="{{ c[0] }}" {% if filters.coin_to==c[0] %} selected{% endif %} data-image="/static/images/coins/{{ c[1]|replace(" ", "-") }}.png">{{ c[1] }}</option>
+         {% endfor %}
+        </select>
+       </div>
+      </div>
+     </div>
+
+     <div class="w-full md:w-auto p-1.5">
+      <div class="relative">
+       {{ input_arrow_down_svg | safe }}
+       <select name="state" id="state" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0">
+        <option value="-1" selected="">Any State</option>
+        <optgroup label="Active States">
+         <option value="1">Sent</option>
+         <option value="2">Receiving</option>
+         <option value="3">Received</option>
+         <option value="4">Receiving accept</option>
+         <option value="5">Accepted</option>
+         <option value="6">Initiated</option>
+         <option value="7">Participating</option>
+        </optgroup>
+        <optgroup label="Completed States">
+         <option value="8">Completed</option>
+         <option value="15">Scriptless tx redeemed</option>
+         <option value="13">Script tx redeemed</option>
+        </optgroup>
+        <optgroup label="Failed States">
+         <option value="17">Failed, refunded</option>
+         <option value="18">Failed, swiped</option>
+         <option value="39">Failed, swiped, sending mercy</option>
+         <option value="37">Failed, swiped, recovering</option>
+         <option value="36">Failed, swiped, recovered</option>
+         <option value="38">Failed, swiped, mercy unused</option>
+         <option value="19">Failed</option>
+         <option value="22">Abandoned</option>
+         <option value="23">Error</option>
+         <option value="31">Expired</option>
+        </optgroup>
+        <optgroup label="Other States">
+         <option value="9">Script coin locked</option>
+         <option value="10">Script coin spend tx valid</option>
+         <option value="11">Scriptless coin locked</option>
+         <option value="12">Script coin lock released</option>
+         <option value="14">Script pre-refund tx in chain</option>
+         <option value="16">Scriptless tx recovered</option>
+         <option value="20">Delaying</option>
+         <option value="21">Timed-out</option>
+         <option value="24">Stalled (debug)</option>
+         <option value="25">Rejected</option>
+         <option value="26">Unknown bid state</option>
+         <option value="27">Exchanged script lock tx sigs msg</option>
+         <option value="28">Exchanged script lock spend tx msg</option>
+         <option value="29">Request sent</option>
+         <option value="30">Request accepted</option>
+         <option value="32">Auto accept delay</option>
+         <option value="33">Auto accept failed</option>
+        </optgroup>
+       </select>
+      </div>
+     </div>
+
+     <!-- todo
+     <div class="w-full md:w-auto p-1.5">
+      <div class="relative">
+       {{ input_arrow_down_svg | safe }}
+       <select name="with_expired" id="with_expired" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none pr-10 dark:bg-gray-500 dark:text-white border border-gray-300 dark:border-gray-400 dark:text-gray-50 dark:placeholder-gray-50 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-0">
+        <option value="true">Include Expired</option>
+        <option value="false">Exclude Expired</option>
+       </select>
+      </div>
+     </div>-->
+
+     <div class="w-full md:w-auto p-1.5">
+      <div class="relative">
+       <button type="button" id="clearFilters" class="flex flex-wrap justify-center w-full px-4 py-2.5 font-medium text-sm hover:text-white dark:text-white dark:bg-gray-500 bg-coolGray-200 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-coolGray-200 dark:border-gray-400 rounded-md shadow-button focus:ring-0 focus:outline-none">
+        <span>Clear Filters</span>
+       </button>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+ </section>
+
+ <div id="bidstab">
+  <!-- All Bids Tab -->
+  <div class="rounded-lg lg:px-6" id="all" role="tabpanel" aria-labelledby="all-tab">
+   <div id="all-content">
+    <div class="xl:container mx-auto lg:px-0">
+     <div class="pt-0 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+      <div class="px-0">
+       <div class="w-auto overflow-auto lg:overflow-hidden">
+        <table class="w-full lg:min-w-max">
+         <thead class="uppercase">
+          <tr class="text-left">
+           <th class="p-0">
+            <div class="py-3 pl-16 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Date/Time</span>
+            </div>
+           </th>
+           <th class="p-0 hidden lg:block">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Details</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Send</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Receive</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 text-center bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Status</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 pr-6 text-center rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Actions</span>
+            </div>
+           </th>
+          </tr>
+         </thead>
+         <tbody id="all-tbody">
+         </tbody>
+        </table>
+       </div>
+       <div class="rounded-b-md">
+        <div class="w-full">
+         <div class="flex flex-wrap justify-between items-center pl-6 pt-6 pr-6 border-t border-gray-100 dark:border-gray-400">
+          <div class="flex items-center">
+           <div class="flex items-center mr-4">
+            <span id="status-dot-all" class="w-2.5 h-2.5 rounded-full bg-gray-500 mr-2"></span>
+            <span id="status-text-all" class="text-sm text-gray-500">Connecting...</span>
+           </div>
+           <p class="text-sm font-heading dark:text-gray-400">
+            All Bids: <span id="allBidsCount">0</span>
+           </p>
+           {% if debug_ui_mode == true %}
+           <button id="refreshAllBids" class="ml-4 inline-flex items-center px-4 py-2.5 font-medium text-sm text-white bg-blue-600 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span id="refreshAllText">Refresh</span>
+           </button>
+           {% endif %}
+
+           <button id="exportAllBids" class="ml-4 inline-flex items-center px-4 py-2.5 font-medium text-sm text-white bg-green-600 hover:bg-green-700 hover:border-green-700 rounded-lg transition duration-200 border border-green-600 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            <span>Export CSV</span>
+           </button>
+
+          </div>
+          <div id="pagination-controls-all" class="flex items-center space-x-2" style="display: none;">
+           <button id="prevPageAll" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            </svg>
+            Previous
+           </button>
+           <p class="text-sm font-heading dark:text-white">Page <span id="currentPageAll">1</span></p>
+           <button id="nextPageAll" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+            Next
+            <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+            </svg>
+           </button>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+
+  <!-- Sent Bids Tab -->
+  <div class="hidden rounded-lg lg:px-6" id="sent" role="tabpanel" aria-labelledby="sent-tab">
+   <div id="sent-content">
+    <div class="xl:container mx-auto lg:px-0">
+     <div class="pt-0 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+      <div class="px-0">
+       <div class="w-auto overflow-auto lg:overflow-hidden">
+        <table class="w-full lg:min-w-max">
+         <thead class="uppercase">
+          <tr class="text-left">
+           <th class="p-0">
+            <div class="py-3 pl-16 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Date/Time</span>
+            </div>
+           </th>
+           <th class="p-0 hidden lg:block">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Details</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Send</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Receive</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 text-center bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Status</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 pr-6 text-center rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Actions</span>
+            </div>
+           </th>
+          </tr>
+         </thead>
+         <tbody id="sent-tbody">
+         </tbody>
+        </table>
+       </div>
+       <div class="rounded-b-md">
+        <div class="w-full">
+         <div class="flex flex-wrap justify-between items-center pl-6 pt-6 pr-6 border-t border-gray-100 dark:border-gray-400">
+          <div class="flex items-center">
+           <div class="flex items-center mr-4">
+            <span id="status-dot-sent" class="w-2.5 h-2.5 rounded-full bg-gray-500 mr-2"></span>
+            <span id="status-text-sent" class="text-sm text-gray-500">Connecting...</span>
+           </div>
+           <p class="text-sm font-heading dark:text-gray-400">
+            Sent Bids: <span id="sentBidsCount">0</span>
+           </p>
+           {% if debug_ui_mode == true %}
+           <button id="refreshSentBids" class="ml-4 inline-flex items-center px-4 py-2.5 font-medium text-sm text-white bg-blue-600 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span id="refreshSentText">Refresh</span>
+           </button>
+           {% endif %}
+
+           <button id="exportSentBids" class="ml-4 inline-flex items-center px-4 py-2.5 font-medium text-sm text-white bg-green-600 hover:bg-green-700 hover:border-green-700 rounded-lg transition duration-200 border border-green-600 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            <span>Export CSV</span>
+           </button>
+
+          </div>
+          <div id="pagination-controls-sent" class="flex items-center space-x-2" style="display: none;">
+           <button id="prevPageSent" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            </svg>
+            Previous
+           </button>
+           <p class="text-sm font-heading dark:text-white">Page <span id="currentPageSent">1</span></p>
+           <button id="nextPageSent" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+            Next
+            <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+            </svg>
+           </button>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+
+<!-- Received Bids Tab -->
+  <div class="hidden rounded-lg lg:px-6" id="received" role="tabpanel" aria-labelledby="received-tab">
+   <div id="received-content">
+    <div class="xl:container mx-auto lg:px-0">
+     <div class="pt-0 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+      <div class="px-0">
+       <div class="w-auto overflow-auto lg:overflow-hidden">
+        <table class="w-full lg:min-w-max">
+         <thead class="uppercase">
+          <tr class="text-left">
+           <th class="p-0">
+            <div class="p-3 pl-16 rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Date/Time</span>
+            </div>
+           </th>
+           <th class="p-0 hidden lg:block">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Details</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Send</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Receive</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 text-center bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Status</span>
+            </div>
+           </th>
+           <th class="p-0">
+            <div class="p-3 pr-6 text-center rounded-tr-xl bg-coolGray-200 dark:bg-gray-600">
+             <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Actions</span>
+            </div>
+           </th>
+          </tr>
+         </thead>
+         <tbody id="received-tbody">
+         </tbody>
+        </table>
+       </div>
+       <div class="rounded-b-md">
+        <div class="w-full">
+         <div class="flex flex-wrap justify-between items-center pl-6 pt-6 pr-6 border-t border-gray-100 dark:border-gray-400">
+          <div class="flex items-center">
+           <div class="flex items-center mr-4">
+            <span id="status-dot-received" class="w-2.5 h-2.5 rounded-full bg-gray-500 mr-2"></span>
+            <span id="status-text-received" class="text-sm text-gray-500">Connecting...</span>
+           </div>
+           <p class="text-sm font-heading dark:text-gray-400">
+            Received Bids: <span id="receivedBidsCount">0</span>
+           </p>
+           {% if debug_ui_mode == true %}
+           <button id="refreshReceivedBids" class="ml-4 inline-flex items-center px-4 py-2.5 font-medium text-sm text-white bg-blue-600 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span id="refreshReceivedText">Refresh</span>
+           </button>
+           {% endif %}
+
+           <button id="exportReceivedBids" class="ml-4 inline-flex items-center px-4 py-2.5 font-medium text-sm text-white bg-green-600 hover:bg-green-700 hover:border-green-700 rounded-lg transition duration-200 border border-green-600 rounded-md shadow-button focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            <span>Export CSV</span>
+           </button>
+
+          </div>
+          <div id="pagination-controls-received" class="flex items-center space-x-2" style="display: none;">
+           <button id="prevPageReceived" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            </svg>
+            Previous
+           </button>
+           <p class="text-sm font-heading dark:text-white">Page <span id="currentPageReceived">1</span></p>
+           <button id="nextPageReceived" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200 focus:ring-0 focus:outline-none">
+            Next
+            <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+            </svg>
+           </button>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+ </div>
+
+<script src="/static/js/pages/plan-rows.js?v={{ static_v }}"></script>
+<script src="/static/js/pages/bids-page.js?v={{ static_v }}"></script>
+<script src="/static/js/pages/bids-export.js"></script>
+
+{% include 'footer.html' %}

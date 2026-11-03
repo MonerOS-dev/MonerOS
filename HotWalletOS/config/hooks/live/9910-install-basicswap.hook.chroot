@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+SWAP_DIR="/usr/local/bin/basicswap"
+
+if [ -d "$SWAP_DIR" ]; then
+    echo "=== Setting up BasicSwap Python Environment inside Chroot ==="
+    
+    # Temporarily install build dependencies inside the target OS chroot
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends python3-venv python3-pip libpython3-dev gcc libc-dev pkg-config git
+
+    # Build the isolated venv and compile dependencies natively
+    python3 -m venv "$SWAP_DIR/venv"
+    . "$SWAP_DIR/venv/bin/activate"
+    
+    cd "$SWAP_DIR"
+    pip3 install --upgrade pip
+    pip3 install --require-hashes -r requirements.txt
+    pip3 install .
+
+    # Purge build tools so they aren't baked into the final stripped image
+    apt-get purge -y python3-pip libpython3-dev gcc libc-dev pkg-config git
+    apt-get autoremove -y
+    apt-get clean
+
+    echo "=== BasicSwap Setup Complete ==="
+fi

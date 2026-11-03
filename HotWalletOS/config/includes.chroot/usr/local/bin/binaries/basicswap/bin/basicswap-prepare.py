@@ -1,0 +1,1 @@
+../basicswap/bin/prepare.py

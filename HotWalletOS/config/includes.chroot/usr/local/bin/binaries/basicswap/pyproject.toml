@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "basicswap"
+description = "Simple atomic swap system"
+keywords = ["crypto", "cryptocurrency", "particl", "bitcoin", "monero", "wownero"]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Security :: Cryptography",
+]
+dependencies = [
+# See requirements.txt
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://basicswapdex.com"
+Source = "https://github.com/basicswap/basicswap"
+
+[project.scripts]
+basicswap-prepare = "basicswap.bin.prepare:main"
+basicswap-run = "basicswap.bin.run:main"
+
+[project.optional-dependencies]
+dev = [
+    "codespell",
+    "flake8",
+    "pip-tools",
+    "pre-commit",
+    "pytest",
+    "ruff",
+    "black==26.5.1",
+    "selenium",
+]
+
+[tool.hatch.version]
+path = "basicswap/__init__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.ruff]
+exclude = ["contrib",]
+
+[tool.ruff.lint]
+# E131 is a flake8-only code (pycodestyle hanging-indent) used in # noqa comments;
+# tell ruff it is an external code so it does not reject those noqa directives.
+external = ["E131"]
+
+[tool.black]
+force-exclude = "contrib"
+target-version = ["py311", "py312", "py313", "py314"]
+
+[tool.codespell]
+check-filenames = true
+disable-colors = true
+quiet-level = 7
+dictionary = "tests/lint/spelling.extra_dictionary.txt,-"
+ignore-words = "tests/lint/spelling.ignore-words.txt"
+skip = ".git,.eggs,.venv,.tox,pgp,*.pyc,*basicswap/contrib,*basicswap/interface/*/contrib,*mnemonics.py,bin/install_certifi.py,*basicswap/static"

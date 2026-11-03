@@ -3,8 +3,8 @@ set -e
 
 # Define both target directories
 TARGET_DIRS=(
-    "/root/MonerOS/HotWalletOS/config/includes.chroot/usr/local/bin/binaries"
-    "/root/MonerOS/ColdWalletOS/config/includes.chroot/usr/local/bin/binaries"
+    "$HOME/MonerOS/HotWalletOS/config/includes.chroot/usr/local/bin/binaries"
+    "$HOME/MonerOS/ColdWalletOS/config/includes.chroot/usr/local/bin/binaries"
 )
 
 echo "=== Initializing Target Directories ==="
@@ -42,48 +42,65 @@ cd ..
 ########################################
 # Bitcoin Core
 ########################################
-#echo "=== Bitcoin Core ==="
-#mkdir bitcoin && cd bitcoin
-#wget -q https://bitcoincore.org/bin/bitcoin-core-26.0/bitcoin-26.0-x86_64-linux-gnu.tar.gz
-#tar -xf bitcoin-26.0-x86_64-linux-gnu.tar.gz
+echo "=== Bitcoin Core ==="
+mkdir bitcoin && cd bitcoin
+wget https://bitcoincore.org/bin/bitcoin-core-26.0/bitcoin-26.0-x86_64-linux-gnu.tar.gz
+tar -xf bitcoin-26.0-x86_64-linux-gnu.tar.gz
 
-#for DIR in "${TARGET_DIRS[@]}"; do
-#    cp bitcoin-26.0/bin/* "$DIR/"
-#done
-#cd ..
+for DIR in "${TARGET_DIRS[@]}"; do
+    cp bitcoin-26.0/bin/* "$DIR/"
+done
+cd ..
+
 
 ########################################
 # Electrum CLI
 ########################################
-#echo "=== Electrum CLI ==="
-#mkdir electrum && cd electrum
+echo "=== Electrum CLI ==="
+mkdir electrum && cd electrum
 
-#wget -q https://download.electrum.org/4.7.2/electrum-4.7.2-x86_64.AppImage -O electrum
-#chmod +x electrum
+wget https://download.electrum.org/4.7.2/electrum-4.7.2-x86_64.AppImage -O electrum
+chmod +x electrum
 
-#for DIR in "${TARGET_DIRS[@]}"; do
-#    cp electrum "$DIR/electrum"
-#done
-#cd ..
+# Copy to both HotWalletOS and ColdWalletOS
+for DIR in "${TARGET_DIRS[@]}"; do
+    cp electrum "$DIR/electrum"
+done
+
+cd ..
 
 ########################################
-# Eigenwallet Swap CLI
+# Electrum Personal Server (HotWallet Only)
 ########################################
-#echo "=== Eigenwallet Swap CLI ==="
-#mkdir swap-cli && cd swap-cli
+echo "=== Electrum Personal Server ==="
+mkdir eps && cd eps
 
-# Pin specific release version
-#SWAP_VERSION="4.14.0"
+# Download the latest source code tarball directly
+wget https://github.com/chris-belcher/electrum-personal-server/archive/refs/heads/master.tar.gz -O eps.tar.gz
+tar -xf eps.tar.gz
 
-# Download the x86_64 Linux binary tarball
-#wget --show-progress "https://github.com/eigenwallet/core/releases/download/${SWAP_VERSION}/swap_${SWAP_VERSION}_Linux_x86_64.tar.gz" -O swap.tar.gz
+# Flatten and place into HotWalletOS binaries path
+mkdir -p "${TARGET_DIRS[0]}/eps"
+cp -r electrum-personal-server-*/* "${TARGET_DIRS[0]}/eps/"
+rm -f eps.tar.gz
 
-#tar -xf swap.tar.gz
+cd ..
 
-# Copy exclusively to HotWalletOS
-#cp swap "${TARGET_DIRS[0]}/"
 
-#cd ..
+########################################
+# BasicSwap DEX Source (For XMR <-> BTC)
+########################################
+echo "=== BasicSwap DEX Source ==="
+mkdir basicswap-source && cd basicswap-source
+
+# Clone the official repository so it's baked into HotWalletOS for manual setup later
+git clone https://github.com/basicswap/basicswap.git
+
+# Bundle it into the HotWalletOS binaries path (or a dedicated opt directory)
+mkdir -p "${TARGET_DIRS[0]}/basicswap"
+cp -r basicswap/* "${TARGET_DIRS[0]}/basicswap/"
+
+cd ..
 
 
 

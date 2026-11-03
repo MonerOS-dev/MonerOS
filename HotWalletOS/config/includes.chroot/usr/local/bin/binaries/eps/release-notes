@@ -1,0 +1,186 @@
+# Release v0.2.4 (16th June 2022)
+
+New release, thanks to contributions by andrewtoth and theStack
+And thanks to everyone else who contributed via discussion and donations
+
+* Fixed crash caused by deprecated RPC in Bitcoin Core 23.0
+* Added signet support
+
+# Release v0.2.3 (9th March 2022)
+
+New release, thanks to contributions by andrewtoth and federicociro
+And thanks to everyone else who contributed via discussion and donations
+
+* Fixed crash caused by deprecated RPC in Bitcoin Core 22.0
+
+# Release v0.2.2 (29th May 2021)
+
+New release, thanks to contributions by Liongrass, Talkless and parazyd
+And thanks to everyone else who contributed via discussion and donations
+
+* Rewrite mempool handling to always be responsive. Previously the server
+  would massively lag if the mempool was large, so most users just disabled
+  the mempool histogram. With this update that is no longer an issue.
+* If Electrum Personal Server fails at startup it will now return a non-zero
+  error code, making it more usable with automated scripts like systemd.
+* Client will now warn user if tor broadcasting fails because tor is not
+  accessible.
+* Various optimizations and bug fixes.
+
+# Release v0.2.1.1 (9th June 2020)
+
+Bugfix release. Thanks to everyone who reported the bug and jmacxx who wrote
+the pull request to fix it. And thanks to everyone who contributed in general
+to electrum personal server.
+
+* Fixed bug where the server would crash in certain conditions. Instead the
+  server should have caught the error and continued.
+
+# Release v0.2.1 (4th June 2020)
+
+New release, thanks to contributions by DriftwoodPalace, m-schmoock and wiredcheetah
+And thanks to everyone else who contributed via discussion and donations
+
+* Massive speedup to startup time and initial import of addresses. This is done
+  using the descriptor wallets feature of Bitcoin Core 0.20. The speedup is
+  very helpful when running Electrum Personal Server on low powered devices
+  such as the raspberry pi
+* Close the connection to client if it requests an unknown address or if the
+  connection to the Bitcoin node is lost. The user will see a red dot in
+  Electrum indicating that something is wrong which should prompt them to fix.
+* Increase default polling interval to make the server more responsive to new
+  transactions and confirmations
+* Reduce spam in the debug log and info log
+* Various other tweaks and bug fixes
+
+# Release v0.2.0 (5th December 2019)
+
+New release, thanks to code contributions by suvayu, andrewtoth and Sosthene00
+And thanks to everyone else who contributed via discussion and donations
+
+* Implemented tor broadcasting of transactions, which happens by default if tor
+  is running on the same machine.
+* Also check that the last address of each master public key has been imported,
+  along with the first three.
+* Add bandwidth usage per day and blockchain size to the server banner
+* Support using `vsize` instead of `size` for the mempool calculation, which is
+  the correct behaviour for Bitcoin Core 0.19
+* Allow rescan date to also be passed via CLI args. Wait for any rescanning to
+  finish on startup. This allows Electrum Personal Server to be more easily
+  used with scripting.
+* Various other bugfixes
+
+# Release v0.1.7 (26th April 2019)
+
+New release, thanks to code contributions by suvayu and andrewtoth
+And thanks to everyone else who contributed via discussion and donations
+
+* If pruning is enabled and block is not available then send dummy merkle
+  proof, which Electrum will accept if run with the command line
+  flag --skipmerklecheck
+* Added option to allow broadcasting unconfirmed transactions via any
+  system call, for example it could be a shell script which broadcasts
+  via SMS or radio.
+* Added option which allows disabling the mempool histogram feature
+  which is useful on low-powered devices when the mempool is large.
+* Deprecated electrum-personal-server-rescan script in favour of
+  electrum-personal-server --rescan
+* Releases will now also be packaged as windows binaries using pyinstaller.
+* No longer adds orphaned coinbase txes as unconfirmed.
+* Fix bug involving transactions with unconfirmed inputs.
+* Various other bugfixes
+
+# Release v0.1.6 - (15th November 2018)
+
+New release, thanks to code contributions by suvayu and andrewtoth
+And thanks to everyone else who contributed to issues and discussion
+
+* Made installable with pip, thanks to suvayu
+* Fix bug where coinbase transactions would be ignored, thanks to andrewtoth
+* Support Electrum protocol version 1.4
+* Support blockchain.transaction.id_from_pos which is necessary for
+  Lightning support in Electrum
+* Increase default initial_import_count to 1000
+* Added or clarified various error and info messages
+* Disabled transaction broadcasting when blocksonly is enabled for privacy
+* Fixed various small bugs
+
+
+# Release v0.1.5 - (7th September 2018)
+
+Bugfix release
+
+* Fixed crash bug caused by behavour of getaddressesbylabel
+
+
+# Release v0.1.4 - (5th September 2018)
+
+* Used 127.0.0.1 instead of localhost to help improve windows support
+* Fixed crash bug if the client requests an out-of-range header
+* Supported Bitcoin Core 0.17 which deprecates accounts
+
+
+# Release v0.1.3 - (4th July 2018)
+
+Bugfix release, mainly to correctly support Electrum 3.2
+
+* Added support for raw block headers
+* Implemented protocol method `blockchain.block.headers`
+* Make the address status of a empty address be None
+* Fixed bug involving rare situation where the result of the listtransactions
+  RPC call did not have an `address` field
+
+
+# Release v0.1.2 - (30th June 2018)
+
+* Added support for mempool histogram feature
+* Handles conflicted transactions, for when a chain reorg happens
+* Added IP address whitelisting feature
+* Bugfix when Electrum requests block headers out of range
+* Bugfix when listtransactions has more than 1000 entries
+* Added many more tests, which now use py.test
+* Added regtest support
+
+
+# Release v0.1.1 - (1st April 2018)
+
+Bugfix release, thanks to
+
+* Added option to manually configure rpc_user and rpc_password, instead of using
+  the .cookie file.
+* Made json-rpc error messages have more detail.
+* Added method for user to configure Electrum Personal Server's current working
+  directory, which is useful for running it from systemd or another automated
+  tool.
+* Updated readme file to add information that tripped people up.
+* Now handles conflicted transactions.
+
+
+# Beta release v0.1 - (29th Mar 2018)
+
+Released first beta version.
+
+* Merkle proofs supported using bitcoind's `gettxoutproof` RPC call.
+* Deterministic wallets implemented which support all Electrum master public
+  key formats.
+* Created rescan script which allows rescanning from a given block height
+  instead of scanning the entire blockchain. Also allows the user to input a
+  dd/mm/yyyy timestamp, which is converted to a block height (with 2 weeks
+  safety) to rescan from there.
+* Automated tests created for merkle proofs, deterministic wallets and
+  monitoring of transactions.
+* SSL server socket is used and a default SSL certificate is included in the
+  repository, which users can replace with their own.
+* No longer depends on pybitcointools' transaction code. That package is only
+  used for bip32 support for deterministic wallets. Bech32 addresses now
+  supported.
+* RPC auth details can be obtained from the .cookie file.
+* Bitcoin Core's multi-wallet feature supported.
+
+
+# Alpha release - (8th Feb 2018)
+
+Released first alpha version which builds address history from bitcoin'd
+wallet, monitors addresses for new transactions and accepts connections from
+Electrum wallet.
+

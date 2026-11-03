@@ -4,24 +4,48 @@
 export PATH=$PATH:/usr/sbin:/sbin
 
 # --- VARIABLES ---
+# Container 1: Coinswaps (swap.bin on Partition 4)
+SWAP_MAPPER="swap_unlocked"
+SWAP_DATADIR="/mnt/coinswaps"
+P4_MNT="/mnt/p4"
+
+# Container 2: Sallyport (sallyport.bin on Partition 3)
 SALLY_MAPPER="sallyport_unlocked"
-FINAL_MOUNT="/mnt/sallyport"
+SALLY_MNT="/mnt/sallyport"
 EXT_MNT="/mnt/external"
 
-sudo pkill monerod
+# Stop background daemons cleanly before unmounting
+/usr/local/bin/bitcoin-cli -datadir=/mnt/coinswaps/bitcoin stop
+
+# Wait up to 60 seconds for bitcoind to safely shut down and flush cache
+COUNTER=0
+while pgrep -x bitcoind > /dev/null; do
+  sleep 1
+  COUNTER=$((COUNTER + 1))
+  if [ $COUNTER -ge 60 ]; then
+    echo "Warning: bitcoind did not stop gracefully in time."
+    break
+  fi
+done
+
+sudo pkill -f particld 2>/dev/null || true
+sudo pkill -f monerod 2>/dev/null || true
+sudo pkill -f basicswap-run 2>/dev/null || true
 
 # 1. Inside-Out Teardown Sequence
-# A. Unmount the Sallyport ext4 filesystem
-sudo umount "$FINAL_MOUNT" 2>/dev/null
+# A. Unmount inner container filesystems
+sudo umount "$SWAP_DATADIR" 2>/dev/null
+sudo umount "$SALLY_MNT" 2>/dev/null
 
-# B. Close the LUKS file container mapper device
+# B. Close both LUKS container mapper devices
+sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null
 sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
 
-# C. Unmount the physical carrier drive 
+# C. Unmount both physical carrier partitions 
+sudo umount "$P4_MNT" 2>/dev/null
 sudo umount "$EXT_MNT" 2>/dev/null
 
 # 2. Final Data Flush
-# Ensure all cached blocks are physically written to the storage controller
 sync
 sleep 1
 

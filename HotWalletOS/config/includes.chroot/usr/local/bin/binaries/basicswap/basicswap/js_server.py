@@ -1,0 +1,2403 @@
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2020-2024 tecnovert
+# Copyright (c) 2024-2026 The Basicswap developers
+# Distributed under the MIT software license, see the accompanying
+# file LICENSE or http://www.opensource.org/licenses/mit-license.php.
+
+import json
+import random
+import urllib.parse
+
+from .util import (
+    LockedCoinError,
+    ensure,
+    toBool,
+)
+from .util.network import (
+    is_loopback_address,
+    is_public_url,
+    is_url_scheme_allowed,
+)
+from .basicswap_util import (
+    AddressTypes,
+    fiatFromTicker,
+    strBidState,
+    strTxState,
+    SwapTypes,
+    NotificationTypes as NT,
+)
+from .chainparams import (
+    Coins,
+    chainparams,
+    Fiat,
+    getCoinIdFromTicker,
+    getCoinIdFromName,
+)
+from .ui.util import (
+    PAGE_LIMIT,
+    getCoinName,
+    getCoinType,
+    inputAmount,
+    describeBid,
+    setCoinFilter,
+    get_data_entry,
+    get_data_entry_or,
+    have_data_entry,
+    listOldBidStates,
+    checkAddressesOwned,
+)
+from .ui.page_offers import postNewOffer
+from .protocols.xmr_swap_1 import recoverNoScriptTxnWithKey, getChainBSplitKey
+from .bidplanner import FILL_RECEIVE, FILL_SPEND
+from .multibid import (
+    ANCHOR_MARKET,
+    DEFAULT_BID_VALID_SECONDS,
+    DEFAULT_MAX_BIDS,
+    DEFAULT_SLIP_PERCENT,
+    MAX_CONFIRM_WAIT_SECONDS,
+    MIN_LEG_TIMEOUT_SECONDS,
+    describePlan,
+    placeMultiBid,
+    planMultiBid,
+    PLAN_ID_LENGTH,
+)
+from .db import Concepts
+
+
+def getFormData(post_string: str, is_json: bool):
+    if post_string == "":
+        raise ValueError("No post data")
+    if is_json:
+        form_data = json.loads(post_string)
+        form_data["is_json"] = True
+    else:
+        form_data = urllib.parse.parse_qs(post_string)
+    return form_data
+
+
+def withdraw_coin(swap_client, coin_type, post_string, is_json):
+    post_data = getFormData(post_string, is_json)
+    address = get_data_entry(post_data, "address")
+
+    if coin_type in swap_client.xmr_based_coins:
+        value = None
+        sweepall = get_data_entry(post_data, "sweepall")
+        if not isinstance(sweepall, bool):
+            sweepall = toBool(sweepall)
+        if not sweepall:
+            value = get_data_entry(post_data, "value")
+    else:
+        value = get_data_entry(post_data, "value")
+        subfee = get_data_entry(post_data, "subfee")
+        if not isinstance(subfee, bool):
+            subfee = toBool(subfee)
+
+    if coin_type == Coins.PART:
+        type_from = get_data_entry_or(post_data, "type_from", "plain")
+        type_to = get_data_entry_or(post_data, "type_to", "plain")
+        txid_hex = swap_client.withdrawParticl(
+            type_from, type_to, value, address, subfee
+        )
+    elif coin_type in (Coins.LTC, Coins.FIRO):
+        type_from = get_data_entry_or(post_data, "type_from", "plain")
+        txid_hex = swap_client.withdrawCoinExtended(
+            coin_type, type_from, value, address, subfee
+        )
+    elif coin_type in swap_client.xmr_based_coins:
+        txid_hex = swap_client.withdrawCoin(coin_type, value, address, sweepall)
+    else:
+        txid_hex = swap_client.withdrawCoin(coin_type, value, address, subfee)
+
+    return {"txid": txid_hex}
+
+
+def js_error(self, error_str) -> bytes:
+    error_str_json = json.dumps({"error": error_str})
+    return bytes(error_str_json, "UTF-8")
+
+
+def js_coins(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+
+    coins = []
+    for coin in Coins:
+        cc = swap_client.coin_clients[coin]
+        coin_chainparams = chainparams[cc["coin"]]
+        coin_active: bool = False if cc["connection_type"] == "none" else True
+        if coin == Coins.LTC_MWEB:
+            coin_active = False
+        entry = {
+            "id": int(coin),
+            "ticker": coin_chainparams["ticker"],
+            "name": getCoinName(coin),
+            "active": coin_active,
+            "decimal_places": coin_chainparams["decimal_places"],
+        }
+        if coin == Coins.PART_ANON:
+            entry["variant"] = "Anon"
+        elif coin == Coins.PART_BLIND:
+            entry["variant"] = "Blind"
+        elif coin == Coins.LTC_MWEB:
+            entry["variant"] = "MWEB"
+        coins.append(entry)
+
+    return bytes(json.dumps(coins), "UTF-8")
+
+
+def js_walletbalances(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+
+    try:
+        swap_client.updateWalletsInfo()
+        wallets = swap_client.getCachedWalletsInfo()
+        coins_with_balances = []
+
+        for k, v in swap_client.coin_clients.items():
+            if k not in chainparams:
+                continue
+            if v["connection_type"] in ("rpc", "electrum"):
+
+                have_data = False
+                updating = False
+                # only some coins withhold their balance while locked.
+                locked = False
+                if k in wallets:
+                    w = wallets[k]
+                    have_data = "error" not in w and "no_data" not in w
+                    updating = bool(w.get("updating", False))
+                    locked = bool(w.get("locked", False))
+
+                balance = "0.0"
+                if k in wallets:
+                    w = wallets[k]
+                    if "balance" in w and "error" not in w and "no_data" not in w:
+                        raw_balance = w["balance"]
+                        if isinstance(raw_balance, float):
+                            balance = f"{raw_balance:.8f}".rstrip("0").rstrip(".")
+                        elif isinstance(raw_balance, int):
+                            balance = str(raw_balance)
+                        else:
+                            balance = raw_balance
+
+                pending = "0.0"
+                if k in wallets:
+                    w = wallets[k]
+                    if "error" not in w and "no_data" not in w:
+                        ci = swap_client.ci(k)
+                        pending_amount = 0
+                        if "unconfirmed" in w and float(w["unconfirmed"]) > 0.0:
+                            pending_amount += ci.make_int(w["unconfirmed"])
+                        if "immature" in w and float(w["immature"]) > 0.0:
+                            pending_amount += ci.make_int(w["immature"])
+                        if pending_amount > 0:
+                            pending = ci.format_amount(pending_amount)
+
+                coin_entry = {
+                    "id": int(k),
+                    "name": getCoinName(k),
+                    "balance": balance,
+                    "pending": pending,
+                    "ticker": chainparams[k]["ticker"],
+                    "connection_type": v["connection_type"],
+                    "have_data": have_data,
+                    "updating": updating,
+                    "locked": locked,
+                }
+
+                ci = swap_client.ci(k)
+                if hasattr(ci, "getScanStatus"):
+                    coin_entry["scan_status"] = ci.getScanStatus()
+                if hasattr(ci, "getElectrumServer"):
+                    server = ci.getElectrumServer()
+                    if server:
+                        coin_entry["electrum_server"] = server
+                    version = ci.getDaemonVersion()
+                    if version:
+                        coin_entry["version"] = version
+                if (
+                    v["connection_type"] == "electrum"
+                    and hasattr(ci, "_backend")
+                    and ci._backend
+                    and hasattr(ci._backend, "getSyncStatus")
+                ):
+                    sync_status = ci._backend.getSyncStatus()
+                    coin_entry["electrum_synced"] = sync_status.get("synced", False)
+                    coin_entry["electrum_height"] = sync_status.get("height", 0)
+
+                if k in wallets:
+                    w = wallets[k]
+                    if "error" not in w and "no_data" not in w:
+                        if k == Coins.PART:
+                            for field in ("blind_balance", "anon_balance"):
+                                if field in w:
+                                    raw = w[field]
+                                    if isinstance(raw, float):
+                                        coin_entry[field] = f"{raw:.8f}".rstrip(
+                                            "0"
+                                        ).rstrip(".")
+                                    elif isinstance(raw, int):
+                                        coin_entry[field] = str(raw)
+                                    else:
+                                        coin_entry[field] = raw
+                        elif k == Coins.LTC:
+                            if "mweb_balance" in w:
+                                coin_entry["mweb_balance"] = w["mweb_balance"]
+                        elif k == Coins.FIRO:
+                            if "spark_balance" in w:
+                                coin_entry["spark_balance"] = w["spark_balance"]
+
+                coins_with_balances.append(coin_entry)
+
+                if k == Coins.PART:
+                    variants = [
+                        {
+                            "coin": Coins.PART_ANON,
+                            "balance_field": "anon_balance",
+                            "pending_field": "anon_pending",
+                        },
+                        {
+                            "coin": Coins.PART_BLIND,
+                            "balance_field": "blind_balance",
+                            "pending_field": "blind_unconfirmed",
+                        },
+                    ]
+
+                    for variant_info in variants:
+                        variant_balance = "0.0"
+                        variant_pending = "0.0"
+
+                        if k in wallets:
+                            w = wallets[k]
+                            if "error" not in w and "no_data" not in w:
+                                if variant_info["balance_field"] in w:
+                                    raw_balance = w[variant_info["balance_field"]]
+                                    if isinstance(raw_balance, float):
+                                        variant_balance = f"{raw_balance:.8f}".rstrip(
+                                            "0"
+                                        ).rstrip(".")
+                                    elif isinstance(raw_balance, int):
+                                        variant_balance = str(raw_balance)
+                                    else:
+                                        variant_balance = raw_balance
+
+                                if (
+                                    variant_info["pending_field"] in w
+                                    and float(w[variant_info["pending_field"]]) > 0.0
+                                ):
+                                    variant_pending = str(
+                                        w[variant_info["pending_field"]]
+                                    )
+
+                        variant_entry = {
+                            "id": int(variant_info["coin"]),
+                            "name": getCoinName(variant_info["coin"]),
+                            "balance": variant_balance,
+                            "pending": variant_pending,
+                            "ticker": chainparams[Coins.PART]["ticker"],
+                        }
+
+                        coins_with_balances.append(variant_entry)
+
+                elif k == Coins.LTC:
+                    variant_balance = "0.0"
+                    variant_pending = "0.0"
+
+                    if k in wallets:
+                        w = wallets[k]
+                        if "error" not in w and "no_data" not in w:
+                            if "mweb_balance" in w:
+                                variant_balance = w["mweb_balance"]
+
+                            pending_amount = 0
+                            if (
+                                "mweb_unconfirmed" in w
+                                and float(w["mweb_unconfirmed"]) > 0.0
+                            ):
+                                pending_amount += float(w["mweb_unconfirmed"])
+                            if "mweb_immature" in w and float(w["mweb_immature"]) > 0.0:
+                                pending_amount += float(w["mweb_immature"])
+                            if pending_amount > 0:
+                                variant_pending = f"{pending_amount:.8f}".rstrip(
+                                    "0"
+                                ).rstrip(".")
+
+                    variant_entry = {
+                        "id": int(Coins.LTC_MWEB),
+                        "name": getCoinName(Coins.LTC_MWEB),
+                        "balance": variant_balance,
+                        "pending": variant_pending,
+                        "ticker": chainparams[Coins.LTC]["ticker"],
+                    }
+
+                    coins_with_balances.append(variant_entry)
+
+        return bytes(json.dumps(coins_with_balances), "UTF-8")
+
+    except Exception as e:
+        error_data = {"error": str(e)}
+        return bytes(json.dumps(error_data), "UTF-8")
+
+
+def js_wallets(self, url_split, post_string, is_json):
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    if len(url_split) > 3:
+        ticker_str = url_split[3]
+        coin_type = getCoinIdFromTicker(ticker_str, inc_variant=True)
+
+        if len(url_split) > 4:
+            cmd = url_split[4]
+            if cmd == "withdraw":
+                return bytes(
+                    json.dumps(
+                        withdraw_coin(swap_client, coin_type, post_string, is_json)
+                    ),
+                    "UTF-8",
+                )
+            elif cmd == "nextdepositaddr":
+                return bytes(
+                    json.dumps(swap_client.cacheNewAddressForCoin(coin_type)), "UTF-8"
+                )
+            elif cmd == "createutxo":
+                post_data = getFormData(post_string, is_json)
+                ci = swap_client.ci(coin_type)
+                value = ci.make_int(get_data_entry(post_data, "value"))
+                txid_hex, new_addr = ci.createUTXO(value)
+                return bytes(
+                    json.dumps({"txid": txid_hex, "address": new_addr}), "UTF-8"
+                )
+            elif cmd == "reseed":
+                swap_client.reseedWallet(coin_type)
+                return bytes(json.dumps({"reseeded": True}), "UTF-8")
+            elif cmd == "rescan":
+                result = swap_client.rescanWalletAddresses(coin_type)
+                return bytes(json.dumps(result), "UTF-8")
+            elif cmd == "newstealthaddress":
+                if coin_type != Coins.PART:
+                    raise ValueError("Invalid coin for command")
+                return bytes(
+                    json.dumps(swap_client.ci(coin_type).getNewStealthAddress()),
+                    "UTF-8",
+                )
+            elif cmd == "newmwebaddress":
+                if coin_type not in (Coins.LTC, Coins.LTC_MWEB):
+                    raise ValueError("Invalid coin for command")
+                return bytes(
+                    json.dumps(swap_client.ci(coin_type).getNewMwebAddress()), "UTF-8"
+                )
+            elif cmd == "mwebbalance":
+                # mweb outputs left behind when sending LTC -> MWEB
+                if coin_type not in (Coins.LTC,):
+                    raise ValueError("Invalid coin for command")
+                ci = swap_client.ci(coin_type)
+                return bytes(json.dumps(ci.format_amount(ci.getMWEBBalance())), "UTF-8")
+            elif cmd == "convertmweb":
+                if coin_type not in (Coins.LTC,):
+                    raise ValueError("Invalid coin for command")
+                return bytes(
+                    json.dumps(swap_client.ci(coin_type).convertMWEBBalance()), "UTF-8"
+                )
+            elif cmd == "watchaddress":
+                post_data = getFormData(post_string, is_json)
+                address = get_data_entry(post_data, "address")
+                label = get_data_entry_or(post_data, "label", "manual_import")
+                wm = swap_client.getWalletManager()
+                if wm is None:
+                    raise ValueError("WalletManager not available")
+                wm.importWatchOnlyAddress(
+                    coin_type, address, label=label, source="manual_import"
+                )
+                return bytes(json.dumps({"success": True, "address": address}), "UTF-8")
+            elif cmd == "listaddresses":
+                wm = swap_client.getWalletManager()
+                if wm is None:
+                    raise ValueError("WalletManager not available")
+                addresses = wm.getAllAddresses(coin_type)
+                return bytes(json.dumps({"addresses": addresses}), "UTF-8")
+            elif cmd == "fixseedid":
+                root_key = swap_client.getWalletKey(coin_type, 1)
+                swap_client.storeSeedIDForCoin(root_key, coin_type)
+                swap_client.checkWalletSeed(coin_type)
+                return bytes(
+                    json.dumps({"success": True, "message": "Seed IDs updated"}),
+                    "UTF-8",
+                )
+            raise ValueError("Unknown command")
+
+        if coin_type == Coins.LTC_MWEB:
+            coin_type = Coins.LTC
+        rv = swap_client.getWalletInfo(coin_type)
+        if not rv:
+            raise ValueError(f"getWalletInfo failed for coin: {coin_type}")
+        rv.update(swap_client.getBlockchainInfo(coin_type))
+        ci = swap_client.ci(coin_type)
+        checkAddressesOwned(swap_client, ci, rv)
+        return bytes(json.dumps(rv), "UTF-8")
+
+    return bytes(json.dumps(swap_client.getWalletsInfo({"ticker_key": True})), "UTF-8")
+
+
+def js_offers(self, url_split, post_string, is_json, sent=False) -> bytes:
+    swap_client = self.server.swap_client
+
+    try:
+        swap_client.checkSystemStatus()
+    except Exception as e:
+        if isinstance(e, LockedCoinError):
+            error_msg = f"Wallet must be unlocked to view offers. Please unlock your {getCoinName(e.coinid)} wallet."
+            return bytes(json.dumps({"error": error_msg, "locked": True}), "UTF-8")
+        else:
+            return bytes(json.dumps({"error": str(e)}), "UTF-8")
+
+    offer_id = None
+    if len(url_split) > 3:
+        if url_split[3] == "new":
+            form_data = getFormData(post_string, is_json)
+            offer_id = postNewOffer(swap_client, form_data)
+            rv = {"offer_id": offer_id.hex()}
+            return bytes(json.dumps(rv), "UTF-8")
+        offer_id = bytes.fromhex(url_split[3])
+
+    with_extra_info = False
+    filters = {
+        "coin_from": -1,
+        "coin_to": -1,
+        "page_no": 1,
+        "limit": PAGE_LIMIT,
+        "sort_by": "created_at",
+        "sort_dir": "desc",
+    }
+
+    if offer_id:
+        filters["offer_id"] = offer_id
+
+    parsed_url = urllib.parse.urlparse(self.path)
+    query_params = urllib.parse.parse_qs(parsed_url.query) if parsed_url.query else {}
+
+    if "with_extra_info" in query_params:
+        with_extra_info = toBool(query_params["with_extra_info"][0])
+
+    if post_string != "":
+        post_data = getFormData(post_string, is_json)
+        filters["coin_from"] = setCoinFilter(post_data, "coin_from")
+        filters["coin_to"] = setCoinFilter(post_data, "coin_to")
+
+        if have_data_entry(post_data, "sort_by"):
+            sort_by = get_data_entry(post_data, "sort_by")
+            ensure(sort_by in ["created_at", "rate"], "Invalid sort by")
+            filters["sort_by"] = sort_by
+        if have_data_entry(post_data, "sort_dir"):
+            sort_dir = get_data_entry(post_data, "sort_dir")
+            ensure(sort_dir in ["asc", "desc"], "Invalid sort dir")
+            filters["sort_dir"] = sort_dir
+
+        if have_data_entry(post_data, "offset"):
+            filters["offset"] = int(get_data_entry(post_data, "offset"))
+        if have_data_entry(post_data, "limit"):
+            filters["limit"] = int(get_data_entry(post_data, "limit"))
+            ensure(filters["limit"] > 0, "Invalid limit")
+        if have_data_entry(post_data, "active"):
+            filters["active"] = get_data_entry(post_data, "active")
+        if have_data_entry(post_data, "include_sent"):
+            filters["include_sent"] = toBool(get_data_entry(post_data, "include_sent"))
+
+        if have_data_entry(post_data, "with_extra_info"):
+            with_extra_info = toBool(get_data_entry(post_data, "with_extra_info"))
+
+    offers = swap_client.listOffers(sent, filters)
+    rv = []
+    for o in offers:
+        ci_from = swap_client.ci(o.coin_from)
+        ci_to = swap_client.ci(o.coin_to)
+        offer_data = {
+            "swap_type": o.swap_type,
+            "addr_from": o.addr_from,
+            "addr_to": o.addr_to,
+            "offer_id": o.offer_id.hex(),
+            "created_at": o.created_at,
+            "expire_at": o.expire_at,
+            "coin_from": ci_from.coin_name(),
+            "coin_to": ci_to.coin_name(),
+            "amount_from": ci_from.format_amount(o.amount_from),
+            "amount_to": ci_to.format_amount(
+                (o.amount_from * o.rate) // ci_from.COIN()
+            ),
+            "rate": ci_to.format_amount(o.rate),
+            "min_bid_amount": ci_from.format_amount(o.min_bid_amount),
+            "is_expired": o.expire_at <= swap_client.getTime(),
+            "is_own_offer": o.was_sent,
+            "is_revoked": True if o.active_ind == 2 else False,
+            "is_public": o.addr_to == swap_client.network_addr
+            or o.addr_to.strip() == "",
+            "message_nets": o.message_nets,
+        }
+        offer_data["auto_accept_type"] = getattr(o, "auto_accept_type", 0)
+
+        try:
+            tracking = swap_client.getOfferTrackingSummary(o)
+        except Exception as e:
+            swap_client.log.debug(
+                f"getOfferTrackingSummary failed for {o.offer_id.hex()}: {e}"
+            )
+            tracking = None
+        if tracking is not None:
+            offer_data["tracking_mode"] = tracking["mode"]
+            offer_data["tracking_mode_str"] = tracking["mode_str"]
+            offer_data["tracking_exhausted"] = tracking["exhausted"]
+            offer_data["tracking_fills_completed"] = tracking["fills_completed"]
+            offer_data["tracking_max_fills"] = tracking["max_fills"]
+            offer_data["tracking_filled_amount"] = ci_from.format_amount(
+                tracking["filled_amount"]
+            )
+            offer_data["tracking_total_budget"] = ci_from.format_amount(
+                tracking["total_budget"]
+            )
+            offer_data["tracking_in_flight_amount"] = ci_from.format_amount(
+                tracking["in_flight_amount"]
+            )
+            if tracking["remaining"] is not None:
+                offer_data["tracking_remaining"] = ci_from.format_amount(
+                    tracking["remaining"]
+                )
+            if tracking["min_wallet_reserve"] > 0:
+                offer_data["tracking_min_wallet_reserve"] = ci_from.format_amount(
+                    tracking["min_wallet_reserve"]
+                )
+
+        if with_extra_info:
+            offer_data["amount_negotiable"] = o.amount_negotiable
+            offer_data["rate_negotiable"] = o.rate_negotiable
+            if o.swap_type == SwapTypes.XMR_SWAP:
+                _, xmr_offer = swap_client.getXmrOffer(o.offer_id)
+                offer_data["lock_time_1"] = xmr_offer.lock_time_1
+                offer_data["lock_time_2"] = xmr_offer.lock_time_2
+
+                offer_data["feerate_from"] = xmr_offer.a_fee_rate
+                offer_data["feerate_to"] = xmr_offer.b_fee_rate
+            else:
+                offer_data["feerate_from"] = o.from_feerate
+                offer_data["feerate_to"] = o.to_feerate
+
+            offer_data["automation_strat_id"] = getattr(o, "auto_accept_type", 0)
+
+            if o.was_sent:
+                try:
+                    strategy = swap_client.getLinkedStrategy(Concepts.OFFER, o.offer_id)
+                    if strategy:
+                        offer_data["local_automation_strat_id"] = strategy[0]
+                        swap_client.log.debug(
+                            f"Found local automation strategy for own offer {o.offer_id.hex()}: {strategy[0]}"
+                        )
+                    else:
+                        offer_data["local_automation_strat_id"] = 0
+                except Exception as e:
+                    swap_client.log.debug(
+                        f"Error getting local automation strategy for offer {o.offer_id.hex()}: {e}"
+                    )
+                    offer_data["local_automation_strat_id"] = 0
+
+        rv.append(offer_data)
+    return bytes(json.dumps(rv), "UTF-8")
+
+
+def js_sentoffers(self, url_split, post_string, is_json) -> bytes:
+    return js_offers(self, url_split, post_string, is_json, True)
+
+
+def parseBidFilters(post_data):
+    offer_id = None
+    filters = {}
+
+    if have_data_entry(post_data, "offer_id"):
+        offer_id = bytes.fromhex(get_data_entry(post_data, "offer_id"))
+        ensure(len(offer_id) == 28, "Invalid offer id size")
+
+    if have_data_entry(post_data, "sort_by"):
+        sort_by = get_data_entry(post_data, "sort_by")
+        ensure(
+            sort_by
+            in [
+                "created_at",
+            ],
+            "Invalid sort by",
+        )
+        filters["sort_by"] = sort_by
+    if have_data_entry(post_data, "sort_dir"):
+        sort_dir = get_data_entry(post_data, "sort_dir")
+        ensure(sort_dir in ["asc", "desc"], "Invalid sort dir")
+        filters["sort_dir"] = sort_dir
+
+    if have_data_entry(post_data, "offset"):
+        filters["offset"] = int(get_data_entry(post_data, "offset"))
+    if have_data_entry(post_data, "limit"):
+        filters["limit"] = int(get_data_entry(post_data, "limit"))
+        ensure(filters["limit"] > 0 and filters["limit"] <= PAGE_LIMIT, "Invalid limit")
+
+    if have_data_entry(post_data, "with_available_or_active"):
+        filters["with_available_or_active"] = toBool(
+            get_data_entry(post_data, "with_available_or_active")
+        )
+    elif have_data_entry(post_data, "with_expired"):
+        filters["with_expired"] = toBool(get_data_entry(post_data, "with_expired"))
+
+    if have_data_entry(post_data, "with_extra_info"):
+        filters["with_extra_info"] = toBool(
+            get_data_entry(post_data, "with_extra_info")
+        )
+
+    return offer_id, filters
+
+
+def formatBids(swap_client, bids, filters) -> bytes:
+    with_extra_info = filters.get("with_extra_info", False)
+    rv = []
+    plan_targets = {}
+    for b in bids:
+        ci_from = swap_client.ci(b[9])
+        offer = swap_client.getOffer(b[3])
+        ci_to = swap_client.ci(offer.coin_to) if offer else None
+
+        bid_rate: int = 0 if b[10] is None else b[10]
+        amount_to = None
+        if ci_to:
+            amount_to_int = (b[4] * bid_rate + ci_from.COIN() - 1) // ci_from.COIN()
+            amount_to = ci_to.format_amount(amount_to_int)
+
+        bid_data = {
+            "bid_id": b[2].hex(),
+            "offer_id": b[3].hex(),
+            "created_at": b[0],
+            "expire_at": b[1],
+            "coin_from": ci_from.coin_name(),
+            "coin_to": ci_to.coin_name() if ci_to else "Unknown",
+            "amount_from": ci_from.format_amount(b[4]),
+            "amount_to": amount_to,
+            "bid_rate": swap_client.ci(b[14]).format_amount(bid_rate),
+            "bid_state": strBidState(b[5]),
+            "addr_from": b[11],
+            "addr_to": offer.addr_to if offer else None,
+            "plan_id": b[15].hex() if b[15] else None,
+        }
+
+        if b[15] is not None:
+            plan_id_hex = b[15].hex()
+            if plan_id_hex not in plan_targets:
+                raw = swap_client.getStringKV(f"plan_target:{plan_id_hex}")
+                plan_targets[plan_id_hex] = (
+                    ci_from.format_amount(int(raw)) if raw is not None else None
+                )
+            bid_data["plan_target"] = plan_targets[plan_id_hex]
+
+        if with_extra_info:
+            bid_data.update(
+                {"tx_state_a": strTxState(b[7]), "tx_state_b": strTxState(b[8])}
+            )
+        rv.append(bid_data)
+    return bytes(json.dumps(rv), "UTF-8")
+
+
+def parseMultiBidRequest(swap_client, post_data):
+    coin_from = Coins(getCoinType(get_data_entry(post_data, "coin_from")))
+    coin_to = Coins(getCoinType(get_data_entry(post_data, "coin_to")))
+    ci_from = swap_client.ci(coin_from)
+    ci_to = swap_client.ci(coin_to)
+
+    have_receive: bool = have_data_entry(post_data, "receive_amount")
+    have_spend: bool = have_data_entry(post_data, "spend_amount")
+    ensure(
+        have_receive != have_spend,
+        "Requires one of receive_amount or spend_amount",
+    )
+
+    if have_receive:
+        mode = FILL_RECEIVE
+        target = inputAmount(get_data_entry(post_data, "receive_amount"), ci_from)
+    else:
+        mode = FILL_SPEND
+        target = inputAmount(get_data_entry(post_data, "spend_amount"), ci_to)
+
+    max_bids = int(get_data_entry_or(post_data, "max_bids", DEFAULT_MAX_BIDS))
+    ensure(max_bids >= 1, "max_bids must be at least 1")
+    batch_cap = ci_to.max_batched_lock_outputs()
+    if batch_cap is not None:
+        max_bids = min(max_bids, batch_cap)
+
+    return {
+        "coin_from": coin_from,
+        "coin_to": coin_to,
+        "mode": mode,
+        "target": target,
+        "anchor": get_data_entry_or(post_data, "anchor", ANCHOR_MARKET),
+        "slip_percent": float(
+            get_data_entry_or(post_data, "slip_percent", DEFAULT_SLIP_PERCENT)
+        ),
+        "max_bids": max_bids,
+        "allow_known_only": toBool(
+            get_data_entry_or(post_data, "allow_known_only", "false")
+        ),
+        "allow_self_bids": toBool(
+            get_data_entry_or(post_data, "allow_self_bids", "false")
+        ),
+        "manual_offers": [
+            bytes.fromhex(offer_id)
+            for offer_id in get_data_entry_or(post_data, "manual_offers", [])
+        ],
+    }
+
+
+def js_bids_plan(self, post_string: str, is_json: bool) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = getFormData(post_string, is_json)
+    args = parseMultiBidRequest(swap_client, post_data)
+
+    plan, market_rate, limit_rate = planMultiBid(swap_client, **args)
+
+    rv = describePlan(
+        swap_client,
+        args["coin_from"],
+        args["coin_to"],
+        args["mode"],
+        plan,
+        market_rate,
+        limit_rate,
+    )
+    return bytes(json.dumps(rv), "UTF-8")
+
+
+def js_bids_bulk(self, post_string: str, is_json: bool) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = getFormData(post_string, is_json)
+
+    legs_in = get_data_entry(post_data, "legs")
+    if isinstance(legs_in, str):
+        legs_in = json.loads(legs_in)
+    ensure(isinstance(legs_in, list) and len(legs_in) > 0, "Requires a list of legs")
+
+    legs = []
+    coin_from = None
+    coin_to = None
+    for leg in legs_in:
+        ensure(
+            isinstance(leg, dict) and "offer_id" in leg and "amount" in leg,
+            "Each leg requires an offer_id and an amount",
+        )
+        offer_id = bytes.fromhex(leg["offer_id"])
+        ensure(len(offer_id) == 28, "Invalid offer_id")
+        offer = swap_client.getOffer(offer_id)
+        ensure(offer, "Offer not found")
+        if coin_from is None:
+            coin_from, coin_to = offer.coin_from, offer.coin_to
+        ci_from = swap_client.ci(offer.coin_from)
+        legs.append(
+            {
+                "offer_id": offer_id,
+                "amount": inputAmount(leg["amount"], ci_from),
+            }
+        )
+
+    valid_for_seconds: int = DEFAULT_BID_VALID_SECONDS
+    if have_data_entry(post_data, "validmins"):
+        valid_for_seconds = int(get_data_entry(post_data, "validmins")) * 60
+    elif have_data_entry(post_data, "valid_for_seconds"):
+        valid_for_seconds = int(get_data_entry(post_data, "valid_for_seconds"))
+
+    addr_from = None
+    if have_data_entry(post_data, "addr_from"):
+        addr_from = get_data_entry(post_data, "addr_from")
+        if addr_from == "-1":
+            addr_from = None
+
+    plan_id = None
+    if have_data_entry(post_data, "plan_id"):
+        plan_id = bytes.fromhex(get_data_entry(post_data, "plan_id"))
+        ensure(len(plan_id) == PLAN_ID_LENGTH, "Invalid plan_id")
+
+    leg_timeout_seconds = None
+    if have_data_entry(post_data, "plan_leg_timeout"):
+        leg_timeout_seconds = int(get_data_entry(post_data, "plan_leg_timeout")) * 60
+        ensure(
+            leg_timeout_seconds >= MIN_LEG_TIMEOUT_SECONDS,
+            f"plan_leg_timeout must be at least {MIN_LEG_TIMEOUT_SECONDS // 60} minutes",
+        )
+        ensure(
+            leg_timeout_seconds <= MAX_CONFIRM_WAIT_SECONDS,
+            f"plan_leg_timeout must be at most {MAX_CONFIRM_WAIT_SECONDS // 60} minutes",
+        )
+
+    placed, failed, plan_id = placeMultiBid(
+        swap_client,
+        legs,
+        valid_for_seconds=valid_for_seconds,
+        addr_from=addr_from,
+        plan_id=plan_id,
+        leg_timeout_seconds=leg_timeout_seconds,
+    )
+
+    ci_from = swap_client.ci(coin_from)
+    ci_to = swap_client.ci(coin_to)
+    for entry in placed + failed:
+        entry["amount"] = ci_from.format_amount(entry["amount"])
+    for entry in placed:
+        entry["rate"] = ci_to.format_amount(entry["rate"])
+
+    return bytes(
+        json.dumps({"placed": placed, "failed": failed, "plan_id": plan_id.hex()}),
+        "UTF-8",
+    )
+
+
+def js_bids(self, url_split, post_string: str, is_json: bool) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    if len(url_split) > 3:
+        if url_split[3] == "new":
+            post_data = getFormData(post_string, is_json)
+
+            offer_id = bytes.fromhex(get_data_entry(post_data, "offer_id"))
+            ensure(len(offer_id) == 28, "Invalid offer id size")
+
+            offer = swap_client.getOffer(offer_id)
+            ensure(offer, "Offer not found")
+
+            ci_from = swap_client.ci(offer.coin_from)
+            ci_to = swap_client.ci(offer.coin_to)
+            reverse_bid: bool = swap_client.is_reverse_ads_bid(
+                offer.coin_from, offer.coin_to
+            )
+            amount_from = inputAmount(get_data_entry(post_data, "amount_from"), ci_from)
+
+            addr_from = None
+            if have_data_entry(post_data, "addr_from"):
+                addr_from = get_data_entry(post_data, "addr_from")
+                if addr_from == "-1":
+                    addr_from = None
+
+            if have_data_entry(post_data, "validmins"):
+                valid_for_seconds = int(get_data_entry(post_data, "validmins")) * 60
+            elif have_data_entry(post_data, "valid_for_seconds"):
+                valid_for_seconds = int(get_data_entry(post_data, "valid_for_seconds"))
+            else:
+                valid_for_seconds = 10 * 60
+
+            extra_options = {
+                "valid_for_seconds": valid_for_seconds,
+            }
+
+            if have_data_entry(post_data, "amount_to"):
+                extra_options["amount_to"] = inputAmount(
+                    get_data_entry(post_data, "amount_to"), ci_to
+                )
+            elif have_data_entry(post_data, "bid_rate"):
+                extra_options["bid_rate"] = ci_to.make_int(
+                    get_data_entry(post_data, "bid_rate"), r=1
+                )
+            if have_data_entry(post_data, "bid_amount"):
+                amount_from = inputAmount(
+                    get_data_entry(post_data, "bid_amount"), ci_from
+                )
+
+            if have_data_entry(post_data, "prefunded_bid_tx"):
+                extra_options["prefunded_tx"] = bytes.fromhex(
+                    get_data_entry(post_data, "prefunded_bid_tx")
+                )
+            if have_data_entry(post_data, "bypass_fee_checks"):
+                extra_options["bypass_fee_validation"] = toBool(
+                    get_data_entry(post_data, "bypass_fee_checks")
+                )
+            if have_data_entry(post_data, "destination_address"):
+                if reverse_bid:
+                    extra_options["dest_bl"] = get_data_entry(
+                        post_data, "destination_address"
+                    )
+                else:
+                    extra_options["dest_af"] = ci_from.decodeAddress(
+                        get_data_entry(post_data, "destination_address")
+                    )
+            if have_data_entry(post_data, "destination_script"):
+                if reverse_bid:
+                    raise ValueError("TODO")
+                extra_options["dest_af"] = bytes.fromhex(
+                    get_data_entry(post_data, "destination_script")
+                )
+
+            if offer.swap_type == SwapTypes.XMR_SWAP:
+                bid_id = swap_client.postXmrBid(
+                    offer_id,
+                    amount_from,
+                    addr_send_from=addr_from,
+                    extra_options=extra_options,
+                )
+            else:
+                bid_id = swap_client.postBid(
+                    offer_id,
+                    amount_from,
+                    addr_send_from=addr_from,
+                    extra_options=extra_options,
+                )
+
+            if have_data_entry(post_data, "debugind") and swap_client.debug:
+                main_debug_ind: bool = toBool(
+                    get_data_entry_or(post_data, "maindebugind", True)
+                )
+                swap_client.setBidDebugInd(
+                    bid_id,
+                    int(get_data_entry(post_data, "debugind")),
+                    add_to_bid=main_debug_ind,
+                )
+
+            rv = {"bid_id": bid_id.hex()}
+            return bytes(json.dumps(rv), "UTF-8")
+
+        if url_split[3] == "plan":
+            return js_bids_plan(self, post_string, is_json)
+
+        if url_split[3] == "bulk":
+            return js_bids_bulk(self, post_string, is_json)
+
+        bid_id = bytes.fromhex(url_split[3])
+        ensure(len(bid_id) == 28, "Invalid bid id size")
+
+        show_txns: bool = False
+        with_events: bool = False
+        if post_string != "":
+            post_data = getFormData(post_string, is_json)
+            if have_data_entry(post_data, "accept"):
+                swap_client.acceptBid(bid_id)
+            elif have_data_entry(post_data, "abandon"):
+                swap_client.abandonBid(bid_id)
+            elif have_data_entry(post_data, "debugind") and swap_client.debug:
+                main_debug_ind: bool = toBool(
+                    get_data_entry_or(post_data, "maindebugind", True)
+                )
+                swap_client.setBidDebugInd(
+                    bid_id,
+                    int(get_data_entry(post_data, "debugind")),
+                    add_to_bid=main_debug_ind,
+                )
+
+            if have_data_entry(post_data, "show_extra"):
+                show_txns = True
+            if have_data_entry(post_data, "with_events"):
+                with_events = True
+
+        bid, xmr_swap, offer, xmr_offer, events = swap_client.getXmrBidAndOffer(bid_id)
+        if bid is None:
+            swap_client.log.debug(f"js_bids: Unknown bid id {bid_id.hex()}")
+            return bytes(json.dumps({"error": "Unknown bid id"}), "UTF-8")
+
+        if post_string != "":
+            if have_data_entry(post_data, "chainbkeysplit"):
+                return bytes(
+                    json.dumps(
+                        {
+                            "splitkey": getChainBSplitKey(
+                                swap_client, bid, xmr_swap, offer
+                            )
+                        }
+                    ),
+                    "UTF-8",
+                )
+            elif have_data_entry(post_data, "spendchainblocktx"):
+                remote_key = get_data_entry(post_data, "remote_key")
+                return bytes(
+                    json.dumps(
+                        {
+                            "txid": recoverNoScriptTxnWithKey(
+                                swap_client, bid_id, remote_key
+                            ).hex()
+                        }
+                    ),
+                    "UTF-8",
+                )
+
+        if len(url_split) > 4 and url_split[4] == "states":
+            old_states = listOldBidStates(bid)
+
+            if with_events:
+                new_list = []
+                for entry in old_states:
+                    entry_list = list(entry)
+                    entry_list.insert(1, "state")
+                    new_list.append(entry_list)
+                for event in events:
+                    new_list.append([event["at"], "event", event["desc"]])
+                old_states = sorted(new_list, key=lambda x: x[0])
+
+            return bytes(json.dumps(old_states), "UTF-8")
+
+        edit_bid: bool = False
+        data = describeBid(
+            swap_client,
+            bid,
+            xmr_swap,
+            offer,
+            xmr_offer,
+            events,
+            edit_bid,
+            show_txns,
+            for_api=True,
+        )
+        return bytes(json.dumps(data), "UTF-8")
+
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+    offer_id, filters = parseBidFilters(post_data)
+
+    bids = swap_client.listBids(offer_id=offer_id, filters=filters)
+    return formatBids(swap_client, bids, filters)
+
+
+def js_sentbids(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+
+    try:
+        swap_client.checkSystemStatus()
+    except Exception as e:
+        if isinstance(e, LockedCoinError):
+            error_msg = f"Wallet must be unlocked to view bids. Please unlock your {getCoinName(e.coinid)} wallet."
+            return bytes(json.dumps({"error": error_msg, "locked": True}), "UTF-8")
+        else:
+            return bytes(json.dumps({"error": str(e)}), "UTF-8")
+
+    post_data = getFormData(post_string, is_json)
+    offer_id, filters = parseBidFilters(post_data)
+
+    bids = swap_client.listBids(sent=True, offer_id=offer_id, filters=filters)
+    return formatBids(swap_client, bids, filters)
+
+
+def js_network(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    return bytes(json.dumps(swap_client.get_network_info()), "UTF-8")
+
+
+def js_networks(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    return bytes(json.dumps(swap_client.getNetworksInfo()), "UTF-8")
+
+
+def js_revokeoffer(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    offer_id = bytes.fromhex(url_split[3])
+    ensure(len(offer_id) == 28, "Invalid offer id size")
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+    refuse_if_negotiating: bool = toBool(
+        get_data_entry_or(post_data, "refuse_if_negotiating", False)
+    )
+    swap_client.revokeOffer(offer_id, refuse_if_negotiating=refuse_if_negotiating)
+    return bytes(json.dumps({"revoked_offer": offer_id.hex()}), "UTF-8")
+
+
+def js_smsgaddresses(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+
+    if len(url_split) > 3:
+        mode: str = url_split[3]
+        if mode == "new":
+            addressnote = get_data_entry_or(post_data, "addressnote", "")
+            new_addr, pubkey = swap_client.newSMSGAddress(addressnote=addressnote)
+            return bytes(
+                json.dumps({"new_address": new_addr, "pubkey": pubkey}), "UTF-8"
+            )
+        if mode == "add":
+            addressnote = get_data_entry_or(post_data, "addressnote", "")
+            pubkey_hex = get_data_entry(post_data, "addresspubkey")
+            added_address = swap_client.addSMSGAddress(pubkey_hex, addressnote)
+            return bytes(
+                json.dumps({"added_address": added_address, "pubkey": pubkey_hex}),
+                "UTF-8",
+            )
+        elif mode == "edit":
+            address = get_data_entry(post_data, "address")
+            activeind = int(get_data_entry(post_data, "active_ind"))
+            addressnote = get_data_entry_or(post_data, "addressnote", "")
+            new_addr = swap_client.editSMSGAddress(address, activeind, addressnote)
+            return bytes(json.dumps({"edited_address": address}), "UTF-8")
+        elif mode == "disableall":
+            rv = swap_client.disableAllSMSGAddresses()
+            return bytes(json.dumps(rv), "UTF-8")
+
+    filters = {
+        "exclude_inactive": post_data.get("exclude_inactive", True),
+    }
+    use_type_map = {
+        "offer_send_from": AddressTypes.OFFER,
+        "offer_send_to": AddressTypes.SEND_OFFER,
+        "bid": AddressTypes.BID,
+    }
+    if have_data_entry(post_data, "use_type"):
+        use_type_str = get_data_entry(post_data, "use_type")
+        if use_type_str not in use_type_map:
+            raise ValueError("Unknown address type")
+        filters["addr_type"] = int(use_type_map[use_type_str])
+    if have_data_entry(post_data, "search"):
+        search_str = get_data_entry(post_data, "search").strip()
+        if search_str:
+            filters["search"] = search_str
+    if have_data_entry(post_data, "limit"):
+        limit = int(get_data_entry(post_data, "limit"))
+        ensure(0 < limit <= 200, "Invalid limit")
+        filters["limit"] = limit
+    return bytes(json.dumps(swap_client.listAllSMSGAddresses(filters)), "UTF-8")
+
+
+def js_rates(self, url_split, post_string, is_json) -> bytes:
+    post_data = getFormData(post_string, is_json)
+
+    sc = self.server.swap_client
+    coin_from = get_data_entry(post_data, "coin_from")
+    coin_to = get_data_entry(post_data, "coin_to")
+    return bytes(json.dumps(sc.lookupRates(coin_from, coin_to)), "UTF-8")
+
+
+def js_rates_list(self, url_split, query_string, is_json) -> bytes:
+    # Works for both POST (params in the body) and GET (params in the URL query).
+    # GET query strings are no longer promoted into the body for /json routes, so
+    # fall back to reading the URL query directly when there is no body.
+    get_data = urllib.parse.parse_qs(query_string)
+    if not get_data:
+        get_data = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+
+    sc = self.server.swap_client
+    coin_from = getCoinType(get_data["from"][0])
+    coin_to = getCoinType(get_data["to"][0])
+    return bytes(json.dumps(sc.lookupRates(coin_from, coin_to, True)), "UTF-8")
+
+
+def js_rate(self, url_split, post_string, is_json) -> bytes:
+    post_data = getFormData(post_string, is_json)
+
+    sc = self.server.swap_client
+    coin_from = getCoinType(get_data_entry(post_data, "coin_from"))
+    ci_from = sc.ci(coin_from)
+    coin_to = getCoinType(get_data_entry(post_data, "coin_to"))
+    ci_to = sc.ci(coin_to)
+
+    # Set amount to if rate is provided
+    rate = get_data_entry_or(post_data, "rate", None)
+    if rate is not None:
+        amt_from_str = get_data_entry_or(post_data, "amt_from", None)
+        amt_to_str = get_data_entry_or(post_data, "amt_to", None)
+
+        if amt_from_str is not None:
+            rate = ci_to.make_int(rate, r=1)
+            amt_from = inputAmount(amt_from_str, ci_from)
+            amount_to_int = (amt_from * rate + ci_from.COIN() - 1) // ci_from.COIN()
+            amount_to = ci_to.format_amount(amount_to_int)
+            return bytes(json.dumps({"amount_to": amount_to}), "UTF-8")
+        if amt_to_str is not None:
+            rate = ci_from.make_int(1.0 / float(rate), r=1)
+            amt_to = inputAmount(amt_to_str, ci_to)
+            amount_from_int = (amt_to * rate + ci_to.COIN() - 1) // ci_to.COIN()
+            amount_from = ci_from.format_amount(amount_from_int)
+            return bytes(json.dumps({"amount_from": amount_from}), "UTF-8")
+
+    amt_from: int = inputAmount(get_data_entry(post_data, "amt_from"), ci_from)
+    amt_to: int = inputAmount(get_data_entry(post_data, "amt_to"), ci_to)
+
+    rate: int = ci_to.format_amount(ci_from.make_int(amt_to / amt_from, r=1))
+    return bytes(json.dumps({"rate": rate}), "UTF-8")
+
+
+def js_offer_fee_estimate(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+
+    post_data = getFormData(post_string, is_json)
+
+    coin_from = getCoinType(get_data_entry(post_data, "coin_from"))
+    coin_to = getCoinType(get_data_entry(post_data, "coin_to"))
+    ci_from = swap_client.ci(coin_from)
+
+    rv = {"coin_from": ci_from.ticker(), "fee": None}
+    try:
+        reverse_bid: bool = swap_client.is_reverse_ads_bid(coin_from, coin_to)
+        conf_target = (
+            ci_from.getConfTarget() if coin_from not in (Coins.XMR, Coins.WOW) else 2
+        )
+        from_fee_override, fee_src = swap_client.getFeeRateForCoin(
+            coin_from, conf_target
+        )
+        fee_rate_int = ci_from.make_int(from_fee_override, r=1)
+        lock_spend_tx_vsize = (
+            ci_from.xmr_swap_b_lock_spend_tx_vsize()
+            if reverse_bid
+            else ci_from.xmr_swap_a_lock_spend_tx_vsize()
+        )
+        lock_spend_tx_fee = ci_from.make_int(
+            fee_rate_int * lock_spend_tx_vsize / 1000, r=1
+        )
+        rv["fee"] = ci_from.format_amount(lock_spend_tx_fee // ci_from.COIN())
+        rv["fee_rate"] = ci_from.format_amount(fee_rate_int)
+        rv["fee_src"] = fee_src
+    except Exception as e:
+        if swap_client.debug:
+            swap_client.log.warning(f"offer_fee_estimate failed: {e}")
+        rv["error"] = "Fee estimate unavailable"
+    return bytes(json.dumps(rv), "UTF-8")
+
+
+def js_index(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+
+    try:
+        swap_client.checkSystemStatus()
+    except Exception as e:
+        if isinstance(e, LockedCoinError):
+            error_msg = f"Wallet must be unlocked to view summary. Please unlock your {getCoinName(e.coinid)} wallet."
+            return bytes(json.dumps({"error": error_msg, "locked": True}), "UTF-8")
+        else:
+            return bytes(json.dumps({"error": str(e)}), "UTF-8")
+
+    return bytes(json.dumps(swap_client.getSummary()), "UTF-8")
+
+
+def js_generatenotification(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+
+    if not swap_client.debug:
+        raise ValueError("Debug mode not active.")
+
+    r = random.randint(0, 4)
+    if r == 0:
+        swap_client.notify(
+            NT.OFFER_RECEIVED,
+            {
+                "offer_id": random.randbytes(28).hex(),
+                "coin_from": 2,
+                "coin_to": 6,
+                "amount_from": 100000000,
+                "amount_to": 15500000000000,
+                "rate": 15500000000000,
+            },
+        )
+    elif r == 1:
+        swap_client.notify(
+            NT.BID_RECEIVED,
+            {
+                "type": "atomic",
+                "bid_id": random.randbytes(28).hex(),
+                "offer_id": random.randbytes(28).hex(),
+                "coin_from": 2,
+                "coin_to": 6,
+                "amount_from": 100000000,
+                "amount_to": 15500000000000,
+                "bid_amount": 50000000,
+                "bid_amount_to": 7750000000000,
+                "rate": 15500000000000,
+            },
+        )
+    elif r == 2:
+        swap_client.notify(NT.BID_ACCEPTED, {"bid_id": random.randbytes(28).hex()})
+    elif r == 3:
+        swap_client.notify(
+            NT.BID_RECEIVED,
+            {
+                "type": "ads",
+                "bid_id": random.randbytes(28).hex(),
+                "offer_id": random.randbytes(28).hex(),
+                "coin_from": 1,
+                "coin_to": 3,
+                "amount_from": 500000000,
+                "amount_to": 100000000,
+                "bid_amount": 250000000,
+                "bid_amount_to": 50000000,
+                "rate": 20000000,
+            },
+        )
+    elif r == 4:
+        swap_client.notify(NT.SWAP_COMPLETED, {"bid_id": random.randbytes(28).hex()})
+
+    return bytes(json.dumps({"type": r}), "UTF-8")
+
+
+def js_checkupdates(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    from basicswap import __version__
+
+    if not swap_client.settings.get("check_updates", True):
+        return bytes(
+            json.dumps({"error": "Update checking is disabled in settings"}), "UTF-8"
+        )
+
+    import time
+
+    now = time.time()
+    last_manual_check = getattr(swap_client, "_last_manual_update_check", 0)
+
+    if not swap_client.debug and (now - last_manual_check) < 3600:
+        remaining = int(3600 - (now - last_manual_check))
+        return bytes(
+            json.dumps(
+                {
+                    "error": f"Please wait {remaining // 60} minutes before checking again"
+                }
+            ),
+            "UTF-8",
+        )
+
+    swap_client._last_manual_update_check = now
+    swap_client.log.info("Manual update check requested via web interface")
+
+    swap_client.checkForUpdates()
+
+    if swap_client._update_available:
+        swap_client.log.info(
+            f"Manual check result: Update available v{swap_client._latest_version} (current: v{__version__})"
+        )
+    else:
+        swap_client.log.info(f"Manual check result: Up to date (v{__version__})")
+
+    return bytes(
+        json.dumps(
+            {
+                "message": "Update check completed",
+                "current_version": __version__,
+                "latest_version": swap_client._latest_version,
+                "update_available": swap_client._update_available,
+            }
+        ),
+        "UTF-8",
+    )
+
+
+def js_notifications(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+
+    return bytes(json.dumps(swap_client.getNotifications()), "UTF-8")
+
+
+def js_updatestatus(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    from basicswap import __version__
+
+    return bytes(
+        json.dumps(
+            {
+                "update_available": swap_client._update_available,
+                "current_version": __version__,
+                "latest_version": swap_client._latest_version,
+                "release_url": (
+                    f"https://github.com/basicswap/basicswap/releases/tag/v{swap_client._latest_version}"
+                    if swap_client._latest_version
+                    else None
+                ),
+                "release_notes": (
+                    f"New version v{swap_client._latest_version} is available. Click to view details on GitHub."
+                    if swap_client._latest_version
+                    else None
+                ),
+            }
+        ),
+        "UTF-8",
+    )
+
+
+def js_identities(self, url_split, post_string: str, is_json: bool) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+
+    filters = {
+        "page_no": 1,
+        "limit": PAGE_LIMIT,
+        "sort_by": "created_at",
+        "sort_dir": "desc",
+    }
+
+    if len(url_split) > 3:
+        address = url_split[3]
+        filters["address"] = address
+
+    if post_string != "":
+        post_data = getFormData(post_string, is_json)
+
+        if have_data_entry(post_data, "sort_by"):
+            sort_by = get_data_entry(post_data, "sort_by")
+            ensure(sort_by in ["created_at", "rate"], "Invalid sort by")
+            filters["sort_by"] = sort_by
+        if have_data_entry(post_data, "sort_dir"):
+            sort_dir = get_data_entry(post_data, "sort_dir")
+            ensure(sort_dir in ["asc", "desc"], "Invalid sort dir")
+            filters["sort_dir"] = sort_dir
+
+        if have_data_entry(post_data, "offset"):
+            filters["offset"] = int(get_data_entry(post_data, "offset"))
+        if have_data_entry(post_data, "limit"):
+            filters["limit"] = int(get_data_entry(post_data, "limit"))
+            ensure(
+                filters["limit"] > 0 and filters["limit"] <= PAGE_LIMIT, "Invalid limit"
+            )
+
+        set_data = {}
+        if have_data_entry(post_data, "set_label"):
+            set_data["label"] = get_data_entry(post_data, "set_label")
+        if have_data_entry(post_data, "set_automation_override"):
+            set_data["automation_override"] = get_data_entry(
+                post_data, "set_automation_override"
+            )
+        if have_data_entry(post_data, "set_visibility_override"):
+            set_data["visibility_override"] = get_data_entry(
+                post_data, "set_visibility_override"
+            )
+        if have_data_entry(post_data, "set_note"):
+            set_data["note"] = get_data_entry(post_data, "set_note")
+
+        if set_data:
+            ensure("address" in filters, "Must provide an address to modify data")
+            swap_client.setIdentityData(filters, set_data)
+
+    rv = swap_client.listIdentities(filters)
+    if "address" in filters:
+        rv = {} if len(rv) < 1 else rv[0]
+    return bytes(json.dumps(rv), "UTF-8")
+
+
+def js_automationstrategies(self, url_split, post_string: str, is_json: bool) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+
+    filters = {
+        "page_no": 1,
+        "limit": PAGE_LIMIT,
+        "sort_by": "created_at",
+        "sort_dir": "desc",
+    }
+
+    strat_id = int(url_split[3]) if len(url_split) > 3 else None
+
+    if post_string != "":
+        post_data = getFormData(post_string, is_json)
+
+        if have_data_entry(post_data, "sort_by"):
+            sort_by = get_data_entry(post_data, "sort_by")
+            ensure(sort_by in ["created_at", "rate"], "Invalid sort by")
+            filters["sort_by"] = sort_by
+        if have_data_entry(post_data, "sort_dir"):
+            sort_dir = get_data_entry(post_data, "sort_dir")
+            ensure(sort_dir in ["asc", "desc"], "Invalid sort dir")
+            filters["sort_dir"] = sort_dir
+
+        if have_data_entry(post_data, "offset"):
+            filters["offset"] = int(get_data_entry(post_data, "offset"))
+        if have_data_entry(post_data, "limit"):
+            filters["limit"] = int(get_data_entry(post_data, "limit"))
+            ensure(
+                filters["limit"] > 0 and filters["limit"] <= PAGE_LIMIT, "Invalid limit"
+            )
+
+        set_data = {}
+        if have_data_entry(post_data, "set_label"):
+            set_data["label"] = get_data_entry(post_data, "set_label")
+        if have_data_entry(post_data, "set_data"):
+            set_data["data"] = json.loads(get_data_entry(post_data, "set_data"))
+        if have_data_entry(post_data, "set_note"):
+            set_data["note"] = get_data_entry(post_data, "set_note")
+        if have_data_entry(post_data, "set_only_known_identities"):
+            set_data["only_known_identities"] = get_data_entry(
+                post_data, "set_only_known_identities"
+            )
+
+        if have_data_entry(post_data, "set_max_concurrent_bids"):
+            if "data" in set_data:
+                raise ValueError("set_max_concurrent_bids can't be used with set_data")
+            set_data["set_max_concurrent_bids"] = int(
+                get_data_entry(post_data, "set_max_concurrent_bids")
+            )
+
+        if set_data:
+            ensure(strat_id is not None, "Must specify a strategy to modify")
+            swap_client.updateAutomationStrategy(strat_id, set_data)
+
+    if strat_id is not None:
+        strat_data = swap_client.getAutomationStrategy(strat_id)
+        rv = {
+            "record_id": strat_data.record_id,
+            "label": strat_data.label,
+            "type_ind": strat_data.type_ind,
+            "only_known_identities": strat_data.only_known_identities,
+            "data": json.loads(strat_data.data.decode("UTF-8")),
+            "note": "" if strat_data.note is None else strat_data.note,
+        }
+        return bytes(json.dumps(rv), "UTF-8")
+
+    rv = []
+    strats = swap_client.listAutomationStrategies(filters)
+    for row in strats:
+        rv.append((row[0], row[1], row[2]))
+    return bytes(json.dumps(rv), "UTF-8")
+
+
+def js_validateamount(self, url_split, post_string: str, is_json: bool) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+
+    post_data = getFormData(post_string, is_json)
+
+    ticker_str = post_data["coin"]
+    amount = post_data["amount"]
+    round_method = post_data.get("method", "none")
+
+    valid_round_methods = ("roundoff", "rounddown", "none")
+    if round_method not in valid_round_methods:
+        raise ValueError(
+            f"Unknown rounding method, must be one of {valid_round_methods}"
+        )
+
+    coin_type = getCoinIdFromTicker(ticker_str)
+    ci = swap_client.ci(coin_type)
+
+    r = 0
+    if round_method == "roundoff":
+        r = 1
+    elif round_method == "rounddown":
+        r = -1
+
+    output_amount = ci.format_amount(amount, conv_int=True, r=r)
+    return bytes(json.dumps(output_amount), "UTF-8")
+
+
+def js_vacuumdb(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    swap_client.vacuumDB()
+
+    return bytes(json.dumps({"completed": True}), "UTF-8")
+
+
+def js_getcoinseed(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+
+    # Seed export returns wallet secrets. Restrict it to local (loopback, not
+    # proxied) callers or a genuinely authenticated session, so an exposed bind
+    # without client_auth_hash can't hand the seed to a remote client (BSX-014).
+    client_ip = self.client_address[0] if self.client_address else ""
+    via_proxy = bool(
+        self.headers.get("X-Forwarded-For") or self.headers.get("X-Forwarded-Proto")
+    )
+    is_local = is_loopback_address(client_ip) and not via_proxy
+    authed = (
+        bool(swap_client.settings.get("client_auth_hash")) and self.is_authenticated()
+    )
+    if not (is_local or authed):
+        raise ValueError(
+            "Wallet seed export is only available over a local connection or "
+            "with authentication enabled."
+        )
+
+    post_data = getFormData(post_string, is_json)
+
+    coin_in = get_data_entry(post_data, "coin")
+    extkey_prefix = get_data_entry_or(
+        post_data, "extkey_prefix", 0x04B2430C
+    )  # default, zprv for P2WPKH in electrum
+    if isinstance(extkey_prefix, str):
+        if extkey_prefix.isdigit():
+            extkey_prefix = int(extkey_prefix)
+        else:
+            extkey_prefix = int(extkey_prefix, 16)  # Try hex
+
+    try:
+        coin = getCoinIdFromName(coin_in)
+    except Exception:
+        coin = getCoinType(coin_in)
+
+    if coin in (Coins.PART, Coins.PART_ANON, Coins.PART_BLIND):
+        raise ValueError("Particl wallet seed is set from the Basicswap mnemonic.")
+
+    ci = swap_client.ci(coin)
+    rv = {"coin": ci.ticker()}
+    if coin in swap_client.xmr_based_coins:
+        key_view = swap_client.getWalletKey(coin, 1, for_ed25519=True)
+        key_spend = swap_client.getWalletKey(coin, 2, for_ed25519=True)
+        address = ci.getAddressFromKeys(key_view, key_spend)
+
+        expect_address = swap_client.getCachedMainWalletAddress(ci)
+        rv.update(
+            {
+                "key_view": ci.encodeKey(key_view),
+                "key_spend": ci.encodeKey(key_spend),
+                "address": address,
+                "expected_address": (
+                    "Unset" if expect_address is None else expect_address
+                ),
+            }
+        )
+    else:
+        seed_key = swap_client.getWalletKey(coin, 1)
+        seed_id = ci.getSeedHash(seed_key)
+        expect_seedid = swap_client.getStringKV(
+            "main_wallet_seedid_" + ci.coin_name().lower()
+        )
+        try:
+            wallet_seed_id = ci.getWalletSeedID()
+        except Exception as e:
+            wallet_seed_id = f"Error: {e}"
+        rv.update(
+            {
+                "seed": seed_key.hex(),
+                "seed_id": seed_id.hex(),
+                "expected_seed_id": "Unset" if expect_seedid is None else expect_seedid,
+                "current_seed_id": wallet_seed_id,
+            }
+        )
+
+        if hasattr(ci, "getAccountKey"):
+            try:
+                rv.update({"account_key": ci.getAccountKey(seed_key, extkey_prefix)})
+            except Exception as e:
+                rv.update({"account_key_error": str(e)})
+
+    return bytes(
+        json.dumps(rv),
+        "UTF-8",
+    )
+
+
+def js_setpassword(self, url_split, post_string, is_json) -> bytes:
+    # Set or change wallet passwords
+    # Only works with currently enabled coins
+    # Will fail if any coin does not unlock on the old password
+    swap_client = self.server.swap_client
+    post_data = getFormData(post_string, is_json)
+
+    old_password = get_data_entry(post_data, "oldpassword")
+    new_password = get_data_entry(post_data, "newpassword")
+
+    if have_data_entry(post_data, "coin"):
+        # Set password for one coin
+        coin = getCoinType(get_data_entry(post_data, "coin"))
+        if coin in (Coins.PART_ANON, Coins.PART_BLIND, Coins.LTC_MWEB):
+            raise ValueError("Invalid coin.")
+        swap_client.changeWalletPasswords(old_password, new_password, coin)
+        return bytes(json.dumps({"success": True}), "UTF-8")
+
+    # Set password for all coins
+    swap_client.changeWalletPasswords(old_password, new_password)
+    return bytes(json.dumps({"success": True}), "UTF-8")
+
+
+def js_unlock(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = getFormData(post_string, is_json)
+
+    password: str = get_data_entry(post_data, "password")
+
+    if have_data_entry(post_data, "coin"):
+        coin = getCoinType(str(get_data_entry(post_data, "coin")))
+        if coin in (Coins.PART_ANON, Coins.PART_BLIND):
+            raise ValueError("Invalid coin.")
+        swap_client.unlockWallets(password, coin)
+        return bytes(json.dumps({"success": True}), "UTF-8")
+
+    swap_client.unlockWallets(password)
+    return bytes(json.dumps({"success": True}), "UTF-8")
+
+
+def js_lock(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+
+    if have_data_entry(post_data, "coin"):
+        coin = getCoinType(get_data_entry(post_data, "coin"))
+        if coin in (Coins.PART_ANON, Coins.PART_BLIND):
+            raise ValueError("Invalid coin.")
+        swap_client.lockWallets(coin)
+        return bytes(json.dumps({"success": True}), "UTF-8")
+
+    swap_client.lockWallets()
+    return bytes(json.dumps({"success": True}), "UTF-8")
+
+
+def js_404(self, url_split, post_string, is_json) -> bytes:
+    return bytes(json.dumps({"Error": "path unknown"}), "UTF-8")
+
+
+def js_help(self, url_split, post_string, is_json) -> bytes:
+    # TODO: Add details and examples
+    commands = []
+    for k in endpoints:
+        commands.append(k)
+    return bytes(json.dumps({"commands": commands}), "UTF-8")
+
+
+def js_readurl(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+    if not have_data_entry(post_data, "url"):
+        raise ValueError("Requires URL.")
+    url = get_data_entry(post_data, "url")
+    if not is_url_scheme_allowed(url):
+        raise ValueError("Unsupported URL scheme.")
+    # The internal-address check is skipped under Tor (egress via the proxy uses
+    # remote DNS, so local resolution can't vet the destination).
+    if not swap_client.use_tor_proxy and not is_public_url(url):
+        raise ValueError("URL host not permitted.")
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    response = swap_client.readURL(url, headers=default_headers, check_public=True)
+    try:
+        error = json.loads(response.decode())
+        if "Error" in error:
+            return json.dumps({"Error": error["Error"]}).encode()
+    except json.JSONDecodeError:
+        pass
+    return response
+
+
+def js_active(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    all_bids = []
+    try:
+        for bid_id, (bid, offer) in list(swap_client.swaps_in_progress.items()):
+            try:
+                ci_from = swap_client.ci(offer.coin_from)
+                ci_to = swap_client.ci(offer.coin_to)
+                if offer.bid_reversed:
+                    amount_from: int = bid.amount_to
+                    amount_to: int = bid.amount
+                    bid_rate: int = ci_from.make_int(amount_to / amount_from, r=1)
+                else:
+                    amount_from: int = bid.amount
+                    amount_to: int = bid.amount_to
+                    bid_rate: int = bid.rate
+                swap_data = {
+                    "bid_id": bid_id.hex(),
+                    "offer_id": offer.offer_id.hex(),
+                    "created_at": bid.created_at,
+                    "expire_at": bid.expire_at,
+                    "bid_state": strBidState(bid.state),
+                    "tx_state_a": None,
+                    "tx_state_b": None,
+                    "coin_from": ci_from.coin_name(),
+                    "coin_to": ci_to.coin_name(),
+                    "amount_from": ci_from.format_amount(amount_from),
+                    "amount_to": ci_to.format_amount(amount_to),
+                    "rate": bid_rate,
+                    "addr_from": bid.bid_addr if bid.was_received else offer.addr_from,
+                    "was_sent": bid.was_sent,
+                }
+
+                if offer.swap_type == SwapTypes.XMR_SWAP:
+                    swap_data["tx_state_a"] = (
+                        strTxState(bid.xmr_a_lock_tx.state)
+                        if bid.xmr_a_lock_tx
+                        else None
+                    )
+                    swap_data["tx_state_b"] = (
+                        strTxState(bid.xmr_b_lock_tx.state)
+                        if bid.xmr_b_lock_tx
+                        else None
+                    )
+                else:
+                    swap_data["tx_state_a"] = bid.getITxState()
+                    swap_data["tx_state_b"] = bid.getPTxState()
+
+                all_bids.append(swap_data)
+
+            except Exception:
+                pass
+    except Exception:
+        return bytes(json.dumps([]), "UTF-8")
+    return bytes(json.dumps(all_bids), "UTF-8")
+
+
+def js_coinprices(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+    if not have_data_entry(post_data, "coins"):
+        raise ValueError("Requires coins list.")
+
+    currency_to = Fiat.USD
+    if have_data_entry(post_data, "currency_to"):
+        currency_to = fiatFromTicker(get_data_entry(post_data, "currency_to"))
+
+    rate_source = get_data_entry_or(post_data, "source", None)
+
+    match_input_key: bool = toBool(
+        get_data_entry_or(post_data, "match_input_key", "true")
+    )
+    ttl: int = int(get_data_entry_or(post_data, "ttl", 300))
+
+    coins = get_data_entry(post_data, "coins")
+    coins_list = coins.split(",")
+    coin_ids = []
+    input_id_map = {}
+    for coin in coins_list:
+        if coin.isdigit():
+            try:
+                coin_id = Coins(int(coin))
+            except Exception:
+                raise ValueError(f"Unknown coin type {coin}")
+        else:
+            try:
+                coin_id = getCoinIdFromTicker(coin)
+            except Exception:
+                try:
+                    coin_id = getCoinIdFromName(coin)
+                except Exception:
+                    raise ValueError(f"Unknown coin type {coin}")
+        coin_ids.append(coin_id)
+        input_id_map[coin_id] = coin
+
+    coinprices = swap_client.lookupFiatRates(
+        coin_ids, currency_to=currency_to, rate_source=rate_source, saved_ttl=ttl
+    )
+
+    rv = {}
+    for k, v in coinprices.items():
+        if match_input_key:
+            rv[input_id_map[k]] = v
+        else:
+            rv[int(k)] = v
+    return bytes(
+        json.dumps(
+            {
+                "currency": currency_to.name,
+                "source": rate_source or "oracle",
+                "rates": rv,
+            }
+        ),
+        "UTF-8",
+    )
+
+
+def js_coinvolume(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+    if not have_data_entry(post_data, "coins"):
+        raise ValueError("Requires coins list.")
+
+    rate_source = get_data_entry_or(post_data, "source", None)
+
+    match_input_key: bool = toBool(
+        get_data_entry_or(post_data, "match_input_key", "true")
+    )
+    ttl: int = int(get_data_entry_or(post_data, "ttl", 300))
+
+    coins = get_data_entry(post_data, "coins")
+    coins_list = coins.split(",")
+    coin_ids = []
+    input_id_map = {}
+    for coin in coins_list:
+        if coin.isdigit():
+            try:
+                coin_id = Coins(int(coin))
+            except Exception:
+                raise ValueError(f"Unknown coin type {coin}")
+        else:
+            try:
+                coin_id = getCoinIdFromTicker(coin)
+            except Exception:
+                try:
+                    coin_id = getCoinIdFromName(coin)
+                except Exception:
+                    raise ValueError(f"Unknown coin type {coin}")
+        coin_ids.append(coin_id)
+        input_id_map[coin_id] = coin
+
+    volume_data = swap_client.lookupVolume(
+        coin_ids, rate_source=rate_source, saved_ttl=ttl
+    )
+
+    rv = {}
+    for k, v in volume_data.items():
+        if match_input_key:
+            rv[input_id_map[k]] = v
+        else:
+            rv[int(k)] = v
+    return bytes(
+        json.dumps({"source": rate_source or "oracle", "data": rv}),
+        "UTF-8",
+    )
+
+
+def js_coinhistory(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+    if not have_data_entry(post_data, "coins"):
+        raise ValueError("Requires coins list.")
+
+    rate_source: str = "coingecko.com"
+    if have_data_entry(post_data, "source"):
+        rate_source = get_data_entry(post_data, "source")
+
+    match_input_key: bool = toBool(
+        get_data_entry_or(post_data, "match_input_key", "true")
+    )
+    ttl: int = int(get_data_entry_or(post_data, "ttl", 3600))
+    days: int = int(get_data_entry_or(post_data, "days", 1))
+
+    coins = get_data_entry(post_data, "coins")
+    coins_list = coins.split(",")
+    coin_ids = []
+    input_id_map = {}
+    for coin in coins_list:
+        if coin.isdigit():
+            try:
+                coin_id = Coins(int(coin))
+            except Exception:
+                raise ValueError(f"Unknown coin type {coin}")
+        else:
+            try:
+                coin_id = getCoinIdFromTicker(coin)
+            except Exception:
+                try:
+                    coin_id = getCoinIdFromName(coin)
+                except Exception:
+                    raise ValueError(f"Unknown coin type {coin}")
+        coin_ids.append(coin_id)
+        input_id_map[coin_id] = coin
+
+    historical_data = swap_client.lookupHistoricalData(
+        coin_ids, days=days, rate_source=rate_source, saved_ttl=ttl
+    )
+
+    rv = {}
+    for k, v in historical_data.items():
+        if match_input_key:
+            rv[input_id_map[k]] = v
+        else:
+            rv[int(k)] = v
+    return bytes(
+        json.dumps({"source": rate_source, "days": days, "data": rv}),
+        "UTF-8",
+    )
+
+
+def js_wallettransactions(self, url_split, post_string, is_json) -> bytes:
+    from basicswap.ui.page_wallet import format_transactions, get_swap_txids
+    import time
+
+    TX_CACHE_DURATION = 30
+
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+
+    if len(url_split) < 4:
+        return bytes(json.dumps({"error": "No coin specified"}), "UTF-8")
+
+    ticker_str = url_split[3]
+    coin_id = getCoinIdFromTicker(ticker_str)
+
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+
+    page_no = 1
+    limit = 30
+    offset = 0
+    tx_filter = "all"
+    class_filters = ("mweb", "blind", "anon", "spark")
+
+    if have_data_entry(post_data, "page_no"):
+        page_no = int(get_data_entry(post_data, "page_no"))
+        if page_no < 1:
+            page_no = 1
+
+    if have_data_entry(post_data, "filter"):
+        tx_filter = get_data_entry(post_data, "filter")
+        if tx_filter not in ("all", "swaps") + class_filters:
+            tx_filter = "all"
+
+    if page_no > 1:
+        offset = (page_no - 1) * limit
+
+    try:
+        ci = swap_client.ci(coin_id)
+
+        swap_txids = get_swap_txids(swap_client)
+
+        is_electrum = getattr(ci, "_connection_type", "rpc") == "electrum"
+        if is_electrum and hasattr(ci, "getWalletTransactionsPage"):
+            if tx_filter in class_filters:
+                raw_txs, total_transactions = [], 0
+            else:
+                only_txids = swap_txids if tx_filter == "swaps" else None
+                raw_txs, total_transactions = ci.getWalletTransactionsPage(
+                    limit, offset, only_txids
+                )
+        else:
+            current_time = time.time()
+            cache_entry = swap_client._tx_cache.get(coin_id)
+
+            if (
+                cache_entry is None
+                or (current_time - cache_entry["time"]) > TX_CACHE_DURATION
+            ):
+                all_txs = ci.listWalletTransactions(count=10000, skip=0)
+                if all_txs and coin_id not in swap_client.xmr_based_coins:
+                    all_txs = list(reversed(all_txs))
+                elif not all_txs:
+                    all_txs = []
+                swap_client._tx_cache[coin_id] = {"txs": all_txs, "time": current_time}
+            else:
+                all_txs = cache_entry["txs"]
+
+            if tx_filter in class_filters:
+                filtered_txs = [tx for tx in all_txs if tx.get("tx_class") == tx_filter]
+            elif tx_filter == "swaps":
+                filtered_txs = [
+                    tx for tx in all_txs if (tx.get("txid") or "").lower() in swap_txids
+                ]
+            else:
+                filtered_txs = all_txs
+
+            total_transactions = len(filtered_txs)
+            raw_txs = filtered_txs[offset : offset + limit] if filtered_txs else []
+
+        transactions = format_transactions(ci, raw_txs, coin_id)
+        for tx in transactions:
+            tx["is_swap"] = (tx.get("txid") or "").lower() in swap_txids
+
+        return bytes(
+            json.dumps(
+                {
+                    "transactions": transactions,
+                    "page_no": page_no,
+                    "total": total_transactions,
+                    "limit": limit,
+                    "total_pages": (total_transactions + limit - 1) // limit,
+                    "filter": tx_filter,
+                }
+            ),
+            "UTF-8",
+        )
+    except Exception as e:
+        return bytes(json.dumps({"error": str(e)}), "UTF-8")
+
+
+def js_messageroutes(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+
+    filters = {
+        "page_no": 1,
+        "limit": PAGE_LIMIT,
+        "sort_by": "created_at",
+        "sort_dir": "desc",
+    }
+
+    if have_data_entry(post_data, "sort_by"):
+        sort_by = get_data_entry(post_data, "sort_by")
+        ensure(
+            sort_by
+            in [
+                "created_at",
+            ],
+            "Invalid sort by",
+        )
+        filters["sort_by"] = sort_by
+    if have_data_entry(post_data, "sort_dir"):
+        sort_dir = get_data_entry(post_data, "sort_dir")
+        ensure(sort_dir in ["asc", "desc"], "Invalid sort dir")
+        filters["sort_dir"] = sort_dir
+
+    if have_data_entry(post_data, "offset"):
+        filters["offset"] = int(get_data_entry(post_data, "offset"))
+    if have_data_entry(post_data, "limit"):
+        filters["limit"] = int(get_data_entry(post_data, "limit"))
+        ensure(filters["limit"] > 0, "Invalid limit")
+
+    if have_data_entry(post_data, "address_from"):
+        filters["address_from"] = get_data_entry(post_data, "address_from")
+    if have_data_entry(post_data, "address_to"):
+        filters["address_to"] = get_data_entry(post_data, "address_to")
+
+    action = get_data_entry_or(post_data, "action", None)
+
+    message_routes = swap_client.listMessageRoutes(filters, action)
+    return bytes(json.dumps(message_routes), "UTF-8")
+
+
+def js_modeswitchinfo(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    post_data = getFormData(post_string, is_json)
+
+    coin_str = get_data_entry(post_data, "coin")
+    direction = get_data_entry_or(post_data, "direction", "lite")
+
+    try:
+        coin_type = getCoinIdFromName(coin_str)
+    except Exception:
+        coin_type = getCoinIdFromTicker(coin_str.upper())
+
+    ci = swap_client.ci(coin_type)
+    ticker = ci.ticker()
+
+    try:
+        wallet_info = ci.getWalletInfo()
+        balance = wallet_info.get("balance", 0)
+        balance_sats = ci.make_int(balance)
+    except Exception as e:
+        return bytes(json.dumps({"error": f"Failed to get balance: {e}"}), "UTF-8")
+
+    try:
+        fee_rate, rate_src = ci.get_fee_rate(ci._conf_target)
+        est_vsize = 180
+        if isinstance(fee_rate, int):
+            fee_per_vbyte = max(1, fee_rate // 1000)
+        else:
+            fee_per_vbyte = max(1, int(fee_rate * 100000))
+        estimated_fee_sats = est_vsize * fee_per_vbyte
+    except Exception:
+        estimated_fee_sats = 180
+        rate_src = "default"
+
+    min_viable = estimated_fee_sats * 2
+    can_transfer = balance_sats > min_viable
+
+    rv = {
+        "coin": ticker,
+        "direction": direction,
+        "balance": balance,
+        "balance_sats": balance_sats,
+        "estimated_fee_sats": estimated_fee_sats,
+        "estimated_fee": ci.format_amount(estimated_fee_sats),
+        "fee_rate_src": rate_src,
+        "can_transfer": can_transfer,
+        "min_viable_sats": min_viable,
+    }
+
+    if direction == "lite":
+        non_bip84_balance_sats = 0
+        has_non_bip84_funds = False
+        try:
+            if hasattr(ci, "rpc_wallet"):
+                unspent = ci.rpc_wallet("listunspent")
+
+                wm = swap_client.getWalletManager()
+
+                bip84_addresses = set()
+                if wm:
+                    try:
+                        all_addrs = wm.getAllAddresses(
+                            coin_type, include_watch_only=False
+                        )
+                        bip84_addresses = set(all_addrs)
+                    except Exception:
+                        pass
+
+                for u in unspent:
+                    addr = u.get("address")
+                    if not addr:
+                        continue
+                    amount_sats = ci.make_int(u.get("amount", 0))
+                    if amount_sats <= 0:
+                        continue
+
+                    if addr not in bip84_addresses:
+                        non_bip84_balance_sats += amount_sats
+                        has_non_bip84_funds = True
+        except Exception as e:
+            swap_client.log.debug(f"Error checking non-BIP84 addresses: {e}")
+
+        if has_non_bip84_funds and non_bip84_balance_sats > min_viable:
+            rv["show_transfer_option"] = True
+            rv["require_transfer"] = True
+            rv["legacy_balance_sats"] = non_bip84_balance_sats
+            rv["legacy_balance"] = ci.format_amount(non_bip84_balance_sats)
+            rv["message"] = (
+                "Funds on non-derivable addresses must be transferred for external wallet compatibility"
+            )
+        else:
+            rv["show_transfer_option"] = False
+            rv["require_transfer"] = False
+            if has_non_bip84_funds:
+                rv["legacy_balance_sats"] = non_bip84_balance_sats
+                rv["legacy_balance"] = ci.format_amount(non_bip84_balance_sats)
+                rv["message"] = "Non-derivable balance too low to transfer"
+            else:
+                rv["legacy_balance_sats"] = 0
+                rv["legacy_balance"] = "0"
+                rv["message"] = "All funds on BIP84 addresses"
+    else:
+        rv["show_transfer_option"] = can_transfer
+        if balance_sats == 0:
+            rv["message"] = "No funds to transfer"
+        elif not can_transfer:
+            rv["message"] = "Balance too low to transfer (fee would exceed funds)"
+        else:
+            rv["message"] = ""
+
+    return bytes(json.dumps(rv), "UTF-8")
+
+
+def js_electrum_discover(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    post_data = {} if post_string == "" else getFormData(post_string, is_json)
+
+    coin_str = get_data_entry(post_data, "coin")
+    do_ping = toBool(get_data_entry_or(post_data, "ping", "false"))
+
+    coin_type = None
+    try:
+        coin_id = int(coin_str)
+        coin_type = Coins(coin_id)
+    except ValueError:
+        try:
+            coin_type = getCoinIdFromName(coin_str)
+        except ValueError:
+            coin_type = getCoinType(coin_str)
+
+    electrum_supported = ["bitcoin", "litecoin"]
+    coin_name = chainparams.get(coin_type, {}).get("name", "").lower()
+    if coin_name not in electrum_supported:
+        return bytes(
+            json.dumps(
+                {"error": f"Electrum not supported for {coin_name}", "servers": []}
+            ),
+            "UTF-8",
+        )
+
+    ci = swap_client.ci(coin_type)
+    connection_type = getattr(ci, "_connection_type", "rpc")
+
+    discovered_servers = []
+    current_server = None
+
+    if connection_type == "electrum":
+        backend = ci.getBackend()
+        if backend and hasattr(backend, "_server"):
+            server = backend._server
+            current_server = server.get_current_server_info()
+            discovered_servers = server.discover_peers()
+
+            if do_ping and discovered_servers:
+                for srv in discovered_servers[:10]:
+                    latency = server.ping_server(
+                        srv["host"], srv["port"], srv.get("ssl", True)
+                    )
+                    srv["latency_ms"] = latency
+                    srv["online"] = latency is not None
+    else:
+        try:
+            from .interface.electrumx import ElectrumServer
+
+            temp_server = ElectrumServer(
+                coin_name,
+                log=swap_client.log,
+                cert_pins=swap_client.getElectrumCertPins(),
+            )
+            temp_server.connect()
+            current_server = temp_server.get_current_server_info()
+            discovered_servers = temp_server.discover_peers()
+
+            if do_ping and discovered_servers:
+                for srv in discovered_servers[:10]:
+                    latency = temp_server.ping_server(
+                        srv["host"], srv["port"], srv.get("ssl", True)
+                    )
+                    srv["latency_ms"] = latency
+                    srv["online"] = latency is not None
+
+            temp_server.disconnect()
+        except Exception as e:
+            return bytes(
+                json.dumps(
+                    {
+                        "error": f"Failed to connect to electrum server: {str(e)}",
+                        "servers": [],
+                    }
+                ),
+                "UTF-8",
+            )
+
+    onion_servers = [s for s in discovered_servers if s.get("is_onion")]
+    clearnet_servers = [s for s in discovered_servers if not s.get("is_onion")]
+
+    return bytes(
+        json.dumps(
+            {
+                "coin": coin_name,
+                "current_server": current_server,
+                "clearnet_servers": clearnet_servers,
+                "onion_servers": onion_servers,
+                "total_discovered": len(discovered_servers),
+            }
+        ),
+        "UTF-8",
+    )
+
+
+def js_getsubfeebidtx(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    swap_client.checkSystemStatus()
+    post_data = getFormData(post_string, is_json)
+    offer_id = bytes.fromhex(get_data_entry(post_data, "offer_id"))
+    offer = swap_client.getOffer(offer_id)
+    ensure(offer, "Offer not found.")
+    ci_from = swap_client.ci(offer.coin_from)
+    ci_to = swap_client.ci(offer.coin_to)
+
+    amount_to: int = inputAmount(get_data_entry(post_data, "amount_to"), ci_to)
+    bid_rate: int = ci_to.make_int(get_data_entry(post_data, "bid_rate"), r=1)
+
+    prefunded_data = swap_client.createSubfeeBidTx(offer_id, amount_to, bid_rate)
+    return bytes(
+        json.dumps(
+            {
+                "amount_from": ci_from.format_amount(prefunded_data["amount_from"]),
+                "amount_to": ci_to.format_amount(prefunded_data["amount_to"]),
+                "bid_tx": prefunded_data["bid_tx"].hex(),
+            }
+        ),
+        "UTF-8",
+    )
+
+
+endpoints = {
+    "coins": js_coins,
+    "walletbalances": js_walletbalances,
+    "wallets": js_wallets,
+    "wallettransactions": js_wallettransactions,
+    "offers": js_offers,
+    "sentoffers": js_sentoffers,
+    "bids": js_bids,
+    "sentbids": js_sentbids,
+    "network": js_network,
+    "networks": js_networks,
+    "revokeoffer": js_revokeoffer,
+    "smsgaddresses": js_smsgaddresses,
+    "rate": js_rate,
+    "rates": js_rates,
+    "rateslist": js_rates_list,
+    "offerfeeestimate": js_offer_fee_estimate,
+    "generatenotification": js_generatenotification,
+    "checkupdates": js_checkupdates,
+    "updatestatus": js_updatestatus,
+    "notifications": js_notifications,
+    "identities": js_identities,
+    "automationstrategies": js_automationstrategies,
+    "validateamount": js_validateamount,
+    "vacuumdb": js_vacuumdb,
+    "getcoinseed": js_getcoinseed,
+    "setpassword": js_setpassword,
+    "unlock": js_unlock,
+    "lock": js_lock,
+    "help": js_help,
+    "readurl": js_readurl,
+    "active": js_active,
+    "coinprices": js_coinprices,
+    "coinvolume": js_coinvolume,
+    "coinhistory": js_coinhistory,
+    "messageroutes": js_messageroutes,
+    "electrumdiscover": js_electrum_discover,
+    "modeswitchinfo": js_modeswitchinfo,
+    "getsubfeebidtx": js_getsubfeebidtx,
+}
+
+
+def js_url_to_function(url_split):
+    if len(url_split) > 2:
+        return endpoints.get(url_split[2], js_404)
+    return js_index

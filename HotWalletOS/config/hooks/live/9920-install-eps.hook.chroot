@@ -1,0 +1,44 @@
+#!/bin/sh
+set -e
+
+EPS_DIR="/usr/local/bin/eps"
+
+if [ -d "$EPS_DIR" ]; then
+    echo "=== Setting up Electrum Personal Server (EPS) Python Environment ==="
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends python3-venv python3-pip libpython3-dev gcc libc-dev pkg-config
+
+    # Explicitly build the venv using absolute paths
+    python3 -m venv "$EPS_DIR/venv"
+    
+    # Upgrade pip inside the absolute venv path
+    "$EPS_DIR/venv/bin/pip" install --upgrade pip
+
+    # Install the package from the eps source directory
+    cd "$EPS_DIR"
+    "$EPS_DIR/venv/bin/pip" install .
+
+    # Write config.ini directly
+    cat << 'EOF' > "$EPS_DIR/config.ini"
+[bitcoin-rpc]
+rpc_user =
+rpc_password =
+cookiefile = /mnt/coinswaps/bitcoin/.cookie
+
+[electrum-server]
+host = 127.0.0.1
+port = 50002
+EOF
+
+    # Create the global symlink pointing to the absolute venv binary
+    ln -sf "$EPS_DIR/venv/bin/electrum-personal-server" /usr/local/bin/electrum-personal-server
+
+    # Purge build tools
+    apt-get purge -y python3-pip libpython3-dev gcc libc-dev pkg-config
+    apt-get autoremove -y
+    apt-get clean
+
+    echo "=== Electrum Personal Server Setup Complete ==="
+fi

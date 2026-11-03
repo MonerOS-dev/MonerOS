@@ -16,3 +16,6 @@ fonts-noto-color-emoji
 fonts-symbola
 jq
 acl
+socat
+python3-webview
+

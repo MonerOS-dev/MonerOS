@@ -5,6 +5,8 @@ export PATH=/usr/bin:/bin:/usr/local/bin
 NODE_CACHE_FILE="/home/user/monero_node.cfg"
 PROXY="127.0.0.1:9050"
 
+PREVIOUS_NODE_STATE="unknown"
+
 while true; do
     if [ -f "$NODE_CACHE_FILE" ]; then
         ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
@@ -34,6 +36,9 @@ while true; do
             NODE_UP=false
         fi
     fi
+    
+    # used later (doesn't matter that it may not be up)
+    CURRENT_NODE_STATE="$NODE_UP"
 
     # If node is DOWN
     if [ "$NODE_UP" = false ]; then
@@ -89,6 +94,7 @@ while true; do
 
     # If node is UP (RECOVERY)
     elif [ "$NODE_UP" = true ]; then
+        
         if [ -f /var/www/html/monero.down ]; then
             sudo rm -f /var/www/html/monero.down
         fi
@@ -99,9 +105,22 @@ while true; do
             true
         else
             # Node recovered on its own while sitting at the whiptail prompt
-            if pgrep -f "whiptail" > /dev/null; then
-                sudo pkill -9 -f "whiptail" 2>/dev/null || true
+            #if pgrep -f "whiptail" > /dev/null; then
+            #    sudo pkill -9 -f "whiptail" 2>/dev/null || true
+            #fi
+            
+            if [ "$PREVIOUS_NODE_STATE" = "false" ] && \
+               [ "$CURRENT_NODE_STATE" = "true" ]; then
+            
+                # Node recovered while user was still on the initial popup
+            
+                if [ -f /run/lock/monero_reconfigure.lock ] && \
+                   [ ! -f /run/lock/monero_user_intervened.flag ]; then
+            
+                    sudo pkill -t tty1 -9 -f "whiptail" 2>/dev/null || true
+                fi
             fi
+            
             if ! pgrep -f "reconfigure_monero" > /dev/null; then
                 if [ "$ACTIVE_NODE" != "127.0.0.1:18081" ]; then
                     sudo chvt 7 </dev/tty1 &>/dev/null || true
@@ -115,6 +134,7 @@ while true; do
             sudo rm -f /run/lock/monero_user_intervened.flag
         fi
     fi
-
+    
+    PREVIOUS_NODE_STATE="$CURRENT_NODE_STATE"
     sleep 15
 done

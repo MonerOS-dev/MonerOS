@@ -1,0 +1,153 @@
+(define-module (guix)
+#:use-module (guix packages)
+#:use-module ((guix licenses) #:prefix license:)
+#:use-module (guix build-system gnu)
+#:use-module (guix build-system pyproject)
+#:use-module (guix git-download)
+#:use-module (guix search-paths)
+#:use-module (gnu packages)
+#:use-module (gnu packages autotools)
+#:use-module (gnu packages certs)
+#:use-module (gnu packages check)
+#:use-module (gnu packages cmake)
+#:use-module (gnu packages databases)
+#:use-module (gnu packages finance)
+#:use-module (gnu packages gnupg)
+#:use-module (gnu packages libffi)
+#:use-module (gnu packages license)
+#:use-module (gnu packages nss)
+#:use-module (gnu packages pkg-config)
+#:use-module (gnu packages python)
+#:use-module (gnu packages python-build)
+#:use-module (gnu packages python-check)
+#:use-module (gnu packages python-crypto)
+#:use-module (gnu packages python-science)
+#:use-module (gnu packages python-web)
+#:use-module (gnu packages python-xyz))
+
+
+(define libsecp256k1-basicswap
+  (package
+    (name "libsecp256k1-basicswap")
+    (version "basicswap_v0.3")
+    (source (origin
+      (method git-fetch)
+      (uri (git-reference
+        (url "https://github.com/basicswap/secp256k1")
+        (commit version)))
+      (sha256
+       (base32
+        "1hi6cb2i1pnqlizrwd51i5v19y3dxq9a0zgm74vk622cagb0pnyk"))
+      (file-name (git-file-name name version))))
+    (build-system gnu-build-system)
+    (arguments
+     '(#:configure-flags '("--enable-shared"
+                           "--disable-dependency-tracking"
+                           "--with-pic"
+                           "--enable-module-extrakeys"
+                           "--enable-module-recovery"
+                           "--enable-module-schnorrsig"
+                           "--enable-experimental"
+                           "--enable-module-ecdh"
+                           "--enable-benchmark=no"
+                           "--enable-tests=no"
+                           "--enable-module-ed25519"
+                           "--enable-module-generator"
+                           "--enable-module-dleag"
+                           "--enable-module-ecdsaotves"
+                           "--with-valgrind=no"
+                           )))
+    (native-inputs
+     (list autoconf automake libtool))
+    (synopsis "C library for EC operations on curve secp256k1")
+    (description
+     "Optimized C library for EC operations on curve secp256k1.\n")
+    (home-page "https://github.com/bitcoin-core/secp256k1")
+    (license license:unlicense)))
+
+
+(define python-coincurve-basicswap
+  (package
+    (name "python-coincurve-basicswap")
+    (version "basicswap_v0.4")
+    (source
+     (origin
+       (method git-fetch)
+       (uri
+        (git-reference
+         (url "https://github.com/basicswap/coincurve")
+         (commit version)))
+       (file-name
+        (git-file-name name version))
+       (sha256
+        (base32 "0l2zpr5hdr7w5paxqn4vvn543rjc1sy01d1jdjnz6cr5ly5wvbq2"))))
+    (build-system pyproject-build-system)
+    (arguments
+     `(#:phases
+       (modify-phases %standard-phases
+         (replace 'set-version
+            (lambda _
+              (setenv "COINCURVE_IGNORE_SYSTEM_LIB" "OFF")
+              ;; ZIP does not support timestamps before 1980.
+              (setenv "SOURCE_DATE_EPOCH" "315532800")))
+         )))
+    (propagated-inputs
+     (list
+      libsecp256k1-basicswap
+      python-cffi))
+    (native-inputs
+     (list
+      cmake
+      python-hatchling
+      python-scikit-build-core
+      pkg-config
+      python-pytest
+      ))
+    (synopsis "Python libsecp256k1 wrapper")
+    (description "Python libsecp256k1 wrapper.")
+    (home-page "https://github.com/basicswap/coincurve")
+    (license license:bsd-3)))
+
+(define-public basicswap
+(package
+  (name "basicswap")
+  (version "0.19.0")
+  (source (origin
+    (method git-fetch)
+    (uri (git-reference
+      (url "https://github.com/basicswap/basicswap")
+      (commit "1e0b89ba0691a26c3179212441aa15cd8fdc2769")))
+    (sha256
+      (base32
+        "1zwawjvygqli6cmxxjqdg6ckfd194vn13h70v8ps9disfihgvj9f"))
+    (file-name (git-file-name name version))))
+  (build-system pyproject-build-system)
+
+  (native-search-paths (list $SSL_CERT_DIR $SSL_CERT_FILE))
+  (arguments
+     '(#:tests? #f ; TODO: Add coin binaries
+       #:phases (modify-phases %standard-phases
+                  (add-after 'unpack 'patch-env
+                    (lambda* (#:key inputs #:allow-other-keys)
+                      (substitute* "basicswap/bin/prepare.py"
+                        (("GUIX_SSL_CERT_DIR = None")
+                         (string-append "GUIX_SSL_CERT_DIR = \"" (search-input-directory inputs "etc/ssl/certs") "\""))))))))
+  (propagated-inputs
+   (list
+    gnupg
+    nss-certs
+    python-coincurve-basicswap
+    python-pycryptodome
+    python-pyzmq
+    python-gnupg
+    python-jinja2
+    python-pysocks
+    python-websocket-client))
+  (native-inputs
+   (list
+    python-hatchling
+    python-pytest))
+  (synopsis "Simple Atomic Swap Network - Proof of Concept")
+  (description "Facilitates cross-chain atomic swaps")
+  (home-page "https://github.com/basicswap/basicswap")
+  (license license:bsd-3)))

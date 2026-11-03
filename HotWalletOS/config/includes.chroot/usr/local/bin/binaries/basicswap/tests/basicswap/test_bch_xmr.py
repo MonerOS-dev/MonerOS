@@ -1,0 +1,1126 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2024-2026 The Basicswap developers
+# Distributed under the MIT software license, see the accompanying
+# file LICENSE or http://www.opensource.org/licenses/mit-license.php.
+
+
+import logging
+import os
+import random
+import unittest
+
+import basicswap.config as cfg
+from basicswap.basicswap import (
+    BidStates,
+    Coins,
+    DebugTypes,
+    SwapTypes,
+)
+from basicswap.basicswap_util import (
+    TxLockTypes,
+    TxTypes,
+)
+from basicswap.bin.run import startDaemon
+from basicswap.util.crypto import sha256
+from tests.basicswap.test_btc_xmr import BasicSwapTest
+from tests.basicswap.extended.test_dcr import run_test_ads_both_refund
+from tests.basicswap.util.common import (
+    abandon_all_swaps,
+    callrpc_cli,
+    make_rpc_func,
+    prepareDataDir,
+    stopDaemons,
+    waitForRPC,
+    wait_for_bid,
+    wait_for_bid_states,
+    wait_for_offer,
+)
+from basicswap.contrib.test_framework.messages import (
+    CTxIn,
+    COutPoint,
+    CTransaction,
+)
+from basicswap.contrib.test_framework.script import (
+    CScript,
+    OP_EQUAL,
+    OP_CHECKLOCKTIMEVERIFY,
+    OP_CHECKSEQUENCEVERIFY,
+)
+from basicswap.interface.bch.bch import BCHInterface
+from basicswap.util import ensure
+from .test_xmr import test_delay_event, callnoderpc
+
+from coincurve.ecdsaotves import (
+    ecdsaotves_enc_sign,
+    ecdsaotves_enc_verify,
+    ecdsaotves_dec_sig,
+)
+
+BITCOINCASH_BINDIR = os.path.expanduser(
+    os.getenv(
+        "BITCOINCASH_BINDIR", os.path.join(cfg.DEFAULT_TEST_BINDIR, "bitcoincash")
+    )
+)
+BITCOINCASHD = os.getenv("BITCOINCASHD", "bitcoind" + cfg.bin_suffix)
+BITCOINCASH_CLI = os.getenv("BITCOINCASH_CLI", "bitcoin-cli" + cfg.bin_suffix)
+BITCOINCASH_TX = os.getenv("BITCOINCASH_TX", "bitcoin-tx" + cfg.bin_suffix)
+
+BCH_BASE_PORT = 41792
+BCH_BASE_RPC_PORT = 42792
+BCH_BASE_ZMQ_PORT = 43792
+BCH_BASE_TOR_PORT = 43732
+
+logger = logging.getLogger()
+
+
+bch_lock_spend_tx = "0200000001bfc6bbb47851441c7827059ae337a06aa9064da7f9537eb9243e45766c3dd34c00000000d8473045022100a0161ea14d3b41ed41250c8474fc8ec6ce1cab8df7f401e69ecf77c2ab63d82102207a2a57ddf2ea400e09ea059f3b261da96f5098858b17239931f3cc2fb929bb2a4c8ec3519dc4519d02e80300c600cc949d00ce00d18800cf00d28800d000d39d00cb641976a91481ec21969399d15c26af089d5db437ead066c5ba88ac00cd788821024ffcc0481629866671d89f05f3da813a2aacec1b52e69b8c0c586b665f5d4574ba6752b27523aa20df65a90e9becc316ff5aca44d4e06dfaade56622f32bafa197aba706c5e589758700cd87680000000001251cde06000000001976a91481ec21969399d15c26af089d5db437ead066c5ba88ac00000000"
+bch_lock_script = "c3519dc4519d02e80300c600cc949d00ce00d18800cf00d28800d000d39d00cb641976a91481ec21969399d15c26af089d5db437ead066c5ba88ac00cd788821024ffcc0481629866671d89f05f3da813a2aacec1b52e69b8c0c586b665f5d4574ba6752b27523aa20df65a90e9becc316ff5aca44d4e06dfaade56622f32bafa197aba706c5e589758700cd8768"
+bch_lock_spend_script = "473045022100a0161ea14d3b41ed41250c8474fc8ec6ce1cab8df7f401e69ecf77c2ab63d82102207a2a57ddf2ea400e09ea059f3b261da96f5098858b17239931f3cc2fb929bb2a4c8ec3519dc4519d02e80300c600cc949d00ce00d18800cf00d28800d000d39d00cb641976a91481ec21969399d15c26af089d5db437ead066c5ba88ac00cd788821024ffcc0481629866671d89f05f3da813a2aacec1b52e69b8c0c586b665f5d4574ba6752b27523aa20df65a90e9becc316ff5aca44d4e06dfaade56622f32bafa197aba706c5e589758700cd8768"
+bch_lock_swipe_script = "4c8fc3519dc4519d02e80300c600cc949d00ce00d18800cf00d28800d000d39d00cb641976a9141ab50aedd2e48297073f0f6eef46f97b37c9354e88ac00cd7888210234fe304a5b129b8265c177c92aa40b7840e8303f8b0fcca2359023163c7c2768ba670120b27523aa20191b09e40d1277fa14fea1e9b41e4fcc4528c9cb77e39e1b7b1a0b3332180cb78700cd8768"
+
+coin_settings = {
+    "rpcport": 0,
+    "rpcauth": "none",
+    "blocks_confirmed": 1,
+    "conf_target": 1,
+    "use_segwit": False,
+    "connection_type": "rpc",
+}
+
+
+class TestXmrBchSwapInterface(unittest.TestCase):
+    def test_extractScriptLockScriptValues(self):
+        ci = BCHInterface(coin_settings, "regtest")
+
+        script_bytes = CScript(bytes.fromhex(bch_lock_script))
+        ci.extractScriptLockScriptValues(script_bytes)
+
+        script_bytes = CScript(bytes.fromhex(bch_lock_spend_script))
+        signature, mining_fee, out_1, out_2, public_key, timelock = (
+            ci.extractScriptLockScriptValuesFromScriptSig(script_bytes)
+        )
+        ensure(signature is not None, "signature not present")
+
+        script_bytes = CScript(bytes.fromhex(bch_lock_swipe_script))
+        signature, mining_fee, out_1, out_2, public_key, timelock = (
+            ci.extractScriptLockScriptValuesFromScriptSig(script_bytes)
+        )
+        ensure(signature is None, "signature present")
+
+
+class TestBCH(BasicSwapTest):
+    __test__ = True
+    test_coin = Coins.BCH
+    test_coin_from = Coins.BCH
+    base_rpc_port = BCH_BASE_RPC_PORT
+    max_fee: int = 10000
+
+    bch_daemons = []
+    start_ltc_nodes = False
+    bch_addr = None
+
+    @classmethod
+    def prepareExtraDataDir(cls, i):
+        if not cls.restore_instance:
+            data_dir = prepareDataDir(
+                cfg.TEST_DATADIRS,
+                i,
+                "bitcoin.conf",
+                "bch_",
+                base_p2p_port=BCH_BASE_PORT,
+                base_rpc_port=BCH_BASE_RPC_PORT,
+            )
+
+            # Rewrite conf file
+            config_filename: str = os.path.join(
+                cfg.TEST_DATADIRS, "bch_" + str(i), "bitcoin.conf"
+            )
+            with open(config_filename, "r") as fp:
+                lines = fp.readlines()
+            with open(config_filename, "w") as fp:
+                for line in lines:
+                    if not line.startswith("findpeers"):
+                        fp.write(line)
+
+            bch_wallet_bin = "bitcoin-wallet" + (".exe" if os.name == "nt" else "")
+            if os.path.exists(
+                os.path.join(
+                    BITCOINCASH_BINDIR,
+                    bch_wallet_bin,
+                )
+            ):
+                try:
+                    callrpc_cli(
+                        BITCOINCASH_BINDIR,
+                        data_dir,
+                        "regtest",
+                        "-wallet=bsx_wallet create",
+                        bch_wallet_bin,
+                    )
+                except Exception as e:  # noqa: F841
+                    logging.warning("bch: bitcoin-wallet create failed")
+                    raise
+
+        cls.bch_daemons.append(
+            startDaemon(
+                os.path.join(cfg.TEST_DATADIRS, "bch_" + str(i)),
+                BITCOINCASH_BINDIR,
+                BITCOINCASHD,
+            )
+        )
+        logging.info("BCH: Started %s %d", BITCOINCASHD, cls.bch_daemons[-1].handle.pid)
+        waitForRPC(make_rpc_func(i, base_rpc_port=BCH_BASE_RPC_PORT), test_delay_event)
+
+    @classmethod
+    def addPIDInfo(cls, sc, i):
+        sc.setDaemonPID(Coins.BCH, cls.bch_daemons[i].handle.pid)
+
+    @classmethod
+    def prepareExtraCoins(cls):
+        super().prepareExtraCoins()
+        cls.bch_addr = callnoderpc(
+            0,
+            "getnewaddress",
+            ["mining_addr"],
+            base_rpc_port=BCH_BASE_RPC_PORT,
+            wallet="bsx_wallet",
+        )
+        if not cls.restore_instance:
+            num_blocks: int = 200
+            logging.info("Mining %d BitcoinCash blocks to %s", num_blocks, cls.bch_addr)
+            callnoderpc(
+                0,
+                "generatetoaddress",
+                [num_blocks, cls.bch_addr],
+                base_rpc_port=BCH_BASE_RPC_PORT,
+                wallet="bsx_wallet",
+            )
+
+    @classmethod
+    def addCoinSettings(cls, settings, datadir, node_id):
+
+        settings["chainclients"]["bitcoincash"] = {
+            "connection_type": "rpc",
+            "manage_daemon": False,
+            "rpcport": BCH_BASE_RPC_PORT + node_id,
+            "rpcuser": "test" + str(node_id),
+            "rpcpassword": "test_pass" + str(node_id),
+            "datadir": os.path.join(datadir, "bch_" + str(node_id)),
+            "bindir": BITCOINCASH_BINDIR,
+            "use_segwit": False,
+            "blocks_confirmed": 3,
+            "wallet_name": "bsx_wallet",
+        }
+
+    @classmethod
+    def coins_loop(cls):
+        super().coins_loop()
+        ci0 = cls.swap_clients[0].ci(cls.test_coin)
+        try:
+            if cls.bch_addr is not None:
+                ci0.rpc_wallet("generatetoaddress", [1, cls.bch_addr])
+        except Exception as e:
+            logging.warning("coins_loop generate {}".format(e))
+
+    @classmethod
+    def tearDownClass(cls):
+        logging.info("Finalising Bitcoincash Test")
+        super().tearDownClass()
+
+        stopDaemons(cls.bch_daemons)
+        cls.bch_daemons.clear()
+
+    def mineBlock(self, num_blocks=1):
+        if self.bch_addr is None:
+            logging.info("BCH mining paused")
+        else:
+            self.callnoderpc("generatetoaddress", [num_blocks, self.bch_addr])
+
+    def getMiningAddr(self):
+        return self.bch_addr
+
+    def pauseMining(self):
+        logging.info(f"Pausing BCH mining to {self.bch_addr}")
+        self.old_bch_addr: str = self.__class__.bch_addr
+        self.__class__.bch_addr = None
+
+    def continueMining(self):
+        logging.info(f"Resuming BCH mining to {self.old_bch_addr}")
+        self.__class__.bch_addr = self.old_bch_addr
+
+    def check_softfork_active(self, feature_name):
+        return True
+
+    def do_test_09_expire_accepted(self, coin_from, coin_to):
+        logging.info(
+            f"---------- Test {coin_from.name} to {coin_to.name} Expire Accepted"
+        )
+
+        swap_clients = self.swap_clients
+        reverse_bid: bool = swap_clients[0].is_reverse_ads_bid(coin_from, coin_to)
+
+        id_offerer: int = self.node_a_id
+        id_bidder: int = self.node_b_id
+
+        # Leader sends the initial (chain a) lock tx.
+        # Follower sends the participate (chain b) lock tx.
+        id_leader: int = id_bidder if reverse_bid else id_offerer
+        id_follower: int = id_offerer if reverse_bid else id_bidder
+
+        swap_clients = self.swap_clients
+        reverse_bid: bool = swap_clients[0].is_reverse_ads_bid(coin_from, coin_to)
+        ci_from = swap_clients[id_offerer].ci(coin_from)
+        ci_to = swap_clients[id_bidder].ci(coin_to)
+
+        self.prepare_balance(
+            coin_from, 100.0, 1800 + id_offerer, 1801 if reverse_bid else 1800
+        )
+        self.prepare_balance(
+            coin_to, 100.0, 1800 + id_bidder, 1800 if reverse_bid else 1801
+        )
+
+        amt_swap = ci_from.make_int(random.uniform(0.1, 2.0), r=1)
+        rate_swap = ci_to.make_int(random.uniform(0.2, 20.0), r=1)
+        offer_id = swap_clients[id_offerer].postOffer(
+            coin_from, coin_to, amt_swap, rate_swap, amt_swap, SwapTypes.XMR_SWAP
+        )
+        wait_for_offer(test_delay_event, swap_clients[id_bidder], offer_id)
+        offer = swap_clients[id_bidder].listOffers(filters={"offer_id": offer_id})[0]
+        bid_id = swap_clients[id_bidder].postXmrBid(offer_id, offer.amount_from)
+
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.BID_RECEIVED,
+            wait_for=(self.extra_wait_time + 40),
+        )
+
+        try:
+            self.pauseMining()
+            old_check_expired_seconds = swap_clients[0].check_expired_seconds
+
+            swap_clients[id_offerer].acceptBid(bid_id)
+
+            wait_for_bid(
+                test_delay_event,
+                swap_clients[id_follower],
+                bid_id,
+                BidStates.XMR_SWAP_MSG_SCRIPT_LOCK_SPEND_TX,
+                sent=None,
+                wait_for=(self.extra_wait_time + 80),
+            )
+            for node_id in (id_leader, id_follower):
+                swap_clients[node_id].setMockTimeOffset(13 * 3600)
+                swap_clients[node_id].check_expired_seconds = 2
+
+            wait_for_bid(
+                test_delay_event,
+                swap_clients[id_follower],
+                bid_id,
+                BidStates.SWAP_TIMEDOUT,
+                sent=None,
+                wait_for=(self.extra_wait_time + 60),
+            )
+
+            # Leader (which funded the lock tx) should not timeout.
+            wait_for_bid(
+                test_delay_event,
+                swap_clients[id_leader],
+                bid_id,
+                BidStates.XMR_SWAP_MSG_SCRIPT_LOCK_SPEND_TX,
+                sent=None,
+                wait_for=(self.extra_wait_time + 40),
+            )
+
+        finally:
+            self.continueMining()
+            for node_id in (id_leader, id_follower):
+                swap_clients[node_id].setMockTimeOffset(0)
+                swap_clients[node_id].check_expired_seconds = old_check_expired_seconds
+
+    def test_001_nested_segwit(self):
+        logging.info(f"---------- Test {self.test_coin.name} p2sh nested segwit")
+        logging.info("Skipped")
+
+    def test_002_native_segwit(self):
+        logging.info(f"---------- Test {self.test_coin.name} p2sh native segwit")
+        logging.info("Skipped")
+
+    def test_003_cltv(self):
+        logging.info(f"---------- Test {self.test_coin.name} cltv")
+
+        ci = self.swap_clients[0].ci(self.test_coin)
+
+        self.check_softfork_active("bip65")
+
+        chain_height = self.callnoderpc("getblockcount")
+        script = CScript(
+            [
+                chain_height + 3,
+                OP_CHECKLOCKTIMEVERIFY,
+            ]
+        )
+
+        script_dest = ci.getScriptDest(script)
+        tx = CTransaction()
+        tx.nVersion = ci.txVersion()
+        tx.vout.append(ci.txoType()(ci.make_int(1.1), script_dest))
+        tx_hex = tx.serialize().hex()
+        tx_funded = ci.rpc_wallet("fundrawtransaction", [tx_hex])
+        utxo_pos = 0 if tx_funded["changepos"] == 1 else 1
+        tx_signed = ci.rpc_wallet(
+            "signrawtransactionwithwallet",
+            [
+                tx_funded["hex"],
+            ],
+        )["hex"]
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_signed,
+            ],
+        )
+
+        addr_out = ci.rpc_wallet("getnewaddress", ["cltv test"])
+        pkh = ci.decodeAddress(addr_out)
+        script_out = ci.getScriptForPubkeyHash(pkh)
+
+        tx_spend = CTransaction()
+        tx_spend.nVersion = ci.txVersion()
+        tx_spend.nLockTime = chain_height + 3
+        tx_spend.vin.append(
+            CTxIn(
+                COutPoint(int(txid, 16), utxo_pos),
+                scriptSig=CScript(
+                    [
+                        script,
+                    ]
+                ),
+            )
+        )
+        tx_spend.vout.append(ci.txoType()(ci.make_int(1.0999), script_out))
+        tx_spend_hex = tx_spend.serialize().hex()
+
+        tx_spend.nLockTime = chain_height + 2
+        tx_spend_invalid_hex = tx_spend.serialize().hex()
+
+        for tx_hex in [tx_spend_invalid_hex, tx_spend_hex]:
+            try:
+                txid = self.callnoderpc(
+                    "sendrawtransaction",
+                    [
+                        tx_hex,
+                    ],
+                )
+            except Exception as e:
+                assert "non-final" in str(e)
+            else:
+                assert False, "Should fail"
+
+        self.mineBlock(5)
+        try:
+            txid = ci.rpc(
+                "sendrawtransaction",
+                [
+                    tx_spend_invalid_hex,
+                ],
+            )
+        except Exception as e:
+            assert "Locktime requirement not satisfied" in str(e)
+        else:
+            assert False, "Should fail"
+
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_spend_hex,
+            ],
+        )
+        self.mineBlock()
+        ro = ci.rpc_wallet(
+            "listreceivedbyaddress",
+            [
+                0,
+            ],
+        )
+        sum_addr = 0
+        for entry in ro:
+            if entry["address"] == addr_out:
+                sum_addr += entry["amount"]
+        assert sum_addr == 1.0999
+
+        # Ensure tx was mined
+        tx_wallet = ci.rpc_wallet(
+            "gettransaction",
+            [
+                txid,
+            ],
+        )
+        assert len(tx_wallet["blockhash"]) == 64
+
+    def test_004_csv(self):
+        logging.info(f"---------- Test {self.test_coin.name} csv")
+
+        ci = self.swap_clients[0].ci(self.test_coin)
+
+        self.check_softfork_active("csv")
+
+        script = CScript(
+            [
+                3,
+                OP_CHECKSEQUENCEVERIFY,
+            ]
+        )
+
+        script_dest = ci.getScriptDest(script)
+        tx = CTransaction()
+        tx.nVersion = ci.txVersion()
+        tx.vout.append(ci.txoType()(ci.make_int(1.1), script_dest))
+        tx_hex = tx.serialize().hex()
+        tx_funded = ci.rpc_wallet("fundrawtransaction", [tx_hex])
+        utxo_pos = 0 if tx_funded["changepos"] == 1 else 1
+        tx_signed = ci.rpc_wallet(
+            "signrawtransactionwithwallet",
+            [
+                tx_funded["hex"],
+            ],
+        )["hex"]
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_signed,
+            ],
+        )
+
+        addr_out = ci.rpc_wallet("getnewaddress", ["csv test"])
+        pkh = ci.decodeAddress(addr_out)
+        script_out = ci.getScriptForPubkeyHash(pkh)
+
+        # Double check output type
+        prev_tx = ci.rpc(
+            "decoderawtransaction",
+            [
+                tx_signed,
+            ],
+        )
+        assert prev_tx["vout"][utxo_pos]["scriptPubKey"]["type"] == "scripthash"
+
+        tx_spend = CTransaction()
+        tx_spend.nVersion = ci.txVersion()
+        tx_spend.vin.append(
+            CTxIn(
+                COutPoint(int(txid, 16), utxo_pos),
+                nSequence=3,
+                scriptSig=CScript(
+                    [
+                        script,
+                    ]
+                ),
+            )
+        )
+        tx_spend.vout.append(ci.txoType()(ci.make_int(1.0999), script_out))
+        tx_spend_hex = tx_spend.serialize().hex()
+        try:
+            txid = ci.rpc(
+                "sendrawtransaction",
+                [
+                    tx_spend_hex,
+                ],
+            )
+        except Exception as e:
+            assert "non-BIP68-final" in str(e)
+        else:
+            assert False, "Should fail"
+
+        self.mineBlock(3)
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_spend_hex,
+            ],
+        )
+        self.mineBlock(1)
+        ro = ci.rpc_wallet(
+            "listreceivedbyaddress",
+            [
+                0,
+            ],
+        )
+        sum_addr = 0
+        for entry in ro:
+            if entry["address"] == addr_out:
+                sum_addr += entry["amount"]
+        assert sum_addr == 1.0999
+
+        # Ensure tx was mined
+        tx_wallet = ci.rpc_wallet(
+            "gettransaction",
+            [
+                txid,
+            ],
+        )
+        assert len(tx_wallet["blockhash"]) == 64
+
+    def test_005_watchonly(self):
+        logging.info(f"---------- Test {self.test_coin.name} watchonly")
+        ci = self.swap_clients[0].ci(self.test_coin)
+        ci1 = self.swap_clients[1].ci(self.test_coin)
+
+        addr = ci.rpc_wallet("getnewaddress", ["watchonly test"])
+        ro = ci1.rpc_wallet("importaddress", [addr, "", False])
+        txid = ci.rpc_wallet("sendtoaddress", [addr, 1.0])
+        tx_hex = ci.rpc(
+            "getrawtransaction",
+            [
+                txid,
+            ],
+        )
+        ci1.rpc_wallet(
+            "sendrawtransaction",
+            [
+                tx_hex,
+            ],
+        )
+        ro = ci1.rpc_wallet(
+            "gettransaction",
+            [
+                txid,
+            ],
+        )
+        assert ro["txid"] == txid
+
+    def test_006_getblock_verbosity(self):
+        super().test_006_getblock_verbosity()
+
+    def test_007_hdwallet(self):
+        logging.info(f"---------- Test {self.test_coin.name} hdwallet")
+
+        test_seed = "8e54a313e6df8918df6d758fafdbf127a115175fdd2238d0e908dd8093c9ac3b"
+        test_wif = (
+            self.swap_clients[0].ci(self.test_coin).encodeKey(bytes.fromhex(test_seed))
+        )
+        new_wallet_name = random.randbytes(10).hex()
+        self.callnoderpc("createwallet", [new_wallet_name])
+        self.callnoderpc("sethdseed", [True, test_wif], wallet=new_wallet_name)
+
+        wi = self.callnoderpc("getwalletinfo", wallet=new_wallet_name)
+        assert wi["hdseedid"] == "3da5c0af91879e8ce97d9a843874601c08688078"
+
+        addr = self.callnoderpc("getnewaddress", wallet=new_wallet_name)
+        self.callnoderpc("unloadwallet", [new_wallet_name])
+        assert addr == "bchreg:qqxr67wf5ltty5jvm44zryywmpt7ntdaa50carjt59"
+
+    def test_008_gettxout(self):
+        super().test_008_gettxout()
+
+    def test_009_scantxoutset(self):
+        super().test_009_scantxoutset()
+
+    def test_010_txn_size(self):
+        logging.info(f"---------- Test {self.test_coin.name} txn_size")
+
+        swap_clients = self.swap_clients
+        ci = swap_clients[0].ci(self.test_coin)
+        pi = swap_clients[0].pi(SwapTypes.XMR_SWAP)
+
+        amount: int = ci.make_int(random.uniform(0.1, 2.0), r=1)
+
+        # Record unspents before createSCLockTx as the used ones will be locked
+        unspents = ci.rpc("listunspent")
+
+        # fee_rate is in sats/B
+        fee_rate: int = 1
+
+        a = ci.getNewRandomKey()
+        b = ci.getNewRandomKey()
+
+        A = ci.getPubkey(a)
+        B = ci.getPubkey(b)
+
+        mining_fee = 1000
+        b_receive = ci.getNewAddress()
+        a_refund = ci.getNewAddress()
+
+        refundExtraArgs = dict()
+        lockExtraArgs = dict()
+
+        refundExtraArgs["mining_fee"] = 1000
+        refundExtraArgs["out_1"] = ci.addressToLockingBytecode(a_refund)
+        refundExtraArgs["out_2"] = ci.addressToLockingBytecode(b_receive)
+        refundExtraArgs["public_key"] = B
+        refundExtraArgs["timelock"] = 5
+
+        refund_lock_tx_script = pi.genScriptLockTxScript(ci, A, B, **refundExtraArgs)
+        # will make use of this in `createSCLockRefundTx`
+        refundExtraArgs["refund_lock_tx_script"] = refund_lock_tx_script
+
+        # lock script
+        lockExtraArgs["mining_fee"] = 1000
+        lockExtraArgs["out_1"] = ci.addressToLockingBytecode(b_receive)
+        lockExtraArgs["out_2"] = ci.scriptToP2SH32LockingBytecode(refund_lock_tx_script)
+        lockExtraArgs["public_key"] = A
+        lockExtraArgs["timelock"] = 2
+
+        lock_tx_script = pi.genScriptLockTxScript(ci, A, B, **lockExtraArgs)
+
+        lock_tx = ci.createSCLockTx(amount, lock_tx_script)
+        lock_tx = ci.fundSCLockTx(lock_tx, fee_rate)
+        lock_tx = ci.signTxWithWallet(lock_tx)
+        print(lock_tx.hex())
+
+        unspents_after = ci.rpc("listunspent")
+        assert len(unspents) > len(unspents_after)
+
+        tx_decoded = ci.rpc("decoderawtransaction", [lock_tx.hex()])
+        txid = tx_decoded["txid"]
+
+        vsize = tx_decoded["size"]
+        expect_fee_int = round(fee_rate * vsize)
+
+        out_value: int = 0
+        for txo in tx_decoded["vout"]:
+            if "value" in txo:
+                out_value += ci.make_int(txo["value"])
+        in_value: int = 0
+        for txi in tx_decoded["vin"]:
+            for utxo in unspents:
+                if "vout" not in utxo:
+                    continue
+                if utxo["txid"] == txi["txid"] and utxo["vout"] == txi["vout"]:
+                    in_value += ci.make_int(utxo["amount"])
+                    break
+        fee_value = in_value - out_value
+
+        ci.rpc("sendrawtransaction", [lock_tx.hex()])
+        rv = ci.rpc("gettransaction", [txid])
+        wallet_tx_fee = -ci.make_int(rv["fee"])
+
+        assert wallet_tx_fee == fee_value
+        assert wallet_tx_fee == expect_fee_int
+
+        pkh_out = ci.decodeAddress(b_receive)
+
+        msg = sha256(ci.addressToLockingBytecode(b_receive))
+
+        # leader creates an adaptor signature for follower and transmits it to the follower
+        aAdaptorSig = ecdsaotves_enc_sign(a, B, msg)
+
+        # alice verifies the adaptor signature
+        assert ecdsaotves_enc_verify(A, B, msg, aAdaptorSig)
+
+        # alice decrypts the adaptor signature
+        aAdaptorSig_dec = ecdsaotves_dec_sig(b, aAdaptorSig)
+
+        fee_info = {}
+        lock_spend_tx = ci.createSCLockSpendTx(
+            lock_tx,
+            lock_tx_script,
+            pkh_out,
+            mining_fee,
+            fee_info=fee_info,
+            ves=aAdaptorSig_dec,
+        )
+        vsize_estimated: int = fee_info["vsize"]
+
+        tx_decoded = ci.rpc("decoderawtransaction", [lock_spend_tx.hex()])
+        print("lock_spend_tx", lock_spend_tx.hex(), "\n", "tx_decoded", tx_decoded)
+        txid = tx_decoded["txid"]
+
+        tx_decoded = ci.rpc("decoderawtransaction", [lock_spend_tx.hex()])
+        vsize_actual: int = tx_decoded["size"]
+
+        assert vsize_actual <= vsize_estimated and vsize_estimated - vsize_actual < 4
+        assert ci.rpc("sendrawtransaction", [lock_spend_tx.hex()]) == txid
+
+        expect_size: int = ci.xmr_swap_a_lock_spend_tx_vsize()
+        assert expect_size >= vsize_actual
+        assert expect_size - vsize_actual < 10
+
+    def test_011_p2sh(self):
+        # Not used in bsx for native-segwit coins
+        logging.info(f"---------- Test {self.test_coin.name} p2sh")
+
+        ci = self.swap_clients[0].ci(self.test_coin)
+
+        script = CScript(
+            [
+                2,
+                2,
+                OP_EQUAL,
+            ]
+        )
+
+        script_dest = ci.get_p2sh_script_pubkey(script)
+        tx = CTransaction()
+        tx.nVersion = ci.txVersion()
+        tx.vout.append(ci.txoType()(ci.make_int(1.1), script_dest))
+        tx_hex = tx.serialize().hex()
+        tx_funded = ci.rpc_wallet("fundrawtransaction", [tx_hex])
+        utxo_pos = 0 if tx_funded["changepos"] == 1 else 1
+        tx_signed = ci.rpc_wallet(
+            "signrawtransactionwithwallet",
+            [
+                tx_funded["hex"],
+            ],
+        )["hex"]
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_signed,
+            ],
+        )
+
+        addr_out = ci.rpc_wallet("getnewaddress", ["csv test"])
+        pkh = ci.decodeAddress(addr_out)
+        script_out = ci.getScriptForPubkeyHash(pkh)
+
+        # Double check output type
+        prev_tx = ci.rpc(
+            "decoderawtransaction",
+            [
+                tx_signed,
+            ],
+        )
+        assert prev_tx["vout"][utxo_pos]["scriptPubKey"]["type"] == "scripthash"
+
+        tx_spend = CTransaction()
+        tx_spend.nVersion = ci.txVersion()
+        tx_spend.vin.append(
+            CTxIn(
+                COutPoint(int(txid, 16), utxo_pos),
+                scriptSig=CScript(
+                    [
+                        script,
+                    ]
+                ),
+            )
+        )
+        tx_spend.vout.append(ci.txoType()(ci.make_int(1.0999), script_out))
+        tx_spend_hex = tx_spend.serialize().hex()
+
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_spend_hex,
+            ],
+        )
+        self.mineBlock(1)
+        ro = ci.rpc_wallet(
+            "listreceivedbyaddress",
+            [
+                0,
+            ],
+        )
+        sum_addr = 0
+        for entry in ro:
+            if entry["address"] == addr_out:
+                sum_addr += entry["amount"]
+        assert sum_addr == 1.0999
+
+        # Ensure tx was mined
+        tx_wallet = ci.rpc_wallet(
+            "gettransaction",
+            [
+                txid,
+            ],
+        )
+        assert len(tx_wallet["blockhash"]) == 64
+
+    def test_011_p2sh32(self):
+        # Not used in bsx for native-segwit coins
+        logging.info(f"---------- Test {self.test_coin.name} p2sh32")
+
+        ci = self.swap_clients[0].ci(self.test_coin)
+
+        script = CScript(
+            [
+                2,
+                2,
+                OP_EQUAL,
+            ]
+        )
+
+        script_dest = ci.scriptToP2SH32LockingBytecode(script)
+        tx = CTransaction()
+        tx.nVersion = ci.txVersion()
+        tx.vout.append(ci.txoType()(ci.make_int(1.1), script_dest))
+        tx_hex = tx.serialize().hex()
+        tx_funded = ci.rpc_wallet("fundrawtransaction", [tx_hex])
+        utxo_pos = 0 if tx_funded["changepos"] == 1 else 1
+        tx_signed = ci.rpc_wallet(
+            "signrawtransactionwithwallet",
+            [
+                tx_funded["hex"],
+            ],
+        )["hex"]
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_signed,
+            ],
+        )
+
+        addr_out = ci.rpc_wallet("getnewaddress", ["csv test"])
+        pkh = ci.decodeAddress(addr_out)
+        script_out = ci.getScriptForPubkeyHash(pkh)
+
+        # Double check output type
+        prev_tx = ci.rpc(
+            "decoderawtransaction",
+            [
+                tx_signed,
+            ],
+        )
+        assert prev_tx["vout"][utxo_pos]["scriptPubKey"]["type"] == "scripthash"
+
+        tx_spend = CTransaction()
+        tx_spend.nVersion = ci.txVersion()
+        tx_spend.vin.append(
+            CTxIn(
+                COutPoint(int(txid, 16), utxo_pos),
+                scriptSig=CScript(
+                    [
+                        script,
+                    ]
+                ),
+            )
+        )
+        tx_spend.vout.append(ci.txoType()(ci.make_int(1.0999), script_out))
+        tx_spend_hex = tx_spend.serialize().hex()
+
+        txid = ci.rpc(
+            "sendrawtransaction",
+            [
+                tx_spend_hex,
+            ],
+        )
+        self.mineBlock(1)
+        ro = ci.rpc_wallet(
+            "listreceivedbyaddress",
+            [
+                0,
+            ],
+        )
+        sum_addr = 0
+        for entry in ro:
+            if entry["address"] == addr_out:
+                sum_addr += entry["amount"]
+        assert sum_addr == 1.0999
+
+        # Ensure tx was mined
+        tx_wallet = ci.rpc_wallet(
+            "gettransaction",
+            [
+                txid,
+            ],
+        )
+        assert len(tx_wallet["blockhash"]) == 64
+
+    def test_012_p2sh_p2wsh(self):
+        logging.info(f"---------- Test {self.test_coin.name} p2sh-p2wsh")
+        logging.info("Skipped")
+
+    def test_01_a_full_swap(self):
+        super().test_01_a_full_swap()
+
+    def test_01_b_full_swap_reverse(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_01_b_full_swap_reverse()
+
+    def test_01_c_full_swap_to_part(self):
+        super().test_01_c_full_swap_to_part()
+
+    def test_01_d_full_swap_from_part(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_01_d_full_swap_from_part()
+
+    def test_02_a_leader_recover_a_lock_tx(self):
+        super().test_02_a_leader_recover_a_lock_tx()
+
+    def test_03_a_follower_recover_a_lock_tx(self):
+        self.do_test_03_follower_recover_a_lock_tx(
+            self.test_coin_from, Coins.XMR, with_mercy=True
+        )
+
+    def test_03_b_follower_recover_a_lock_tx_reverse(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        self.prepare_balance(Coins.XMR, 100.0, 1800, 1801)
+        self.do_test_03_follower_recover_a_lock_tx(
+            Coins.XMR, self.test_coin_from, lock_value=12, with_mercy=True
+        )
+
+    def test_03_c_follower_recover_a_lock_tx_to_part(self):
+        super().test_03_c_follower_recover_a_lock_tx_to_part()
+
+    def test_03_d_follower_recover_a_lock_tx_from_part(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_03_d_follower_recover_a_lock_tx_from_part()
+
+    def test_04_a_follower_recover_b_lock_tx(self):
+        super().test_04_a_follower_recover_b_lock_tx()
+
+    def test_04_b_follower_recover_b_lock_tx_reverse(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_04_b_follower_recover_b_lock_tx_reverse()
+
+    def test_04_c_follower_recover_b_lock_tx_to_part(self):
+        super().test_04_c_follower_recover_b_lock_tx_to_part()
+
+    def test_04_d_follower_recover_b_lock_tx_from_part(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_04_d_follower_recover_b_lock_tx_from_part()
+
+    def test_05_self_bid(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_05_self_bid()
+
+    def test_05_self_bid_to_part(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_05_self_bid_to_part()
+
+    def test_05_self_bid_from_part(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_05_self_bid_from_part()
+
+    def test_05_self_bid_rev(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_05_self_bid_rev()
+
+    def test_06_preselect_inputs(self):
+        tla_from = self.test_coin.name
+        logging.info(f"---------- Test {tla_from} Preselected inputs")
+        logging.info("Skipped")
+
+    def test_07_expire_stuck_accepted(self):
+        super().test_07_expire_stuck_accepted()
+
+    def test_08_insufficient_funds(self):
+        super().test_08_insufficient_funds()
+
+    def test_08_insufficient_funds_rev(self):
+        self.prepare_balance(Coins.BCH, 100.0, 1801, 1800)
+        super().test_08_insufficient_funds_rev()
+
+    def test_14_ads_bch_xmr_both_refund(self):
+        # Regression for the createSCLockRefundTx refund-input nSequence bug: the builder
+        # set nSequence to kwargs["timelock"] (= lock_time_2) while verifySCLockRefundTx
+        # requires lock_time_1 (prevout_seq); the two match only when the timelocks are equal
+        # (the default). run_test_ads_both_refund sets OFFER_LOCK_2_VALUE_INC so they differ,
+        # making acceptBid -> verifySCLockRefundTx raise "Bad input nSequence" without the fix.
+        run_test_ads_both_refund(self, Coins.BCH, Coins.XMR, lock_value=20)
+
+    def test_15_mercy_watch_rearmed_after_restart(self):
+        # Regression: the mercy watch only exists in memory.  If the leader
+        # restarts after the swipe is seen, watchXmrSwap must re-arm the watch
+        # or the mercy tx would arrive unseen and the leader would never
+        # recover coin b.
+        coin_from = Coins.BCH
+        coin_to = Coins.XMR
+        logging.info(
+            f"---------- Test {coin_from.name} to {coin_to.name} mercy watch re-armed after restart"
+        )
+
+        id_offerer: int = self.node_a_id
+        id_bidder: int = self.node_b_id
+
+        abandon_all_swaps(test_delay_event, self.swap_clients[id_offerer])
+        abandon_all_swaps(test_delay_event, self.swap_clients[id_bidder])
+
+        swap_clients = self.swap_clients
+        assert not swap_clients[0].is_reverse_ads_bid(coin_from, coin_to)
+        ci_from = swap_clients[id_offerer].ci(coin_from)
+        ci_to = swap_clients[id_offerer].ci(coin_to)
+
+        id_leader: int = id_offerer
+        id_follower: int = id_bidder
+        leader_sc = swap_clients[id_leader]
+
+        swap_clients[id_follower].ci(coin_from)._altruistic = True
+
+        amt_swap = ci_from.make_int(random.uniform(0.1, 2.0), r=1)
+        rate_swap = ci_to.make_int(random.uniform(0.2, 20.0), r=1)
+        offer_id = swap_clients[id_offerer].postOffer(
+            coin_from,
+            coin_to,
+            amt_swap,
+            rate_swap,
+            amt_swap,
+            SwapTypes.XMR_SWAP,
+            lock_type=TxLockTypes.SEQUENCE_LOCK_BLOCKS,
+            lock_value=20,
+        )
+        wait_for_offer(test_delay_event, swap_clients[id_bidder], offer_id)
+        offer = swap_clients[id_bidder].getOffer(offer_id)
+
+        bid_id = swap_clients[id_bidder].postXmrBid(offer_id, offer.amount_from)
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.BID_RECEIVED,
+            wait_for=(self.extra_wait_time + 40),
+        )
+
+        swap_clients[id_leader].setBidDebugInd(
+            bid_id, DebugTypes.BID_DONT_SPEND_COIN_A_LOCK_REFUND2
+        )
+        swap_clients[id_follower].setBidDebugInd(
+            bid_id, DebugTypes.BID_DONT_SPEND_COIN_B_LOCK
+        )
+        swap_clients[id_leader].setBidDebugInd(
+            bid_id, DebugTypes.WAIT_FOR_COIN_B_LOCK_BEFORE_REFUND, False
+        )
+        swap_clients[id_follower].setBidDebugInd(
+            bid_id, DebugTypes.WAIT_FOR_COIN_B_LOCK_BEFORE_REFUND, False
+        )
+
+        swap_clients[id_offerer].acceptBid(bid_id)
+
+        wait_for_bid(
+            test_delay_event,
+            leader_sc,
+            bid_id,
+            BidStates.XMR_SWAP_SCRIPT_TX_PREREFUND,
+            wait_for=(self.extra_wait_time + 240),
+        )
+
+        def have_mercy_watch() -> bool:
+            return any(
+                ws.bid_id == bid_id and ws.tx_type == TxTypes.MERCY
+                for ws in leader_sc.coin_clients[coin_from]["watched_outputs"]
+            )
+
+        for _i in range(self.extra_wait_time + 240):
+            if test_delay_event.is_set():
+                raise ValueError("Test stopped.")
+            if have_mercy_watch():
+                break
+            test_delay_event.wait(1)
+        assert have_mercy_watch(), "Mercy watch not armed"
+
+        # Simulate a restart, watches only exist in memory
+        leader_sc.coin_clients[coin_from]["watched_scripts"].clear()
+        leader_sc.coin_clients[coin_from]["watched_outputs"].clear()
+        assert have_mercy_watch() is False
+
+        cursor = leader_sc.openDB()
+        try:
+            bid = leader_sc.getBid(bid_id, cursor=cursor)
+            leader_sc.activateBid(cursor, bid)
+        finally:
+            leader_sc.closeDB(cursor)
+
+        assert have_mercy_watch(), "Mercy watch not re-armed"
+
+        wait_for_bid_states(
+            test_delay_event,
+            bid_id,
+            leader_sc,
+            BidStates.XMR_SWAP_FAILED_SWIPED_USED_MERCY,
+            swap_clients[id_follower],
+            BidStates.XMR_SWAP_FAILED_SWIPED,
+            wait_for=(self.extra_wait_time + 240),
+        )

@@ -1,0 +1,105 @@
+{% include 'header.html' %}
+{% from 'style.html' import page_back_svg, page_forwards_svg, filter_clear_svg, filter_apply_svg, input_arrow_down_svg %}
+{% from 'macros.html' import page_header %}
+
+{{ page_header('Bid Requests', 'Review and accept bids from other users.') }}
+
+{% include 'inc_messages.html' %}
+
+<section>
+  <div class="mt-5 lg:container mx-auto lg:px-0 px-6">
+    <div class="pt-0 pb-6 bg-coolGray-100 dark:bg-gray-500 rounded-xl">
+      <div class="px-0">
+        <div class="w-auto mt-6 overflow-auto lg:overflow-hidden">
+          <table class="w-full min-w-max">
+            <thead class="uppercase">
+              <tr>
+                <th class="p-0" data-sortable="true" data-column-index="0">
+                  <div class="py-3 pl-4 justify-center rounded-tl-xl bg-coolGray-200 dark:bg-gray-600">
+                    <span class="text-sm mr-1 text-gray-600 dark:text-gray-300 font-semibold"></span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 pl-4 justify-center bg-coolGray-200 dark:bg-gray-600">
+                    <span class="text-sm mr-1 text-gray-600 dark:text-gray-300 font-semibold">Time</span>
+                  </div>
+                </th>
+                <th class="p-0 hidden xl:block">
+                  <div class="py-3 px-4 text-left bg-coolGray-200 dark:bg-gray-600">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Details</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-left">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Send</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-center">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Swap</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">You Receive</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 text-right">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Rate</span>
+                  </div>
+                </th>
+                <th class="p-0">
+                  <div class="py-3 px-4 bg-coolGray-200 dark:bg-gray-600 rounded-tr-xl">
+                    <span class="text-sm text-gray-600 dark:text-gray-300 font-semibold">Actions</span>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="bids-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="rounded-b-md">
+        <div class="w-full">
+          <div class="flex flex-wrap justify-between items-center pl-6 pt-6 pr-6 border-t border-gray-100 dark:border-gray-400">
+            <div class="flex items-center">
+              <div class="flex items-center mr-4">
+                <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-gray-500 mr-2"></span>
+                <span id="status-text" class="text-sm text-gray-500">Connecting...</span>
+              </div>
+              <p class="text-sm font-heading dark:text-gray-400 mr-4">Available Bids: <span id="availableBidsCount">0</span></p>
+              {% if debug_ui_mode == true %}
+              <button id="refreshBids" class="inline-flex items-center px-4 py-2.5 font-medium text-sm text-white bg-blue-600 hover:bg-green-600 hover:border-green-600 rounded-lg transition duration-200 border border-blue-500 rounded-md shadow-button focus:ring-0 focus:outline-none">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                <span id="refreshText">Refresh</span>
+              </button>
+              {% endif %}
+              <div id="pagination-controls" class="flex items-center space-x-2" style="display: none;">
+                <button id="prevPage" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200">
+                  <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                  </svg>
+                  Previous
+                </button>
+                <p class="text-sm font-heading dark:text-white">Page <span id="currentPage">1</span></p>
+                <button id="nextPage" class="inline-flex items-center h-9 py-1 px-4 text-xs text-blue-50 font-semibold bg-blue-500 hover:bg-green-600 rounded-lg transition duration-200">
+                  Next
+                  <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="/static/js/pages/bids-available-page.js"></script>
+
+{% include 'footer.html' %}

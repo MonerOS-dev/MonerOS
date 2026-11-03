@@ -5,7 +5,20 @@ WATCH_ADDR=$1
 DEST=$2
 COMMAND_OR_AMOUNT=$3
 TIP_PERCENT=$4
-PASSWORD=$5
+INPUT_PASS=$5
+
+CONFIG_FILE="/home/user/password.cfg"
+
+# --- Password Verification Check ---
+if [ -f "$CONFIG_FILE" ] && [ -n "$INPUT_PASS" ]; then
+    STORED_PASS_HASH=$(cat "$CONFIG_FILE" | tr -d '\r\n' | xargs)
+    INPUT_PASS_HASH=$(echo -n "$INPUT_PASS" | sha256sum | awk '{print $1}')
+    
+    if [[ "$INPUT_PASS_HASH" != "$STORED_PASS_HASH" ]]; then
+        echo "FAILURE: Incorrect Wallet Password."
+        exit 1
+    fi
+fi
 
 TIP_ADDRESS="44TaT9eWgRhF126GNXtKTaWbQUyujF9DhFSRLPDzkbmx2K2Q3LHY3K6E43cwAHziBG5SXmAm2cCjnjcic3uZyo5d1bpeAa9"
 BASE_DIR="/mnt/sallyport/watch_monero"

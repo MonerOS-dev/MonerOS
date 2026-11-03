@@ -12,3 +12,4 @@ whiptail
 expect
 curl
 jq
+fuse

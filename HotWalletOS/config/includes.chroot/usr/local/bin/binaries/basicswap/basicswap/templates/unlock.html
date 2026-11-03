@@ -1,0 +1,39 @@
+{% extends "auth_base.html" %}
+
+{% block heading %}Unlock BasicSwap{% endblock %}
+{% block subtext %}Enter your password to access your wallets{% endblock %}
+
+{% block submit_button %}
+<button
+  type="submit"
+  name="unlock"
+  value="Unlock"
+  id="auth-btn"
+  data-loading-text="Unlocking..."
+  class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-3 px-4 rounded-lg transition-colors focus:outline-none disabled:cursor-not-allowed"
+>
+  <span id="auth-text">Unlock</span>
+  <svg id="auth-spinner" class="hidden animate-spin ml-2 h-5 w-5 text-white inline" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+  </svg>
+</button>
+{% endblock %}
+
+{% block form_hidden_fields %}
+<input type="hidden" name="formid" value="{{ form_id }}">
+{% endblock %}
+
+{% block footer %}
+<p class="text-sm text-gray-600 dark:text-gray-400">
+  Need help?
+  <a href="https://docs.basicswapdex.com/docs/intro/"
+     target="_blank"
+     class="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 underline">
+    View tutorials
+  </a>
+</p>
+<p class="text-xs text-gray-500 dark:text-gray-500">
+  {{ title }}
+</p>
+{% endblock %}

@@ -3,30 +3,49 @@
  * HotWalletOS Dashboard - Ultra-Silver Industrial
  * Update: Centered Column Data & Headers
  */
+
+if (isset($_GET['action']) && $_GET['action'] === 'start_basicswap') {
+    // Run as user 'user' instead of default root, preserving DISPLAY=:0 permissions
+    shell_exec('sudo -n -u user /usr/bin/bash /usr/local/bin/start-dashboard > /dev/null 2>&1 &');
+    header("Location: " . strtok($_SERVER["REQUEST_URI"], '?')); 
+    exit;
+}
  
 // 0. Get Balance
-$command = "/usr/local/bin/os/get_monero_balance";
+$command = "/usr/local/bin/os/get_crypto_balances";
 exec("nohup sudo /usr/bin/bash $command > /dev/null 2>&1 &");
 
 // 1. Define configurations
 $coinConfigs = [
-    //"Bitcoin"   => ["dir" => "/var/www/backend/Bitcoin/",   "api_id" => "bitcoin",     "display" => "Bitcoin (BTC)"],
-    //"Litecoin"  => ["dir" => "/var/www/backend/Litecoin/",  "api_id" => "litecoin",    "display" => "Litecoin (LTC)"],
-    //"Dogecoin"  => ["dir" => "/var/www/backend/Dogecoin/",  "api_id" => "dogecoin",    "display" => "Dogecoin (DOGE)"],
-    "Monero"    => ["dir" => "/var/www/backend/Monero/",    "api_id" => "monero",      "display" => "Monero (XMR)"],
-    //"Ethereum"  => ["dir" => "/var/www/backend/Ethereum/",  "api_id" => "ethereum",    "display" => "Ethereum (ETH)"],
-    //"Avalanche" => ["dir" => "/var/www/backend/Avalanche/", "api_id" => "avalanche-2", "display" => "Avalanche (AVAX)"]
+    "Bitcoin" => ["dir" => "/var/www/backend/Bitcoin/", "key" => "bitcoin", "display" => "Bitcoin (BTC)"],
+    "Monero"  => ["dir" => "/var/www/backend/Monero/",  "key" => "monero",  "display" => "Monero (XMR)"],
 ];
 
-// 2. Fetch Prices
-$ids = implode(',', array_map(fn($c) => $c['api_id'], $coinConfigs));
-$curl = curl_init("https://api.coingecko.com/api/v3/simple/price?ids=$ids&vs_currencies=usd");
+// 2. Fetch Prices from GitHub raw prices.json
+$rawUrl = "https://gist.githubusercontent.com/MonerOS-dev/b715a2d6610d7ffd88a2231ae3576ff1/raw/prices.json";
+$curl = curl_init($rawUrl);
 curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
-curl_setopt($curl, CURLOPT_USERAGENT, "ColdWalletOS/Admin");
+curl_setopt($curl, CURLOPT_TIMEOUT, 5);
+curl_setopt($curl, CURLOPT_USERAGENT, "HotWalletOS/Admin");
 $response = curl_exec($curl);
+$httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
 curl_close($curl);
-$priceData = json_decode($response, true);
+
+$priceData = [];
+if ($httpCode === 200 && $response) {
+    $parsed = json_decode($response, true);
+    if (isset($parsed['prices'])) {
+        $priceData = $parsed['prices'];
+    }
+}
+
+// Fallback to local cache if GitHub fetch drops momentarily
+$cacheFile = '/tmp/hotwalletos_prices_cache.json';
+if (!empty($priceData)) {
+    file_put_contents($cacheFile, json_encode($priceData));
+} elseif (file_exists($cacheFile)) {
+    $priceData = json_decode(file_get_contents($cacheFile), true) ?? [];
+}
 
 // 3. Process Data
 $rows = [];
@@ -34,7 +53,7 @@ $totalPortfolioUsd = 0;
 
 foreach ($coinConfigs as $coinName => $config) {
     $dir = $config["dir"];
-    $coinPrice = $priceData[$config["api_id"]]["usd"] ?? 0;
+    $coinPrice = (float)($priceData[$config["key"]] ?? 0);
     $wallets = glob($dir . "*_balance.txt");
 
     if ($wallets) {
@@ -45,7 +64,7 @@ foreach ($coinConfigs as $coinName => $config) {
             $balance = file_exists($balanceFile) ? trim(file_get_contents($balanceFile)) : "0.00";
             $unlocked = file_exists($unlockedFile) ? trim(file_get_contents($unlockedFile)) : "0.00";
             
-            $usdValue = (float)$balance * (float)$coinPrice;
+            $usdValue = (float)$balance * $coinPrice;
             $totalPortfolioUsd += $usdValue;
 
             $rows[] = [
@@ -266,6 +285,15 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             border-color: #ff3333;
         }
         
+        .btn-basicswap { 
+            color: #59cbe8; 
+        }
+        .btn-basicswap:hover {
+            background: #59cbe8;
+            color: #000;
+            border-color: #59cbe8;
+        }
+        
         .tag-warning {
             font-size: 0.8rem;
             color: black;
@@ -338,6 +366,9 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
     </div>
 
     <div class="footer-nav">
+        <?php if (file_exists('/var/www/backend/bs.en')): ?>
+            <a href="?action=start_basicswap" class="btn-cmd btn-basicswap">Open BasicSwap</a>
+        <?php endif; ?>
         <a href="remote.php" class="btn-cmd btn-remote">Remote viewing link</a>
         <a href="shutdown.php" class="btn-cmd btn-shutdown">Shutdown System</a>
     </div>

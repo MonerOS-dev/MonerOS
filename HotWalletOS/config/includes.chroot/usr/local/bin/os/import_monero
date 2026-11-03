@@ -89,10 +89,10 @@ echo "Importing Monero - Initializing Node Selection"
 
 # --- GLOBAL PORT MAPPING PASS ---
 # Bash naturally expands globs alphabetically. 
-# The lowest alphabetical folder gets 18084, the next gets 18085, etc.
+# The lowest alphabetical folder gets 18090, the next gets 18091, etc.
 
 echo "Re-indexing wallet RPC ports alphabetically..."
-START_PORT=18084
+START_PORT=18090
 CURRENT_PORT=$START_PORT
 
 # Prevent empty base directory from breaking the loop evaluation
@@ -315,6 +315,12 @@ EOF
             chown user:user "$PASS_FILE"
             chmod 600 "$PASS_FILE"
             
+            sleep 5
+            
+            # Define a RAM-backed log file in shared memory (/dev/shm)
+            RAM_LOG="/dev/shm/rpc_daemon_${RPC_PORT}.log"
+            #rm -f "$RAM_LOG"
+
             sudo -u user PASSWORD="$PASSWORD" monero-wallet-rpc \
                 --wallet-file "watchonly" \
                 --password-file "$PASS_FILE" \
@@ -324,90 +330,165 @@ EOF
                 --trusted-daemon \
                 --disable-rpc-login \
                 --shared-ringdb-dir /home/user/.shared-ringdb \
-                --log-file "rpc_daemon.log" >/dev/null 2>&1 &
+                --log-file "$RAM_LOG" \
+                --log-level 2 \
+                >/dev/null 2>&1 &
                 
-                
-            sleep 3
+            sleep 10
             
+            # --- RAW PORT CHECK (Kernel-level) ---
+            #echo "Waiting for port $RPC_PORT to open..."
+            #MAX_RETRIES=150
+            #RETRY_COUNT=0
             
-            # Optimized Health Verification Loop (Polling HTTP API directly)
-            echo "Verifying Monero Wallet RPC initialization state..."
-            echo "This may take a while..."
-            MAX_RETRIES=300   # 5 minutes per retry cycle for faster recovery
-            RETRY_COUNT=0
-            
-            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
-                    -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}' \
-                    -H 'Content-Type: application/json')
-                
-                if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 401 ]; then
-                    echo "RPC daemon confirmed active on port $RPC_PORT (HTTP status: $HTTP_STATUS)."
-                    RPC_READY=true
-                    break
-                else
-                    ((RETRY_COUNT++))
-                    sleep 1
-                fi
-            done
+            #while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            #    # 1. Check if the port is listening AND the process is still alive
+            #    if ss -tln | grep -q ":$RPC_PORT " && pgrep -f "monero-wallet-rpc.*--rpc-bind-port $RPC_PORT" > /dev/null; then
+            #        echo "RPC daemon confirmed active on port $RPC_PORT."
+            #        RPC_READY=true
+            #        break
+            #    else
+            #        # If the process died while we were waiting, fail fast instead of waiting out the retry count
+            #        if ! pgrep -f "monero-wallet-rpc.*--rpc-bind-port $RPC_PORT" > /dev/null; then
+            #            echo "[ERROR] monero-wallet-rpc process crashed on startup!"
+            #            break
+            #        fi
+            #        ((RETRY_COUNT++))
+            #        sleep 1
+            #    fi
+            #done
             
             # If it failed to respond after max retries, force-kill and retry the outer loop iteration
-            if [ "$RPC_READY" = false ]; then
-                echo "[WARNING] RPC daemon on port $RPC_PORT failed to come online. Restarting process..."
-                pkill -f "monero-wallet-rpc.*--rpc-bind-port $RPC_PORT" 2>/dev/null
-                sleep 2
-                continue
-            fi
+            #if [ "$RPC_READY" = false ]; then
+            #    echo "[WARNING] RPC daemon on port $RPC_PORT failed to come online. Restarting process..."
+            #    pkill -f "monero-wallet-rpc.*--rpc-bind-port $RPC_PORT" 2>/dev/null
+            #    sleep 2
+            #    continue
+            #fi
             
             # Break out of the spin-up wrapper once confirmed ready
             break
         done
 
-        # --- UNIVERSAL SYNC LOOP ---
         echo "Synchronizing wallet with daemon..."
         SYNCED=false
-        while [ "$SYNCED" = false ]; do
-            # 1. Always query the LOCAL Wallet RPC (no proxy needed)
-            CURRENT_HEIGHT=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
-                -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}' | jq -r '.result.height // empty')
-            
-            # 2. Query the DAEMON (Local or Remote)
-            if [[ "$REMOTE_NODE" == *".onion"* ]]; then
-                DAEMON_RESP=$(curl -s -m 45 --socks5-hostname "$PROXY" -X POST "http://$REMOTE_NODE/json_rpc" \
-                    -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
-            else
-                DAEMON_RESP=$(curl -s -m 20 -X POST "http://$REMOTE_NODE/json_rpc" \
-                    -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
-            fi
-            
-            # 3. Handle 'target_height: 0' logic (Common on synced nodes)
-            T_HT=$(echo "$DAEMON_RESP" | jq -r '.result.target_height // 0')
-            R_HT=$(echo "$DAEMON_RESP" | jq -r '.result.height // 0')
-
-            if [ "$T_HT" -gt "$R_HT" ]; then
-                TARGET_HEIGHT=$T_HT
-            else
-                TARGET_HEIGHT=$R_HT
-            fi
         
-            # 4. Validation and Comparison
-            if [[ "$CURRENT_HEIGHT" =~ ^[0-9]+$ ]] && [[ "$TARGET_HEIGHT" =~ ^[0-9]+$ ]] && [ "$TARGET_HEIGHT" -gt 0 ]; then
-                echo "Progress: Wallet ($CURRENT_HEIGHT) / Daemon ($TARGET_HEIGHT)"
-                if [ "$CURRENT_HEIGHT" -ge "$TARGET_HEIGHT" ]; then
-                    echo "[OK] Wallet blockchain sync matches remote network top."
-                    SYNCED=true
-                fi
-            else
-                echo "[DEBUG] Waiting for valid height data... (Is the node or Tor responsive?)"
-                # If we have a response but it's empty, it might be a dead Tor circuit
-                if [ -z "$DAEMON_RESP" ] && [[ "$REMOTE_NODE" == *".onion"* ]]; then
-                    echo "    -> Empty response from Onion node. Refreshing Tor..."
-                    killall -HUP tor 2>/dev/null
-                fi
+        # Grab the target node height as soon as it appears in the log
+        TARGET_HEIGHT=""
+
+        while [ "$SYNCED" = false ]; do
+            # Check for completion in the log
+            if grep -qE "(Wallet synced|Refresh done)" "$RAM_LOG" 2>/dev/null; then
+                echo -e "\nSync complete. Verifying RPC port responsiveness..."
+                SYNCED=true
+                break
             fi
-            
-            [ "$SYNCED" = false ] && sleep 10
+
+            # 1. Try to extract the target node height if we haven't caught it yet
+            if [ -z "$TARGET_HEIGHT" ]; then
+                TARGET_HEIGHT=$(grep -oP "node height \K[0-9]+" "$RAM_LOG" 2>/dev/null | tail -n 1)
+            fi
+
+            # 2. Get the latest processed block height from the log
+            CURRENT_HEIGHT=$(grep -oP "Processed block:.*height \K[0-9]+" "$RAM_LOG" 2>/dev/null | tail -n 1)
+
+            # Fallback if processed block height isn't found yet
+            if [ -z "$CURRENT_HEIGHT" ]; then
+                CURRENT_HEIGHT=$(grep -oP "height \K[0-9]+" "$RAM_LOG" 2>/dev/null | tail -n 1)
+            fi
+
+            # 3. Format address to show first 6 and last 6 characters
+            ADDR_SHORT="${ADDR:0:6}...${ADDR: -6}"
+
+            # 4. Print clean formatted progress (avoiding literal 'Block 0')
+            if [ -n "$CURRENT_HEIGHT" ] && [ "$CURRENT_HEIGHT" -gt 0 ] && [ -n "$TARGET_HEIGHT" ]; then
+                echo -ne "\r\033[K[Syncing] $ADDR_SHORT | Block $CURRENT_HEIGHT of $TARGET_HEIGHT"
+            elif [ -n "$CURRENT_HEIGHT" ] && [ "$CURRENT_HEIGHT" -gt 0 ]; then
+                echo -ne "\r\033[K[Syncing] $ADDR_SHORT | Block $CURRENT_HEIGHT"
+            else
+                echo -ne "\r\033[K[Syncing] $ADDR_SHORT | Starting scan..."
+            fi
+
+            # Fail fast if process dies
+            if ! pgrep -f "monero-wallet-rpc.*--rpc-bind-port $RPC_PORT" > /dev/null; then
+                echo -e "\n[ERROR] monero-wallet-rpc process crashed."
+                break
+            fi
+
+            sleep 2
         done
+
+        # --- ENSURE RPC PORT ACCEPTS CURL REQUESTS ---
+        if [ "$SYNCED" = true ]; then
+            echo -ne "\nWaiting for RPC port $RPC_PORT to accept API commands..."
+            while true; do
+                # Test a basic lightweight RPC call (get_height) via curl
+                CURL_TEST=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
+                    -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}' 2>/dev/null)
+                
+                # Check if jq successfully parses a height result
+                TEST_HEIGHT=$(echo "$CURL_TEST" | jq -r '.result.height // empty' 2>/dev/null)
+
+                if [[ "$TEST_HEIGHT" =~ ^[0-9]+$ ]]; then
+                    echo -e "\r\033[K[OK] Wallet RPC on port $RPC_PORT is active and responding to API requests."
+                    break
+                fi
+
+                # Fail fast if process crashed during the wait
+                if ! pgrep -f "monero-wallet-rpc.*--rpc-bind-port $RPC_PORT" > /dev/null; then
+                    echo -e "\n[ERROR] monero-wallet-rpc crashed while initializing RPC listener."
+                    break
+                fi
+
+                sleep 1
+            done
+        fi
+        
+        # --- UNIVERSAL SYNC LOOP ---
+        #echo "Synchronizing wallet with daemon..."
+        #SYNCED=false
+        #while [ "$SYNCED" = false ]; do
+        #    # 1. Always query the LOCAL Wallet RPC (no proxy needed)
+        #    CURRENT_HEIGHT=$(curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc \
+        #        -d '{"jsonrpc":"2.0","id":"0","method":"get_height"}' | jq -r '.result.height // empty')
+            
+        #    # 2. Query the DAEMON (Local or Remote)
+        #    if [[ "$REMOTE_NODE" == *".onion"* ]]; then
+        #        DAEMON_RESP=$(curl -s -m 45 --socks5-hostname "$PROXY" -X POST "http://$REMOTE_NODE/json_rpc" \
+        #            -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
+        #    else
+        #        DAEMON_RESP=$(curl -s -m 20 -X POST "http://$REMOTE_NODE/json_rpc" \
+        #            -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
+        #    fi
+            
+        #    # 3. Handle 'target_height: 0' logic (Common on synced nodes)
+        #    T_HT=$(echo "$DAEMON_RESP" | jq -r '.result.target_height // 0')
+        #    R_HT=$(echo "$DAEMON_RESP" | jq -r '.result.height // 0')
+
+        #    if [ "$T_HT" -gt "$R_HT" ]; then
+        #        TARGET_HEIGHT=$T_HT
+        #    else
+        #        TARGET_HEIGHT=$R_HT
+        #    fi
+        
+        #    # 4. Validation and Comparison
+        #    if [[ "$CURRENT_HEIGHT" =~ ^[0-9]+$ ]] && [[ "$TARGET_HEIGHT" =~ ^[0-9]+$ ]] && [ "$TARGET_HEIGHT" -gt 0 ]; then
+        #        echo "Progress: Wallet ($CURRENT_HEIGHT) / Daemon ($TARGET_HEIGHT)"
+        #        if [ "$CURRENT_HEIGHT" -ge "$TARGET_HEIGHT" ]; then
+        #            echo "[OK] Wallet blockchain sync matches remote network top."
+        #            SYNCED=true
+        #        fi
+        #    else
+        #        echo "[DEBUG] Waiting for valid height data... (Is the node or Tor responsive?)"
+        #        # If we have a response but it's empty, it might be a dead Tor circuit
+        #        if [ -z "$DAEMON_RESP" ] && [[ "$REMOTE_NODE" == *".onion"* ]]; then
+        #            echo "    -> Empty response from Onion node. Refreshing Tor..."
+        #            killall -HUP tor 2>/dev/null
+        #        fi
+        #    fi
+            
+        #    [ "$SYNCED" = false ] && sleep 10
+        #done
         
         # 1. Update the chain state
     		curl -s -X POST http://127.0.0.1:$RPC_PORT/json_rpc -d '{"jsonrpc":"2.0","id":"0","method":"refresh"}' >/dev/null

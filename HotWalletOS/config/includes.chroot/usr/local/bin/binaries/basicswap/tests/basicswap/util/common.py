@@ -1,0 +1,846 @@
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2020-2024 tecnovert
+# Copyright (c) 2024-2026 The Basicswap developers
+# Distributed under the MIT software license, see the accompanying
+# file LICENSE.txt or http://www.opensource.org/licenses/mit-license.php.
+
+import json
+import logging
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import threading
+import urllib
+from urllib.request import urlopen
+
+from basicswap.basicswap import Coins
+from basicswap.basicswap_util import BidStates
+from basicswap.rpc import callrpc
+from basicswap.util import toBool
+from basicswap.util import toBool as make_boolean  # noqa: F401
+from basicswap.contrib.rpcauth import generate_salt, password_to_hmac
+from basicswap.interface.pivx.core import downloadPIVXParams
+from basicswap.chainparams import xmr_based_coins
+
+TEST_HTTP_HOST = os.getenv(
+    "TEST_HTTP_HOST", "127.0.0.1"
+)  # Set to 0.0.0.0 when used in docker
+TEST_HTTP_PORT = 1800
+
+BASE_P2P_PORT = 12792
+
+BASE_PORT = 14792
+BASE_RPC_PORT = 19792
+BASE_ZMQ_PORT = 20792
+
+BTC_BASE_PORT = 31792
+BTC_BASE_RPC_PORT = 32792
+BTC_BASE_ZMQ_PORT = 33792
+BTC_BASE_TOR_PORT = 33732
+
+LTC_BASE_PORT = 34792
+LTC_BASE_RPC_PORT = 35792
+LTC_BASE_ZMQ_PORT = 36792
+
+PIVX_BASE_PORT = 34892
+PIVX_BASE_RPC_PORT = 35892
+PIVX_BASE_ZMQ_PORT = 36892
+
+PREFIX_SECRET_KEY_REGTEST = 0x2E
+
+BTC_USE_DESCRIPTORS = toBool(os.getenv("BTC_USE_DESCRIPTORS", False))
+BTC_USE_LEGACY_KEY_PATHS = toBool(os.getenv("BTC_USE_LEGACY_KEY_PATHS", False))
+
+PORT_OFS = int(os.getenv("PORT_OFS", 1))
+UI_PORT = 12700 + PORT_OFS
+
+REQUIRED_SETTINGS = {
+    "blocks_confirmed": 1,
+    "conf_target": 1,
+    "use_segwit": True,
+    "connection_type": "rpc",
+}
+
+
+def _tee_stream(src, dst, buf):
+    # Drain a subprocess pipe, echoing each line to dst and accumulating it.
+    for line in src:
+        dst.write(line)
+        dst.flush()
+        buf.append(line)
+
+
+def run_prepare_subprocess(args, env=None, expect_code: int = 0, timeout: int = 600):
+    # Run basicswap-prepare in a subprocess so its import-time env reads are
+    # always fresh, regardless of what has imported the module in-process.
+    # args: without the program name (argv[1:] equivalent).
+    # stdout/stderr are streamed to the caller's console (tee) while also being
+    # captured, so the returned CompletedProcess keeps them as separate strings.
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-m", "basicswap.bin.prepare"] + args,
+        env=os.environ.copy() if env is None else env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    out_buf, err_buf = [], []
+    t_out = threading.Thread(
+        target=_tee_stream, args=(proc.stdout, sys.stdout, out_buf)
+    )
+    t_err = threading.Thread(
+        target=_tee_stream, args=(proc.stderr, sys.stderr, err_buf)
+    )
+    t_out.start()
+    t_err.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        t_out.join()
+        t_err.join()
+        proc.stdout.close()
+        proc.stderr.close()
+
+    result = subprocess.CompletedProcess(
+        proc.args, proc.returncode, "".join(out_buf), "".join(err_buf)
+    )
+    if result.returncode != expect_code:
+        raise RuntimeError(
+            f"basicswap-prepare exited {result.returncode}, expected {expect_code}:\n"
+            + result.stderr
+        )
+    return result
+
+
+def post_json_req(url, json_data):
+    req = urllib.request.Request(url)
+    req.add_header("Content-Type", "application/json; charset=utf-8")
+    post_bytes = json.dumps(json_data).encode("utf-8")
+    req.add_header("Content-Length", len(post_bytes))
+    return urlopen(req, post_bytes, timeout=300).read()
+
+
+def read_text_api(port, path=None):
+    url = f"http://127.0.0.1:{port}/json"
+    if path is not None:
+        url += "/" + path
+    return urlopen(url, timeout=300).read().decode("utf-8")
+
+
+def read_json_api(port, path=None, json_data=None):
+    url = f"http://127.0.0.1:{port}/json"
+    if path is not None:
+        url += "/" + path
+
+    if json_data is not None:
+        return json.loads(post_json_req(url, json_data))
+    return json.loads(urlopen(url, timeout=300).read())
+
+
+def post_json_api(port, path, json_data):
+    url = f"http://127.0.0.1:{port}/json"
+    if path is not None:
+        url += "/" + path
+    return json.loads(post_json_req(url, json_data))
+
+
+def waitForServer(delay_event, port, wait_for=40):
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        try:
+            delay_event.wait(1.0)
+            _ = read_json_api(port)
+            return
+        except Exception as e:
+            logging.error(f"waitForServer: {e}")
+    raise ValueError("waitForServer failed")
+
+
+def wait_for_offers(delay_event, node_id, num_offers, offer_id=None) -> None:
+    logging.info(f"Waiting for {num_offers} offers on node {node_id}")
+    for i in range(20):
+        delay_event.wait(1)
+        offers = read_json_api(
+            UI_PORT + node_id, "offers" if offer_id is None else f"offers/{offer_id}"
+        )
+        if len(offers) >= num_offers:
+            return
+    raise ValueError("wait_for_offers failed")
+
+
+def prepareDataDir(
+    datadir,
+    node_id,
+    conf_file,
+    dir_prefix,
+    base_p2p_port=BASE_PORT,
+    base_rpc_port=BASE_RPC_PORT,
+    num_nodes=3,
+    extra_opts=[],
+):
+    node_dir = os.path.join(datadir, dir_prefix + str(node_id))
+    if not os.path.exists(node_dir):
+        os.makedirs(node_dir)
+    cfg_file_path = os.path.join(node_dir, conf_file)
+    if os.path.exists(cfg_file_path):
+        return
+    with open(cfg_file_path, "w+") as fp:
+        fp.write("regtest=1\n")
+        fp.write("[regtest]\n")
+        fp.write("port=" + str(base_p2p_port + node_id) + "\n")
+        fp.write("rpcport=" + str(base_rpc_port + node_id) + "\n")
+
+        salt = generate_salt(16)
+        fp.write(
+            "rpcauth={}:{}${}\n".format(
+                "test" + str(node_id),
+                salt,
+                password_to_hmac(salt, "test_pass" + str(node_id)),
+            )
+        )
+
+        fp.write("daemon=0\n")
+        fp.write("printtoconsole=0\n")
+        fp.write("server=1\n")
+        fp.write("discover=0\n")
+        fp.write("listenonion=0\n")
+        fp.write("bind=127.0.0.1\n")
+        fp.write("debug=1\n")
+        fp.write("debugexclude=libevent\n")
+
+        fp.write("fallbackfee=0.01\n")
+        fp.write("acceptnonstdtxn=0\n")
+        fp.write("txindex=1\n")
+        fp.write("wallet=bsx_wallet\n")
+
+        fp.write("findpeers=0\n")
+
+        for opt in extra_opts:
+            fp.write(opt + "\n")
+
+        if base_p2p_port == BTC_BASE_PORT:
+            fp.write("deprecatedrpc=create_bdb\n")
+            fp.write("changetype=bech32\n")
+        elif base_p2p_port == LTC_BASE_PORT:
+            fp.write("changetype=bech32\n")
+        elif base_p2p_port == BASE_PORT:  # Particl
+            fp.write("zmqpubsmsg=tcp://127.0.0.1:{}\n".format(BASE_ZMQ_PORT + node_id))
+            # minstakeinterval=5  # Using walletsettings stakelimit instead
+            fp.write("stakethreadconddelayms=1000\n")
+            fp.write("smsgsregtestadjust=0\n")
+
+        if conf_file == "pivx.conf":
+            params_dir = os.path.join(datadir, "pivx-params")
+            downloadPIVXParams(params_dir)
+            fp.write(f"paramsdir={params_dir}\n")
+
+        for i in range(0, num_nodes):
+            if node_id == i:
+                continue
+            fp.write("addnode=127.0.0.1:{}\n".format(base_p2p_port + i))
+
+    return node_dir
+
+
+def prepare_balance(
+    use_delay_event,
+    coin,
+    amount: float,
+    port_target_node: int,
+    port_take_from_node: int,
+    test_balance: bool = True,
+    wait_until_spendable: bool = True,
+) -> None:
+    if coin == Coins.PART_BLIND:
+        coin_ticker: str = "PART"
+        balance_type: str = "blind_balance"
+        address_type: str = "stealth_address"
+        type_to: str = "blind"
+    elif coin == Coins.PART_ANON:
+        coin_ticker: str = "PART"
+        balance_type: str = "anon_balance"
+        address_type: str = "stealth_address"
+        type_to: str = "anon"
+    else:
+        coin_ticker: str = coin.name
+        balance_type: str = "balance"
+        address_type: str = "deposit_address"
+    js_w = read_json_api(port_target_node, "wallets")
+    current_balance: float = float(js_w[coin_ticker][balance_type])
+
+    if test_balance and current_balance >= amount:
+        return
+    post_json = {
+        "value": amount,
+        "address": js_w[coin_ticker][address_type],
+        "subfee": False,
+    }
+    if coin in xmr_based_coins:
+        post_json["sweepall"] = False
+    if coin in (Coins.PART_BLIND, Coins.PART_ANON):
+        post_json["type_to"] = type_to
+    json_rv = read_json_api(
+        port_take_from_node,
+        f"wallets/{coin_ticker.lower()}/withdraw",
+        post_json,
+    )
+    assert len(json_rv["txid"]) == 64
+    wait_for_amount: float = amount
+    if not test_balance:
+        wait_for_amount += current_balance
+    delay_iterations = 100 if coin == Coins.NAV else 30
+    delay_time = 5 if coin == Coins.NAV else 3
+
+    if wait_until_spendable is False:
+        return
+
+    wait_for_balance(
+        use_delay_event,
+        f"http://127.0.0.1:{port_target_node}/json/wallets/{coin_ticker.lower()}",
+        balance_type,
+        wait_for_amount,
+        iterations=delay_iterations,
+        delay_time=delay_time,
+    )
+
+
+def checkForks(ro):
+    try:
+        if "bip9_softforks" in ro:
+            assert ro["bip9_softforks"]["csv"]["status"] == "active"
+            assert ro["bip9_softforks"]["segwit"]["status"] == "active"
+        else:
+            assert ro["softforks"]["csv"]["active"]
+            assert ro["softforks"]["segwit"]["active"]
+    except Exception as e:
+        logging.warning(f"Could not parse deployment info: {e}")
+
+
+def stopDaemons(daemons):
+    for d in daemons:
+        logging.info(f"Interrupting {d.handle.pid}")
+        signal_type = signal.SIGTERM if os.name == "nt" else signal.SIGINT
+        try:
+            d.handle.send_signal(signal_type)
+        except Exception as e:
+            logging.info(f"Interrupting {d.handle.pid}, error: {e}")
+    for d in daemons:
+        try:
+            d.handle.wait(timeout=20)
+        except Exception as e:
+            logging.info(f"Closing {d.handle.pid}, error: {e}")
+            try:
+                d.handle.kill()
+                d.handle.wait(timeout=20)
+            except Exception as e:
+                logging.warning(f"Killing {d.handle.pid}, error: {e}")
+        for fp in d.files:
+            if fp:
+                try:
+                    fp.close()
+                except Exception as e:
+                    logging.info(f"Closing log file, error: {e}")
+
+
+def wait_for_bid(
+    delay_event,
+    swap_client,
+    bid_id,
+    state=None,
+    sent: bool = False,
+    wait_for: int = 20,
+    fail_fast: bool = True,
+) -> None:
+    swap_client.log.debug(f"TEST: wait_for_bid {bid_id.hex()}")
+
+    if isinstance(state, (list, tuple)):
+        if BidStates.BID_ERROR in state:
+            fail_fast = False
+    elif state is not None:
+        if state == BidStates.BID_ERROR:
+            fail_fast = False
+
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+
+        filters = {
+            "bid_id": bid_id,
+        }
+        bids = swap_client.listBids(sent=sent, filters=filters)
+        assert len(bids) < 2
+        if len(bids) < 1:
+            if i > 0 and i % 10 == 0:
+                swap_client.log.debug(
+                    f"TEST: wait_for_bid {bid_id.hex()}: Bid not found."
+                )
+            continue
+        bid = bids[0]
+        assert bid[2] == bid_id
+        bid_state: int = bid[5]
+        if i > 0 and i % 10 == 0:
+            swap_client.log.debug(
+                f"TEST: wait_for_bid {bid_id.hex()}: Bid state {bid_state}, target {state}."
+            )
+        if fail_fast and bid_state == BidStates.BID_ERROR:
+            raise ValueError(
+                f"wait_for_bid {bid_id.hex()}: Bid state {bid_state}, target {state}."
+            )
+        if isinstance(state, (list, tuple)):
+            if bid_state not in state:
+                continue
+        elif state is not None:
+            if bid_state != state:
+                continue
+        swap_client.log.debug(
+            f"TEST: wait_for_bid found {bid_id.hex()}: Bid state {bid_state}, target {state}."
+        )
+        return
+    raise ValueError(f"wait_for_bid timed out {bid_id.hex()}.")
+
+
+def wait_for_bid_states(
+    delay_event,
+    bid_id,
+    swap_client_a,
+    state_a,
+    swap_client_b,
+    state_b,
+    wait_for: int = 20,
+    fail_fast_a: bool = True,
+    fail_fast_b: bool = True,
+) -> None:
+    for swap_client, expect_state in (
+        (swap_client_a, state_a),
+        (swap_client_b, state_b),
+    ):
+        swap_client.log.debug(
+            f"TEST: wait_for_bid_states {bid_id.hex()}, state {expect_state}"
+        )
+
+    fail_fast = [fail_fast_a, fail_fast_b]
+    if isinstance(state_a, (list, tuple)):
+        if BidStates.BID_ERROR in state_a:
+            fail_fast[0] = False
+    elif state_a == BidStates.BID_ERROR:
+        fail_fast[0] = False
+    if isinstance(state_b, (list, tuple)):
+        if BidStates.BID_ERROR in state_b:
+            fail_fast[1] = False
+    elif state_b == BidStates.BID_ERROR:
+        fail_fast[1] = False
+
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+
+        filters = {
+            "bid_id": bid_id,
+        }
+        num_passed: int = 0
+        bid_states = [None] * 2
+        for n, (swap_client, expect_state) in enumerate(
+            (
+                (swap_client_a, state_a),
+                (swap_client_b, state_b),
+            )
+        ):
+            bids = swap_client.listBids(sent=None, filters=filters)
+            assert len(bids) < 2
+            if len(bids) < 1:
+                if i > 0 and i % 10 == 0:
+                    swap_client.log.debug(
+                        f"TEST: wait_for_bid_states {bid_id.hex()}: Bid not found."
+                    )
+                continue
+            bid = bids[0]
+            assert bid[2] == bid_id
+            bid_state: int = bid[5]
+            bid_states[n] = bid_state
+            if i > 0 and i % 10 == 0:
+                swap_client.log.debug(
+                    f"TEST: wait_for_bid_states {bid_id.hex()}: Bid state {bid_state}, target {expect_state}."
+                )
+            if fail_fast[n] and bid_state == BidStates.BID_ERROR:
+                raise ValueError(
+                    f"wait_for_bid_states {bid_id.hex()}: Bid state {bid_state}, target {expect_state}."
+                )
+            if isinstance(expect_state, (list, tuple)):
+                if bid_state not in expect_state:
+                    continue
+            elif expect_state is not None:
+                if bid_state != expect_state:
+                    continue
+            num_passed += 1
+        if num_passed == 2:
+            swap_client_a.log.debug(
+                f"TEST: wait_for_bid_states found {bid_id.hex()}: Bid state {bid_states[0]}, target {state_a}."
+            )
+            swap_client_b.log.debug(
+                f"TEST: wait_for_bid_states found {bid_id.hex()}: Bid state {bid_states[1]}, target {state_b}."
+            )
+            return
+
+    raise ValueError(f"wait_for_bid_states timed out {bid_id.hex()}.")
+
+
+def wait_for_bid_tx_state(
+    delay_event, swap_client, bid_id, initiate_state, participate_state, wait_for=30
+):
+    logging.info(
+        "wait_for_bid_tx_state %s %s %s",
+        bid_id.hex(),
+        str(initiate_state),
+        str(participate_state),
+    )
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+        bid = swap_client.getBid(bid_id)
+        if (initiate_state is None or bid.getITxState() == initiate_state) and (
+            participate_state is None or bid.getPTxState() == participate_state
+        ):
+            return
+    raise ValueError("wait_for_bid_tx_state timed out.")
+
+
+def wait_for_event(
+    delay_event, swap_client, linked_type, linked_id, event_type=None, wait_for=20
+):
+    logging.info("wait_for_event")
+
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+        rv = swap_client.getEvents(linked_type, linked_id)
+
+        for event in rv:
+            if event_type is None or event.event_type == event_type:
+                return event
+    raise ValueError("wait_for_event timed out.")
+
+
+def wait_for_offer(delay_event, swap_client, offer_id, wait_for=20):
+    logging.info(f"wait_for_offer {offer_id.hex()}")
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+        offers = swap_client.listOffers()
+        for offer in offers:
+            if offer.offer_id == offer_id:
+                return
+    raise ValueError("wait_for_offer timed out.")
+
+
+def wait_for_no_offer(delay_event, swap_client, offer_id, wait_for=20):
+    logging.info("wait_for_no_offer %s", offer_id.hex())
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+        offers = swap_client.listOffers()
+        found_offer = False
+        for offer in offers:
+            if offer.offer_id == offer_id:
+                found_offer = True
+                break
+        if not found_offer:
+            return True
+    raise ValueError("wait_for_offer timed out.")
+
+
+def wait_for_in_progress(delay_event, swap_client, bid_id, sent=False):
+    logging.info("wait_for_in_progress %s", bid_id.hex())
+    for i in range(20):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+        swaps = swap_client.listSwapsInProgress()
+        for b in swaps:
+            if b[0] == bid_id:
+                return
+    raise ValueError("wait_for_in_progress timed out.")
+
+
+def wait_for_none_active(delay_event, port, wait_for=30):
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        delay_event.wait(1)
+        js = read_json_api(port)
+        if js["num_swapping"] == 0 and js["num_watched_outputs"] == 0:
+            return
+    raise ValueError("wait_for_none_active timed out.")
+
+
+def abandon_all_swaps(delay_event, swap_client) -> None:
+    logging.info("abandon_all_swaps")
+    for bid in swap_client.listBids(sent=True):
+        swap_client.abandonBid(bid[2])
+    for bid in swap_client.listBids(sent=False):
+        swap_client.abandonBid(bid[2])
+
+
+def waitForNumOffers(delay_event, port, offers, wait_for=20):
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        summary = read_json_api(port)
+        if summary["num_network_offers"] >= offers:
+            return
+        delay_event.wait(1)
+    raise ValueError("waitForNumOffers failed")
+
+
+def waitForNumBids(delay_event, port, bids, wait_for=20):
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        summary = read_json_api(port)
+        if summary["num_recv_bids"] >= bids:
+            return
+        delay_event.wait(1)
+    raise ValueError("waitForNumBids failed")
+
+
+def waitForNumSwapping(delay_event, port, bids, wait_for=60):
+    for i in range(wait_for):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        summary = read_json_api(port)
+        if summary["num_swapping"] >= bids:
+            return
+        delay_event.wait(1)
+    raise ValueError("waitForNumSwapping failed")
+
+
+def wait_for_balance(
+    delay_event, url, balance_key, expect_amount, iterations=20, delay_time=3
+) -> None:
+    i = 0
+    while not delay_event.is_set():
+        rv_js = json.loads(urlopen(url).read())
+        have_balance = 0.0
+        if isinstance(balance_key, (list, tuple)):
+            for bk in balance_key:
+                have_balance += float(rv_js[bk])
+        else:
+            have_balance = float(rv_js[balance_key])
+
+        if have_balance >= expect_amount:
+            return
+        delay_event.wait(delay_time)
+        i += 1
+        if i > iterations:
+            raise ValueError(f"Expect {balance_key} {expect_amount}")
+
+
+def wait_for_unspent(
+    delay_event, ci, expect_amount, iterations=20, delay_time=1
+) -> None:
+    logging.info(f"Waiting for unspent balance: {expect_amount}")
+    i = 0
+    while not delay_event.is_set():
+        unspent_addr = ci.getUnspentsByAddr()
+        for _, value in unspent_addr.items():
+            if value >= expect_amount:
+                return
+        delay_event.wait(delay_time)
+        i += 1
+        if i > iterations:
+            raise ValueError(f"wait_for_unspent {expect_amount}")
+
+
+def delay_for(delay_event, delay_for=60):
+    logging.info(f"Delaying for {delay_for} seconds.")
+    delay_event.wait(delay_for)
+
+
+def make_rpc_func(node_id, base_rpc_port=BASE_RPC_PORT):
+    node_id = node_id
+    auth = "test{0}:test_pass{0}".format(node_id)
+
+    def rpc_func(method, params=None, wallet=None):
+        return callrpc(base_rpc_port + node_id, auth, method, params, wallet)
+
+    return rpc_func
+
+
+def waitForRPC(rpc_func, delay_event, rpc_command="getwalletinfo", max_tries=7):
+    for i in range(max_tries + 1):
+        if delay_event.is_set():
+            raise ValueError("Test stopped.")
+        try:
+            rpc_func(rpc_command)
+            return
+        except Exception as ex:
+            if i < max_tries:
+                logging.warning(
+                    f"Can't connect to RPC: {ex}. Retrying in {i + 1} second/s."
+                )
+                delay_event.wait(i + 1)
+    raise ValueError("waitForRPC failed")
+
+
+def extract_states_from_xu_file(file_path, prefix):
+    states = {}
+
+    alt_counter = 0
+    active_path = 0
+    states[active_path] = []
+    path_stack = [
+        active_path,
+    ]
+    with open(file_path) as fp:
+        for line in fp:
+            line = line.strip()
+            if line.startswith("#"):
+                continue
+
+            if line == "};":
+                if len(path_stack) > 1:
+                    path_stack.pop()
+                    active_path = path_stack[-1]
+                continue
+
+            split_line = line.split("[")
+            if len(split_line) < 2:
+                continue
+
+            definitions = split_line[0].split(" ")
+            if len(definitions) < 2:
+                continue
+
+            if definitions[1] == "alt":
+                alt_counter += 1
+                path_stack.append(alt_counter)
+
+                states[alt_counter] = [s for s in states[active_path]]
+                continue
+
+            if definitions[0] == "---":
+                active_path = path_stack[-1]
+                continue
+
+            if definitions[1] != "abox":
+                continue
+            if definitions[0] != prefix:
+                continue
+
+            tag_start = 'label="'
+            tag_end = '"'
+            pos_start = split_line[1].find(tag_start)
+            if pos_start < 0:
+                continue
+            pos_start += len(tag_start)
+            pos_end = split_line[1].find(tag_end, pos_start)
+            if pos_end < 0:
+                continue
+            label = split_line[1][pos_start:pos_end]
+
+            if line.find("textbgcolor") > 0:
+                # transaction status
+                pass
+
+            states[active_path].append(label)
+
+    return states
+
+
+def compare_bid_states(states, expect_states, exact_match: bool = True) -> bool:
+
+    for i in range(len(states) - 1, -1, -1):
+        if states[i][1] == "Bid Delaying":
+            del states[i]
+
+    try:
+        if exact_match:
+            assert len(states) == len(expect_states)
+        else:
+            assert len(states) >= len(expect_states)
+
+        for i in range(len(expect_states)):
+            s = states[i]
+            if s[1] != expect_states[i]:
+                if "Bid " + expect_states[i] == s[1]:
+                    logging.warning(
+                        f"Expected state {expect_states[i]} not an exact match to {s[1]}."
+                    )
+                    continue
+                if [s[0], expect_states[i]] in states:
+                    logging.warning(
+                        f"Expected state {expect_states[i]} found out of order at the same time as {s[1]}."
+                    )
+                    continue
+                raise ValueError(f"Expected state {expect_states[i]}, found {s[1]}")
+            assert s[1] == expect_states[i]
+    except Exception as e:
+        logging.error(f"compare_bid_states failed: {e}")
+        logging.info("Expecting states: {}".format(json.dumps(expect_states, indent=4)))
+        logging.info("Have states: {}".format(json.dumps(states, indent=4)))
+        return False
+    return True
+
+
+def compare_bid_states_unordered(states, expect_states, ignore_states=[]) -> bool:
+    ignore_states.append("Bid Delaying")
+    for i in range(len(states) - 1, -1, -1):
+        if states[i][1] in ignore_states:
+            del states[i]
+
+    try:
+        assert len(states) == len(expect_states)
+        for state in expect_states:
+            assert any(state in s[1] for s in states)
+    except Exception as e:  # noqa: F841
+        logging.info("Expecting states: {}".format(json.dumps(expect_states, indent=4)))
+        logging.info("Have states: {}".format(json.dumps(states, indent=4)))
+        raise
+    return True
+
+
+def callrpc_cli(
+    bindir,
+    datadir,
+    chain,
+    cmd,
+    cli_bin="particl-cli" + (".exe" if os.name == "nt" else ""),
+    wallet=None,
+):
+    cli_bin = os.path.join(bindir, cli_bin)
+    args = [
+        cli_bin,
+    ]
+    if chain != "mainnet":
+        args.append("-" + chain)
+    args.append("-datadir=" + datadir)
+    if wallet is not None:
+        args.append("-rpcwallet=" + wallet)
+    args += shlex.split(cmd)
+
+    p = subprocess.Popen(
+        args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    out = p.communicate()
+
+    if len(out[1]) > 0:
+        raise ValueError(f"RPC error: {out[1]}")
+
+    r = out[0].decode("utf-8").strip()
+    try:
+        r = json.loads(r)
+    except Exception:
+        pass
+    return r
