@@ -398,10 +398,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </form>
             <a href="index.php" class="btn-cmd btn-cancel">Cancel and Go Back</a>
 
-            <!-- BOTTOM QR CODE -->
             <div style="text-align: center; margin-top: 20px; padding-top: 15px; border-top: 1px solid #333;">
                 <label style="display: block; margin-bottom: 8px; color: var(--silver-dark); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 2px; font-weight: bold;">Wallet Address</label>
-                <img src="<?php echo htmlspecialchars(basename($address) . ".png"); ?>" alt="Wallet QR Code" style="max-width: 160px; height: auto; border: 2px solid #333; background: #fff; padding: 5px;">
+                <img src="<?php echo htmlspecialchars(basename($address) . ".png"); ?>" alt="Wallet QR Code" style="max-width: 160px; height: auto; border: 2px solid #333; background: #fff; padding: 5px; margin-bottom: 12px;">
+                <div style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #333; color: var(--silver-mid); font-family: 'Roboto Mono', monospace; font-size: 0.95rem; border-radius: 2px; box-sizing: border-box; word-break: break-all; text-align: center;">
+                    <?php echo htmlspecialchars($address); ?>
+                </div>
             </div>
         <?php endif; ?>
     </div>
