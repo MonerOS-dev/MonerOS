@@ -152,30 +152,32 @@ bash $HOME/MonerOS/get_binaries.sh
 bash $HOME/MonerOS/build-HotWalletOS.sh
 # Compiled file will be at: $HOME/MonerOS_Output/HotWalletOS.img
 
+# Clean HotWalletOS
+cd $HOME/MonerOS/HotWalletOS/ && sudo lb clean --purge && cd
+
 # Compile ColdWalletOS
 bash $HOME/MonerOS/build-ColdWalletOS.sh
 # Compiled file will be at: $HOME/MonerOS_Output/ColdWalletOS.img
+
+# Clean ColdWalletOS
+cd $HOME/MonerOS/ColdWalletOS/ && sudo lb clean --purge && cd
 
 # Compile UpdateOS (optional)
 bash $HOME/MonerOS/build-UpdateOS.sh
 # Compiled file will be at: $HOME/MonerOS_Output/UpdateOS.img
 
-# --- To save space, it's recommended to clean the build directory after after each compilation ---
-
-# Clean HotWalletOS
-cd $HOME/MonerOS/HotWalletOS/ && sudo lb clean --purge && cd
-
-# Clean ColdWalletOS
-cd $HOME/MonerOS/ColdWalletOS/ && sudo lb clean --purge && cd
-
 # Clean UpdateOS
 cd $HOME/MonerOS/UpdateOS/ && sudo lb clean --purge && cd
+
+# --- To save space, it's recommended to clean the build directory after after each compilation ---
 ```
 
 ---
 
 ## **How the air-gap works**
 ColdWalletOS has zero Wi-Fi, Bluetooth, or internet connection, making remote hacking architecturally impossible. We didn't just turn off wireless features; we permanently purged network drivers, wireless firmware blobs, and hardware modules at the build level. On both HotWalletOS and ColdWalletOS, we also stripped out package managers (apt, dpkg, pip) to entirely eliminate software installation vectors and prevent local payload drops.
+
+See scripts at ```~/MonerOS/ColdWalletOS/config/hooks/live/0001-purger.chroot``` and ```~/MonerOS/build-ColdWalletOS.sh``` for details on how we actually do this.
 
 ---
 
