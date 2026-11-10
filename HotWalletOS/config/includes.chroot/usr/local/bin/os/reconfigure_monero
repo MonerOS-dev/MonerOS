@@ -268,17 +268,17 @@ EOF
         sudo chown user:user /mnt/p4/monero
     
         # 4. Setup Swap (checks if swapfile exists already, skips creation if it does)
-        if [ ! -f /mnt/p4/swapfile ]; then
-            sudo fallocate -l 8G /mnt/p4/swapfile > /dev/null 2>&1
-            sudo chmod 600 /mnt/p4/swapfile > /dev/null 2>&1
-            sudo mkswap /mnt/p4/swapfile > /dev/null 2>&1
-            sudo swapon /mnt/p4/swapfile > /dev/null 2>&1
-        else
-            # Ensure it's active even if the file exists
-            sudo swapon /mnt/p4/swapfile > /dev/null 2>&1
-        fi
+        #if [ ! -f /mnt/p4/swapfile ]; then
+        #    sudo fallocate -l 8G /mnt/p4/swapfile > /dev/null 2>&1
+        #    sudo chmod 600 /mnt/p4/swapfile > /dev/null 2>&1
+        #    sudo mkswap /mnt/p4/swapfile > /dev/null 2>&1
+        #    sudo swapon /mnt/p4/swapfile > /dev/null 2>&1
+        #else
+        #    # Ensure it's active even if the file exists
+        #    sudo swapon /mnt/p4/swapfile > /dev/null 2>&1
+        #fi
         
-        sudo sysctl vm.swappiness=10 > /dev/null 2>&1
+        #sudo sysctl vm.swappiness=10 > /dev/null 2>&1
         
         sudo bash /usr/local/bin/os/start_self_monero
     fi

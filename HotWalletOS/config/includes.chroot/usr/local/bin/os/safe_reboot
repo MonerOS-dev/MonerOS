@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Ensure we can find cryptsetup/mount/etc
+export PATH=$PATH:/usr/sbin:/sbin
+
+# --- VARIABLES ---
+# Container 1: Coinswaps (swap.bin on Partition 4)
+SWAP_MAPPER="swap_unlocked"
+SWAP_DATADIR="/mnt/coinswaps"
+P4_MNT="/mnt/p4"
+
+# Container 2: Sallyport (sallyport.bin on Partition 3)
+SALLY_MAPPER="sallyport_unlocked"
+SALLY_MNT="/mnt/sallyport"
+EXT_MNT="/mnt/external"
+
+
+sudo pkill -f particld 2>/dev/null || true
+sudo pkill -f bitcoind 2>/dev/null || true
+sudo pkill -f monerod 2>/dev/null || true
+sudo pkill -f basicswap-run 2>/dev/null || true
+
+# 1. Inside-Out Teardown Sequence
+# A. Unmount inner container filesystems
+sudo umount "$SWAP_DATADIR" 2>/dev/null
+sudo umount "$SALLY_MNT" 2>/dev/null
+
+# B. Close both LUKS container mapper devices
+sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null
+sudo cryptsetup close "$SALLY_MAPPER" 2>/dev/null
+
+# C. Unmount both physical carrier partitions 
+sudo umount "$P4_MNT" 2>/dev/null
+sudo umount "$EXT_MNT" 2>/dev/null
+
+# 2. Final Data Flush
+sync
+sleep 1
+
+# 3. Shutdown
+sudo reboot

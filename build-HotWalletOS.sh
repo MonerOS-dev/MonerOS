@@ -34,6 +34,9 @@ if [ "$PRODUCTION" = true ]; then
         sudo cp "$MODS_DIR/$UFW_HOOK" "$BUILD_DIR/config/hooks/live/"
         sudo chmod +x "$BUILD_DIR/config/hooks/live/$UFW_HOOK"
     fi
+    
+    # 4. Enable MAC Spoofing
+    sudo cp -r "$MODS_DIR/etc/systemd/network" "$BUILD_DIR/config/includes.chroot/etc/systemd"
 
 else
     echo "[INFO] Configuring for DEV mode..."
@@ -50,6 +53,9 @@ else
     
     # 3. Ensure the production firewall hook is NOT present
     sudo rm -f "$BUILD_DIR/config/hooks/live/$UFW_HOOK"
+    
+    # 4. Disable MAC Spoofing
+    sudo rm -rf "$BUILD_DIR/config/includes.chroot/etc/systemd/network"
 fi
 
 

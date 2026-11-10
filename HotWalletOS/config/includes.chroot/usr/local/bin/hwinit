@@ -139,7 +139,7 @@ fi
 while true; do
     # 1. Capture password
     PASS=$(whiptail --title " $HW_VERSION " --passwordbox \
-        "\nEnter Master Password:" 12 50 \
+        "\nEnter Master Password:" 10 50 \
         --nocancel 3>&1 1>&2 2>&3)
 
     # 2. Pre-cleanup: Clean up any stale mapper nodes or partial hanging mounts safely

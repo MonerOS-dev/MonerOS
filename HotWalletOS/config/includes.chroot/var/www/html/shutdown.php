@@ -19,7 +19,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
     <?php endif; ?>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotWalletOS - System</title>
+    <title>MonerOS - System</title>
     <style>
         :root {
             --silver-light: #e0e0e0;
@@ -44,7 +44,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
         }
 
         h1 {
-            font-size: clamp(2.5rem, 10vw, 4rem); 
+            /* Slower scaling (4.5vw) so it stays normal on laptops, but reaches 7rem on big screens */
+            font-size: clamp(3rem, 4.5vw, 7rem);
             margin: 0;
             letter-spacing: 8px;
             color: var(--silver-light);
@@ -142,7 +143,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
 </head>
 <body>
 
-    <h1>HotWalletOS</h1>
+    <h1>MonerOS</h1>
     <div class="update-tag">System Control</div>
 
     <div class="container">

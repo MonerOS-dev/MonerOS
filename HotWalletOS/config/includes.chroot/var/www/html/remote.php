@@ -15,7 +15,7 @@ $href = (stripos($onion_addr, 'http') === 0) ? $onion_addr : "http://" . $onion_
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotWalletOS - Remote Access</title>
+    <title>MonerOS - Remote Access</title>
     <style>
         :root {
             --silver-light: #e0e0e0;
@@ -39,7 +39,8 @@ $href = (stripos($onion_addr, 'http') === 0) ? $onion_addr : "http://" . $onion_
         }
 
         h1 {
-            font-size: clamp(2.5rem, 10vw, 4rem); 
+            /* Slower scaling (4.5vw) so it stays normal on laptops, but reaches 7rem on big screens */
+            font-size: clamp(3rem, 4.5vw, 7rem);
             margin: 0;
             letter-spacing: 8px;
             color: var(--silver-light);
@@ -160,7 +161,7 @@ $href = (stripos($onion_addr, 'http') === 0) ? $onion_addr : "http://" . $onion_
 </head>
 <body>
 
-    <h1>HotWalletOS</h1>
+    <h1>MonerOS</h1>
     <div class="update-tag">Tor Browser Remote Access</div>
 
     <div class="container">

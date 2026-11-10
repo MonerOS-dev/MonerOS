@@ -140,14 +140,14 @@ sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null || true
 
 if [ ! -f "$SWAP_CONTAINER" ]; then
     while true; do
-        PASS1=$(whiptail --title " Atomic Swaps Vault Setup " --fb --nocancel --passwordbox "\nEnter Master Password for Your Atomic Swaps Container:\n " 11 50 3>&1 1>&2 2>&3)
+        PASS1=$(whiptail --title " Atomic Swaps Vault Setup " --fb --nocancel --passwordbox "\nEnter Master Password for Your Atomic Swaps Container: " 11 50 3>&1 1>&2 2>&3)
         
         if [ -z "$PASS1" ]; then
             whiptail --title " Error " --fb --msgbox "\nPassword cannot be empty! " 10 45
             continue
         fi
 
-        PASS2=$(whiptail --title " Verification " --fb --nocancel --passwordbox "\nPlease confirm your password:\n " 11 50 3>&1 1>&2 2>&3)
+        PASS2=$(whiptail --title " Verification " --fb --nocancel --passwordbox "\nPlease confirm your password: " 11 50 3>&1 1>&2 2>&3)
         
         if [ "$PASS1" == "$PASS2" ]; then
             clear
@@ -196,7 +196,7 @@ if [ ! -f "$SWAP_CONTAINER" ]; then
     done
 else
     while true; do
-        PASS=$(whiptail --title " Unlock Atomic Swaps " --fb --nocancel --passwordbox "\nEnter Master Password:\n " 11 50 3>&1 1>&2 2>&3)
+        PASS=$(whiptail --title " Unlock Atomic Swaps " --fb --nocancel --passwordbox "\nEnter Master Password: " 10 50 3>&1 1>&2 2>&3)
         
         sudo umount "$SWAP_DATADIR" > /dev/null 2>&1
         sudo cryptsetup close "$SWAP_MAPPER" > /dev/null 2>&1
@@ -387,6 +387,17 @@ SEEN_PROGRESS=0
 
 tail -n0 -F "/mnt/coinswaps/particl/debug.log" | while IFS= read -r LINE; do
 
+    if [[ "$LINE" == *"Please rebuild the index"* ]]; then
+        # 1. Kill running processes
+        sudo pkill -9 -f particld
+        sudo pkill -9 -f basicswap-run
+        sudo pkill -9 -f bitcoind
+        
+        # 2. Drop a flag file so the script knows why it broke out
+        touch /tmp/index_corrupt_flag
+        break
+    fi
+
     # Fully synced
     if [[ "$LINE" == *"SecureMsg saved to inbox"* ]]; then
         printf "\r[#################################] 100%%\n"
@@ -435,6 +446,34 @@ tail -n0 -F "/mnt/coinswaps/particl/debug.log" | while IFS= read -r LINE; do
     fi
 
 done
+
+# Check if the index corruption flag was tripped
+if [ -f /tmp/index_corrupt_flag ]; then
+    rm -f /tmp/index_corrupt_flag
+    
+    clear
+    echo "==============================================="
+    echo " [!] CRITICAL ERROR: Particl Index Corrupted"
+    echo "==============================================="
+    echo " Likely caused by an abrupt shutdown."
+    echo " Corrupted local index databases need purged..."
+    echo " (Your wallet keys and blockchain remain safe)"
+    echo "==============================================="
+    echo " A safe reboot is required to rebuild index."
+    echo "==============================================="
+    echo ""
+
+    # This runs in the main script execution thread, so /dev/tty works reliably
+    read -p "Press [Enter] to initiate a safe reboot..."
+
+    # Remove corrupted index and messaging folders
+    sudo rm -rf /mnt/coinswaps/particl/indexes/
+    sudo rm -rf /mnt/coinswaps/particl/txleveldb/
+    sudo rm -rf /mnt/coinswaps/particl/smsg/
+    sync
+    
+    sudo bash /usr/local/bin/os/safe_reboot
+fi
 
 # add file to enable button on webpage
 if [ ! -f /var/www/backend/bs.en ]; then
