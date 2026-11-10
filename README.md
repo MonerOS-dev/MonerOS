@@ -38,7 +38,7 @@ There are three things happening in this video:
 
 ### **2. HotWalletOS (The Gateway)**
 * **CPU:** 2+ Cores
-* **RAM:** 8GB+
+* **RAM:** 4GB+ (8GB+ Recommended)
 * **Storage Space:** 4GB+
 * **Storage Media:** SSD Recommended
 

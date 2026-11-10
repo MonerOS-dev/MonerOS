@@ -14,21 +14,9 @@ SALLY_MAPPER="sallyport_unlocked"
 SALLY_MNT="/mnt/sallyport"
 EXT_MNT="/mnt/external"
 
-# Stop background daemons cleanly before unmounting
-/usr/local/bin/bitcoin-cli -datadir=/mnt/coinswaps/bitcoin stop
-
-# Wait up to 60 seconds for bitcoind to safely shut down and flush cache
-COUNTER=0
-while pgrep -x bitcoind > /dev/null; do
-  sleep 1
-  COUNTER=$((COUNTER + 1))
-  if [ $COUNTER -ge 60 ]; then
-    echo "Warning: bitcoind did not stop gracefully in time."
-    break
-  fi
-done
 
 sudo pkill -f particld 2>/dev/null || true
+sudo pkill -f bitcoind 2>/dev/null || true
 sudo pkill -f monerod 2>/dev/null || true
 sudo pkill -f basicswap-run 2>/dev/null || true
 

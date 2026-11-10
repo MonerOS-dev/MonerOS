@@ -86,7 +86,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
     <meta charset="UTF-8">
     <meta http-equiv="refresh" content="300">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotWalletOS</title>
+    <title>MonerOS</title>
     <style>
         :root {
             --silver-light: #e0e0e0;
@@ -109,8 +109,8 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
         }
 
         h1 {
-            /* Slower scaling (4vw) so it stays normal on laptops, but reaches 7rem on big screens */
-            font-size: clamp(2rem, 4vw, 7rem); 
+            /* Slower scaling (4.5vw) so it stays normal on laptops, but reaches 7rem on big screens */
+            font-size: clamp(3rem, 4.5vw, 7rem);
             margin: 0;
             letter-spacing: 8px;
             color: var(--silver-light);
@@ -313,7 +313,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
 </head>
 <body>
 
-    <h1>HotWalletOS</h1>
+    <h1>MonerOS</h1>
     <div class="update-tag">BALANCE UPDATED EVERY 10-20 MINUTES</div>
     
     <?php if (file_exists('/var/www/html/monero.down')): ?>

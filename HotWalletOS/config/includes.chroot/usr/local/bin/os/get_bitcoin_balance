@@ -73,17 +73,21 @@ for dir in "$BASE_DIR"/*/; do
         [ -z "$CONFIRMED" ] && CONFIRMED="0"
         [ -z "$UNCONFIRMED" ] && UNCONFIRMED="0"
 
-        # Calculate Logic:
-        TOTAL_EXPECTED=$(python3 -c "c=float('$CONFIRMED'); u=float('$UNCONFIRMED'); print(f'{c+u:.8f}'.rstrip('0').rstrip('.'))")
-        ACTUALLY_SPENDABLE=$(python3 -c "c=float('$CONFIRMED'); print(f'{c:.8f}'.rstrip('0').rstrip('.'))")
-
-        # Clean up empty/dot results to 0
-        [[ -z "$TOTAL_EXPECTED" || "$TOTAL_EXPECTED" == "." ]] && TOTAL_EXPECTED="0"
-        [[ -z "$ACTUALLY_SPENDABLE" || "$ACTUALLY_SPENDABLE" == "." ]] && ACTUALLY_SPENDABLE="0"
-
-        # Save results
+        # Calculate Logic (Fixed 8 decimal places for Bitcoin)
+        TOTAL_EXPECTED=$(python3 -c "c=float('$CONFIRMED'); u=float('$UNCONFIRMED'); print(f'{c+u:.8f}')")
+        ACTUALLY_SPENDABLE=$(python3 -c "c=float('$CONFIRMED'); print(f'{c:.8f}')")
+    
+        # Fallback to zero-filled if empty
+        [ -z "$TOTAL_EXPECTED" ] && TOTAL_EXPECTED="0.00000000"
+        [ -z "$ACTUALLY_SPENDABLE" ] && ACTUALLY_SPENDABLE="0.00000000"
+    
+        # Save results to backend web directories
         printf "%s" "$TOTAL_EXPECTED" | sudo tee "${BACKEND_DIR}/${ADDR_ID}_balance.txt" > /dev/null
         printf "%s" "$ACTUALLY_SPENDABLE" | sudo tee "${BACKEND_DIR}/${ADDR_ID}_unlocked.txt" > /dev/null
+    
+        sudo chown www-data:www-data "${BACKEND_DIR}/${ADDR_ID}_balance.txt" "${BACKEND_DIR}/${ADDR_ID}_unlocked.txt"
+        sudo chmod 644 "${BACKEND_DIR}/${ADDR_ID}_balance.txt" "${BACKEND_DIR}/${ADDR_ID}_unlocked.txt"
+        # ------------------------------
 
         echo "Saved Total Balance (_balance): $TOTAL_EXPECTED"
         echo "Saved Spendable Balance (_unlocked): $ACTUALLY_SPENDABLE"
