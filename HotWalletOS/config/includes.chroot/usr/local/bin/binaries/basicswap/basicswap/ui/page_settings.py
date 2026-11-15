@@ -13,6 +13,7 @@ from .util import (
     get_data_entry_or,
 )
 from basicswap.util import (
+    ensure,
     toBool,
     InactiveCoin,
 )
@@ -34,6 +35,7 @@ def page_settings(self, url_split, post_string):
     err_messages = []
     extra_headers = []
     active_tab = "coins"
+    swap_wallets_prune = None
     form_data = self.checkForm(post_string, "settings", err_messages)
     if form_data:
         try:
@@ -42,6 +44,7 @@ def page_settings(self, url_split, post_string):
                 data = {
                     "debug": toBool(get_data_entry(form_data, "debugmode")),
                     "debug_ui": toBool(get_data_entry(form_data, "debugui")),
+                    "log_level": get_data_entry(form_data, "loglevel"),
                     "expire_unused_offers": toBool(
                         get_data_entry(form_data, "expire_unused_offers")
                     ),
@@ -50,6 +53,39 @@ def page_settings(self, url_split, post_string):
                     ),
                 }
                 swap_client.editGeneralSettings(data)
+            elif have_data_entry(
+                form_data, "preview_swap_wallets_prune"
+            ) or have_data_entry(form_data, "prune_swap_wallets"):
+                active_tab = "general"
+                max_age_days = int(
+                    get_data_entry_or(form_data, "prune_swap_wallets_days", "90")
+                )
+                ensure(max_age_days >= 14, "Age must be at least 14 days")
+                is_preview = have_data_entry(form_data, "preview_swap_wallets_prune")
+                if is_preview:
+                    swap_wallets_prune = {"days": max_age_days, "coins": []}
+                for coin in swap_client.activeCoins():
+                    if coin not in swap_client.xmr_based_coins:
+                        continue
+                    if not swap_client.getChainClientSettings(coin).get(
+                        "manage_wallet_daemon", False
+                    ):
+                        continue
+                    ci = swap_client.ci(coin)
+                    if is_preview:
+                        caches = ci.findUnusedSwapWalletCaches(max_age_days)
+                        swap_wallets_prune["coins"].append(
+                            {
+                                "name": getCoinName(coin),
+                                "count": len(caches),
+                                "mb": sum(size for _, size in caches) / 1048576,
+                            }
+                        )
+                        continue
+                    num_removed, bytes_removed = ci.pruneSwapWalletCaches(max_age_days)
+                    messages.append(
+                        f"{getCoinName(coin)}: removed {num_removed} swap wallet caches ({bytes_removed / 1048576:.1f} MB)."
+                    )
             elif have_data_entry(form_data, "apply_security"):
                 active_tab = "security"
                 data = {
@@ -345,6 +381,23 @@ def page_settings(self, url_split, post_string):
                                 form_data, "electrum_onion_" + name, ""
                             ).strip()
                             data["electrum_onion_servers"] = onion_servers
+                            max_servers_str = get_data_entry_or(
+                                form_data, "max_electrum_servers_" + name, ""
+                            ).strip()
+                            if max_servers_str == "":
+                                data["max_electrum_servers"] = None
+                            elif (
+                                max_servers_str.isdecimal()
+                                and int(max_servers_str) >= 1
+                            ):
+                                data["max_electrum_servers"] = int(max_servers_str)
+                            else:
+                                display_name = getCoinName(
+                                    swap_client.getCoinIdFromName(name)
+                                )
+                                err_messages.append(
+                                    f"Servers kept connected for {display_name} must be a whole number, at least 1."
+                                )
                             auto_transfer_now = have_data_entry(
                                 form_data, "auto_transfer_now_" + name
                             )
@@ -424,6 +477,7 @@ def page_settings(self, url_split, post_string):
     sorted_names = sorted(swap_client.settings["chainclients"].keys())
     from basicswap.interface.electrumx import (
         DEFAULT_ELECTRUM_SERVERS,
+        DEFAULT_MAX_ELECTRUM_SERVERS,
         DEFAULT_ONION_SERVERS,
     )
 
@@ -464,6 +518,10 @@ def page_settings(self, url_split, post_string):
                 "clearnet_servers_text": clearnet_text,
                 "onion_servers_text": onion_text,
                 "address_gap_limit": c.get("address_gap_limit", 50),
+                "max_electrum_servers": c.get("max_electrum_servers", ""),
+                "max_electrum_servers_default": swap_client.settings.get(
+                    "max_electrum_servers", DEFAULT_MAX_ELECTRUM_SERVERS
+                ),
             }
         )
         if name in ("monero", "wownero"):
@@ -512,6 +570,7 @@ def page_settings(self, url_split, post_string):
     general_settings = {
         "debug": swap_client.debug,
         "debug_ui": swap_client.debug_ui,
+        "log_level": "debug" if swap_client.debug_logs else "info",
         "expire_unused_offers": swap_client._expire_unused_offers,
         "expire_db_records": swap_client._expire_db_records,
         "check_updates": swap_client.settings.get("check_updates", True),
@@ -625,6 +684,7 @@ def page_settings(self, url_split, post_string):
             "networks": networks_formatted,
             "networks_global": networks_global,
             "active_tab": active_tab,
+            "swap_wallets_prune": swap_wallets_prune,
         },
         extra_headers=extra_headers,
     )

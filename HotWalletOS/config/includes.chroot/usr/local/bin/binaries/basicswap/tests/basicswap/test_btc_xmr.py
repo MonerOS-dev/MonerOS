@@ -6,9 +6,12 @@
 # Distributed under the MIT software license, see the accompanying
 # file LICENSE or http://www.opensource.org/licenses/mit-license.php.
 
+import os
 import random
 import logging
 import unittest
+
+from unittest.mock import patch
 
 from basicswap.basicswap import (
     BidStates,
@@ -33,7 +36,6 @@ from basicswap.multibid import (
 from basicswap.util import make_int
 from basicswap.util.address import (
     b58decode,
-    bech32Decode,
     decodeAddress,
 )
 from basicswap.util.extkey import ExtKeyPair
@@ -50,6 +52,7 @@ from tests.basicswap.util.common import (
     wait_for_none_active,
     BTC_BASE_RPC_PORT,
 )
+from basicswap.contrib.test_framework import segwit_addr
 from basicswap.contrib.test_framework.descriptors import descsum_create
 from basicswap.contrib.test_framework.messages import (
     from_hex,
@@ -105,7 +108,7 @@ class TestFunctions(BaseTest):
             coin_ticker: str = "PART"
             balance_type: str = "anon_balance"
             unconfirmed_name: str = "anon_pending"
-        elif coin in (Coins.NAV, Coins.PART):
+        elif coin == Coins.PART:
             # PART stakes during the tests, moving the staked output's whole
             # value out of the spendable balance until the coinstake matures.
             coin_wallet = js_wallets[coin.name]
@@ -367,7 +370,11 @@ class TestFunctions(BaseTest):
             swap_clients[id_leader],
             BidStates.XMR_SWAP_FAILED_REFUNDED,
             swap_clients[id_follower],
-            [BidStates.BID_STALLED_FOR_TEST, BidStates.XMR_SWAP_FAILED],
+            [
+                BidStates.BID_STALLED_FOR_TEST,
+                BidStates.XMR_SWAP_FAILED,
+                BidStates.XMR_SWAP_FAILED_NOTHING_TO_RECOVER,
+            ],
             wait_for=(self.extra_wait_time + 180),
         )
 
@@ -487,7 +494,11 @@ class TestFunctions(BaseTest):
             swap_clients[id_leader],
             BidStates.XMR_SWAP_FAILED_REFUNDED,
             swap_clients[id_follower],
-            [BidStates.BID_STALLED_FOR_TEST, BidStates.XMR_SWAP_FAILED],
+            [
+                BidStates.BID_STALLED_FOR_TEST,
+                BidStates.XMR_SWAP_FAILED,
+                BidStates.XMR_SWAP_FAILED_NOTHING_TO_RECOVER,
+            ],
             wait_for=(self.extra_wait_time + 180),
         )
 
@@ -618,6 +629,13 @@ class TestFunctions(BaseTest):
             coin_to if reverse_bid else coin_from
         )._altruistic = (with_mercy or stranded_payout)
 
+        default_watch_timeout = swap_clients[id_leader]._mercy_watch_timeout_blocks
+        self.addCleanup(
+            setattr,
+            swap_clients[id_leader],
+            "_mercy_watch_timeout_blocks",
+            default_watch_timeout,
+        )
         # A leader that is never sent a mercy tx holds the bid open until the
         # watch times out, don't wait out the default for it here.
         swap_clients[id_leader]._mercy_watch_timeout_blocks = 100 if with_mercy else 6
@@ -656,6 +674,12 @@ class TestFunctions(BaseTest):
         debug_type = DebugTypes.BID_DONT_SPEND_COIN_B_LOCK
         swap_clients[id_follower].setBidDebugInd(bid_id, debug_type)
 
+        swap_clients[id_leader].setBidDebugInd(
+            bid_id, DebugTypes.WAIT_FOR_COIN_B_LOCK_BEFORE_PREREFUND, False
+        )
+        swap_clients[id_follower].setBidDebugInd(
+            bid_id, DebugTypes.WAIT_FOR_COIN_B_LOCK_BEFORE_PREREFUND, False
+        )
         swap_clients[id_leader].setBidDebugInd(
             bid_id, DebugTypes.WAIT_FOR_COIN_B_LOCK_BEFORE_REFUND, False
         )
@@ -915,17 +939,6 @@ class TestFunctions(BaseTest):
         swap_clients = self.swap_clients
         ci_from = swap_clients[id_bidder].ci(coin_from)
         ci_to = swap_clients[id_bidder].ci(coin_to)
-
-        # A Particl maker stakes its bsx_wallet, so without reserving it can
-        # spend its own lock funds into an immature coinstake before accepting.
-        # Node 0 must keep staking to advance the chain, so only reserve the
-        # other makers.
-        if coin_from == Coins.PART:
-            for maker_id, _ in makers:
-                if maker_id != self.node_a_id:
-                    callnoderpc(
-                        maker_id, "reservebalance", [True, 1000000], "bsx_wallet"
-                    )
 
         # The bidder pays coin_to, so is the follower and publishes the coin B locks.
         self.prepare_balance(coin_to, 100.0, 1800 + id_bidder, 1801)
@@ -1378,7 +1391,9 @@ class TestFunctions(BaseTest):
                 raise ValueError("Test stopped.")
             test_delay_event.wait(1)
             unspents = [
-                u for u in ci.rpc_wallet("listunspent", [1]) if u["amount"] >= value
+                u
+                for u in ci.rpc_wallet("listunspent", [1])
+                if u["spendable"] and u["amount"] >= value
             ]
             if len(unspents) >= count:
                 return
@@ -1570,11 +1585,6 @@ class TestFunctions(BaseTest):
         ci_to = swap_clients[id_bidder].ci(coin_to)
         leg_amount: float = 1.0
 
-        # The maker stakes its bsx_wallet and would spend its own initiate funds
-        # into an immature coinstake before sending them.
-        if coin_from == Coins.PART:
-            callnoderpc(id_maker, "reservebalance", [True, 1000000], "bsx_wallet")
-
         self.prepare_balance(coin_to, 100.0, 1800 + id_bidder, 1800)
         self.prepare_balance(
             coin_from, num_legs * leg_amount + 10.0, 1800 + id_maker, 1800
@@ -1748,9 +1758,6 @@ class TestFunctions(BaseTest):
         ci_to = swap_clients[id_bidder].ci(coin_to)
         leg_amount: float = 1.0
 
-        if coin_from == Coins.PART:
-            callnoderpc(id_maker, "reservebalance", [True, 1000000], "bsx_wallet")
-
         self.prepare_balance(coin_to, 100.0, 1800 + id_bidder, 1800)
         self.prepare_balance(coin_from, 2 * leg_amount + 10.0, 1800 + id_maker, 1800)
 
@@ -1844,7 +1851,7 @@ class TestFunctions(BaseTest):
         balance_from_before: float = self.getBalance(jsw, coin_from)
         self.prepare_balance(
             coin_to,
-            balance_from_before * 3,
+            round(balance_from_before * 3, 8),
             1800 + id_bidder,
             1801 if coin_to in (Coins.XMR,) else 1800,
         )
@@ -2210,6 +2217,9 @@ class BasicSwapTest(TestFunctions):
             "---------- Test {} p2sh nested segwit".format(self.test_coin_from.name)
         )
         ci = self.swap_clients[0].ci(self.test_coin_from)
+        if hasattr(ci, "_use_descriptors") and ci._use_descriptors:
+            logging.warning("Skipping test")
+            return
 
         addr_p2sh_segwit = ci.rpc_wallet(
             "getnewaddress", ["segwit test", "p2sh-segwit"]
@@ -2571,7 +2581,7 @@ class BasicSwapTest(TestFunctions):
         ci1 = self.swap_clients[1].ci(self.test_coin_from)
 
         addr = ci.rpc_wallet("getnewaddress", ["watchonly test", "bech32"])
-        ci1.rpc_wallet("importaddress", [addr, "", False])
+        ci1.importWatchOnlyAddress(addr, "")
         txid = ci.rpc_wallet("sendtoaddress", [addr, 1.0])
         tx_hex = ci.rpc(
             "getrawtransaction",
@@ -2585,19 +2595,16 @@ class BasicSwapTest(TestFunctions):
                 tx_hex,
             ],
         )
-        ro = ci1.rpc_wallet(
+        ro = ci1.rpc_wallet_watch(
             "gettransaction",
             [
                 txid,
             ],
         )
         assert ro["txid"] == txid
-        balances = ci1.rpc_wallet("getbalances")
-        assert (
-            balances["watchonly"]["trusted"]
-            + balances["watchonly"]["untrusted_pending"]
-            >= 1.0
-        )
+        balances = ci1.rpc_wallet_watch("getbalances")
+        watched = balances["mine" if ci1._use_descriptors else "watchonly"]
+        assert watched["trusted"] + watched["untrusted_pending"] >= 1.0
 
     def test_006_getblock_verbosity(self):
         logging.info(
@@ -2852,6 +2859,22 @@ class BasicSwapTest(TestFunctions):
         expect_vsize: int = ci.xmr_swap_a_lock_spend_tx_vsize()
         assert expect_vsize >= vsize_actual
         assert expect_vsize - vsize_actual <= 10
+
+        seq = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_BLOCKS, 8)
+        refund_tx, _, _ = ci.createSCLockRefundTx(
+            lock_tx, lock_tx_script, A, B, seq, seq, self.test_fee_rate
+        )
+        refund_guarded_spend_tx = ci.createSCLockSpendTx(
+            lock_tx,
+            lock_tx_script,
+            pkh_out,
+            self.test_fee_rate,
+            tx_lock_refund_bytes=refund_tx,
+        )
+        spend_fee: int = amount - ci.getVoutValue(
+            ci.loadTx(refund_guarded_spend_tx).vout[0]
+        )
+        assert spend_fee == ci.estLockSpendFee(self.test_fee_rate)
 
         # Test chain b (no-script) lock tx size
         v = ci.getNewRandomKey()
@@ -3225,8 +3248,10 @@ class BasicSwapTest(TestFunctions):
             assert addr == self.expected_addresses["external"]
         else:
             addr_decoded = ci.decodeAddress(addr)
-            expected_decoded = bech32Decode(
-                "bcrt", self.expected_addresses["external"], for_segwit=True
+            expected_decoded = bytes(
+                segwit_addr.decode_segwit_address(
+                    "bcrt", self.expected_addresses["external"]
+                )[1]
             )
             assert addr_decoded == expected_decoded
 
@@ -3239,29 +3264,41 @@ class BasicSwapTest(TestFunctions):
             wallet=new_wallet_name,
         )
         assert addr_info["hdmasterfingerprint"] == "a55b7ea9"
-        assert addr_info["hdkeypath"] == "m/0h/1h/0h"
-        if self.test_coin_from == Coins.BTC:
-            assert addr_change == self.expected_addresses["internal"]
-        else:
-            addr_decoded = ci.decodeAddress(addr_change)
-            expected_decoded = bech32Decode(
-                "bcrt", self.expected_addresses["internal"], for_segwit=True
-            )
-            assert addr_decoded == expected_decoded
+        # Node 0's wallet shares this seed and may have used the first change keys
+        assert addr_info["hdkeypath"].startswith("m/0h/1h/")
 
-        address_chains = ci.getWalletKeyChains(bytes.fromhex(test_seed))
-        for chain in ["external", "internal"]:
-            extkey_data = b58decode(address_chains[chain])[4:-4]
-            ek = ExtKeyPair()
-            ek.decode(extkey_data)
-            addr0h = ci.encodeSegwitAddress(
-                ci.getPubkeyHash(ek.derive_path("0h").get_pubkey())
+        addr_change_0h: str = ci.encodeSegwitAddress(
+            bytes(
+                segwit_addr.decode_segwit_address(
+                    "bcrt", self.expected_addresses["internal"]
+                )[1]
             )
-            if self.test_coin_from == Coins.BTC:
-                assert addr0h == self.expected_addresses[chain]
-            else:
-                pass
-                # TODO: derive expected keys
+        )
+        addr_info = self.callnoderpc(
+            "getaddressinfo",
+            [
+                addr_change_0h,
+            ],
+            wallet=new_wallet_name,
+        )
+        assert addr_info["ismine"] is True
+        assert addr_info["hdmasterfingerprint"] == "a55b7ea9"
+        assert addr_info["hdkeypath"] == "m/0h/1h/0h"
+
+        if not ci.canExportToElectrum():
+            address_chains = ci.getWalletKeyChains(bytes.fromhex(test_seed))
+            for chain in ["external", "internal"]:
+                extkey_data = b58decode(address_chains[chain])[4:-4]
+                ek = ExtKeyPair()
+                ek.decode(extkey_data)
+                addr0h = ci.encodeSegwitAddress(
+                    ci.getPubkeyHash(ek.derive_path("0h").get_pubkey())
+                )
+                if self.test_coin_from == Coins.BTC:
+                    assert addr0h == self.expected_addresses[chain]
+                else:
+                    pass
+                    # TODO: derive expected keys
 
         desc_watch = descsum_create(f"addr({addr})")
         self.callnoderpc(
@@ -3412,6 +3449,9 @@ class BasicSwapTest(TestFunctions):
     def test_015_changetype(self):
         logging.info(f"---------- Test {self.test_coin_from.name} changetype")
         ci = self.swap_clients[0].ci(self.test_coin_from)
+        if hasattr(ci, "_use_descriptors") and ci._use_descriptors:
+            logging.warning("Skipping test")
+            return
 
         addr_p2sh = ci.rpc_wallet(
             "getnewaddress", ["test_015_changetype", "p2sh-segwit"]
@@ -3466,7 +3506,7 @@ class BasicSwapTest(TestFunctions):
         lock_tx = ci0.signTxWithWallet(lock_tx)
         script_addr: str = ci0.encodeScriptDest(ci0.getScriptDest(lock_tx_script))
 
-        ci1.rpc_wallet_watch("importaddress", [script_addr])
+        ci1.importWatchOnlyAddress(script_addr, "")
 
         try:
             mining_address: str = self.getMiningAddr()
@@ -3524,6 +3564,61 @@ class BasicSwapTest(TestFunctions):
             return
         self.prepare_balance(Coins.XMR, 100.0, 1800, 1801)
         self.do_test_01_full_swap(Coins.XMR, self.test_coin_from)
+
+    def test_01_e_dropped_lock_spend(self):
+        if not self.has_segwit:
+            return
+        coin_from = self.test_coin_from
+        logging.info(
+            f"---------- Test {coin_from.name} to XMR, follower lock spend dropped once"
+        )
+        swap_clients = self.swap_clients
+        ci_from = swap_clients[0].ci(coin_from)
+        ci_to = swap_clients[0].ci(Coins.XMR)
+
+        amt_swap = ci_from.make_int(random.uniform(0.1, 2.0), r=1)
+        rate_swap = ci_to.make_int(random.uniform(0.2, 20.0), r=1)
+        offer_id = swap_clients[0].postOffer(
+            coin_from,
+            Coins.XMR,
+            amt_swap,
+            rate_swap,
+            amt_swap,
+            SwapTypes.XMR_SWAP,
+            auto_accept_bids=True,
+        )
+        wait_for_offer(test_delay_event, swap_clients[1], offer_id)
+        bid_id = swap_clients[1].postXmrBid(offer_id, amt_swap)
+        swap_clients[1].setBidDebugInd(bid_id, DebugTypes.SKIP_FIRST_REDEEM_BROADCAST)
+
+        rebroadcast_seconds = swap_clients[1]._redeem_rebroadcast_seconds
+        try:
+            swap_clients[1]._redeem_rebroadcast_seconds = 10
+            wait_for_event(
+                test_delay_event,
+                swap_clients[1],
+                Concepts.BID,
+                bid_id,
+                EventLogTypes.DEBUG_TWEAK_APPLIED,
+                wait_for=180,
+            )
+            wait_for_bid(
+                test_delay_event,
+                swap_clients[0],
+                bid_id,
+                BidStates.SWAP_COMPLETED,
+                wait_for=180,
+            )
+            wait_for_bid(
+                test_delay_event,
+                swap_clients[1],
+                bid_id,
+                BidStates.SWAP_COMPLETED,
+                sent=True,
+                wait_for=60,
+            )
+        finally:
+            swap_clients[1]._redeem_rebroadcast_seconds = rebroadcast_seconds
 
     def test_01_c_full_swap_to_part(self):
         if not self.has_segwit:
@@ -4046,6 +4141,12 @@ class BasicSwapTest(TestFunctions):
         old_override_feerate1 = ci1_from_settings.get("override_feerate", None)
         old_min_relay_fee = ci_from_settings.get("min_relay_fee", None)
         old_min_relay_fee1 = ci1_from_settings.get("min_relay_fee", None)
+        old_low_feerate = ci_from._low_feerate
+        old_low_feerate1 = ci1_from._low_feerate
+        old_high_feerate = ci_from._high_feerate
+        old_high_feerate1 = ci1_from._high_feerate
+        old_high_multiplier = ci_from._high_estimated_feerate_multiplier
+        old_high_multiplier1 = ci1_from._high_estimated_feerate_multiplier
 
         networkinfo = ci_from.rpc("getnetworkinfo")
         # BTC v29.1 relayfee dropped to 100
@@ -4191,6 +4292,12 @@ class BasicSwapTest(TestFunctions):
             ci1_from_settings["override_feerate"] = old_override_feerate1
             ci_from_settings["min_relay_fee"] = old_min_relay_fee
             ci1_from_settings["min_relay_fee"] = old_min_relay_fee1
+            ci_from._low_feerate = old_low_feerate
+            ci1_from._low_feerate = old_low_feerate1
+            ci_from._high_feerate = old_high_feerate
+            ci1_from._high_feerate = old_high_feerate1
+            ci_from._high_estimated_feerate_multiplier = old_high_multiplier
+            ci1_from._high_estimated_feerate_multiplier = old_high_multiplier1
 
 
 class TestBTC(BasicSwapTest):
@@ -4216,6 +4323,7 @@ class TestBTC(BasicSwapTest):
         assert rv["seed_id"] in (
             "3da5c0af91879e8ce97d9a843874601c08688078",
             "4a231080ec6f4078e543d39cc6dcf0b922c9b16b",
+            "44c597105a996e6c4234f7dc3593dde8bd0b1062",
         )
         assert rv["seed_id"] == rv["expected_seed_id"]
 
@@ -4346,6 +4454,74 @@ class TestBTC(BasicSwapTest):
             jsw = read_json_api(1800, f"wallets/{coin}")
             assert jsw["encrypted"] is True
             assert jsw["locked"] is False
+
+    def test_010_wallet_encryption_recovers(self):
+        password = "notapassword456"
+
+        def assert_needs_password(ci) -> None:
+            is_xmr = ci.coin_type() == Coins.XMR
+            wrong = "" if is_xmr else "wrongpassword"
+            for attempt, opens in ((wrong, False), (password, True)):
+                ci.lockWallet()
+                try:
+                    ci.unlockWallet(attempt, check_seed=False)
+                    if is_xmr:
+                        ci.getMainWalletAddress()
+                    opened = True
+                except Exception:
+                    opened = False
+                assert opened is opens, (ci.coin_name(), attempt)
+
+        sc = self.swap_clients[0]
+        if not sc.ci(Coins.PART).isWalletEncrypted():
+            sc.changeWalletPasswords("", password)
+        sc.unlockWallets(password)
+        coins = sc.getListOfWalletCoins()
+
+        with patch.object(
+            sc.ci(coins[-1]), "changeWalletPassword", side_effect=ValueError("test")
+        ):
+            with self.assertRaises(ValueError):
+                sc.changeWalletPasswords(password, "notapassword789")
+        for c in coins:
+            assert_needs_password(sc.ci(c))
+
+        ci_xmr = sc.ci(Coins.XMR)
+        ci_xmr.changeWalletPassword(password, "")
+        sc.lockWallets()
+        sc.unlockWallets(password)
+        assert_needs_password(ci_xmr)
+
+        sc.lockWallets()
+        wallet_path = os.path.join(
+            sc.getChainClientSettings(Coins.XMR)["datadir"],
+            "wallets",
+            ci_xmr._wallet_filename,
+        )
+        assert os.path.isfile(wallet_path)
+        for path in (wallet_path, wallet_path + ".keys"):
+            os.rename(path, path + ".moved")
+        try:
+            sc.unlockWallets(password)
+        finally:
+            for path in (wallet_path, wallet_path + ".keys"):
+                os.rename(path + ".moved", path)
+        assert_needs_password(ci_xmr)
+        sc.unlockWallets(password)
+
+        sc2 = self.swap_clients[2]
+        coins2 = sc2.getListOfWalletCoins()
+        assert sc2.getLockedState()[0] is False
+        with patch.object(
+            sc2.ci(coins2[1]), "changeWalletPassword", side_effect=ValueError("test")
+        ):
+            with self.assertRaises(ValueError):
+                sc2.changeWalletPasswords("", password)
+        assert sc2.getLockedState()[0] is True
+        sc2.unlockWallets(password)
+        for c in coins2:
+            assert_needs_password(sc2.ci(c))
+        sc2.unlockWallets(password)
 
     def test_01_full_swap(self):
         abandon_all_swaps(test_delay_event, self.swap_clients[0])

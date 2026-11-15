@@ -12,8 +12,8 @@ import time
 from contextlib import contextmanager
 from enum import IntEnum, auto
 
-CURRENT_DB_VERSION = 40
-CURRENT_DB_DATA_VERSION = 10
+CURRENT_DB_VERSION = 42
+CURRENT_DB_DATA_VERSION = 11
 
 
 class Concepts(IntEnum):
@@ -311,6 +311,12 @@ class Bid(Table, StateRows):
             return self.xmr_b_lock_tx.vout
         return None
 
+    def getTxnByTxid(self, txid: bytes):
+        for swap_tx in self.txns.values():
+            if swap_tx.txid == txid:
+                return swap_tx
+        return None
+
 
 class SwapTx(Table, StateRows):
     __tablename__ = "transactions"
@@ -462,6 +468,8 @@ class XmrSwap(Table):
     split_parent_msg_id = Column("blob")
     # Set once the accept is built and saved: a retry re-sends it, never rebuilds
     accept_prepared_at = Column("integer")
+    # The same for a reverse bid's intent accept, a self-bid runs both on one row
+    intent_accept_prepared_at = Column("integer")
 
     vkbv = Column("blob")  # chain b view private key
     pkbv = Column("blob")  # chain b view public key
@@ -516,6 +524,8 @@ class XmrSplitData(Table):
     dleag = Column("blob")
     created_at = Column("integer")
     parent_msg_id = Column("blob")
+
+    index = Index("xmr_split_data_bid_id_index", "bid_id")
 
 
 class RevokedMessage(Table):

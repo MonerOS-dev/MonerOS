@@ -350,6 +350,21 @@ class TestNostrInboundGates(unittest.TestCase):
         with self.assertRaisesRegex(TemporaryError, "Too many"):
             client.publishEvent(client.buildEvent("ZnVsbA=="))
 
+    def test_published_ids_stay_within_seen_limit(self):
+        from unittest import mock
+
+        client = self.makeClient()
+        expire_at = int(time.time()) + 600
+        events = [
+            client.buildEvent("ZnVsbA==", expiration=expire_at + i) for i in range(5)
+        ]
+        with mock.patch("basicswap.network.nostr.client.MAX_SEEN_EVENT_IDS", 3):
+            for event in events:
+                client.publishEvent(event)
+        assert len(client._seen_event_ids) == 3
+        assert events[0]["id"] not in client._seen_event_ids
+        assert events[-1]["id"] in client._seen_event_ids
+
     def test_frame_limits_reject_before_payload(self):
         import struct
         from websocket import WebSocketPayloadException
@@ -899,7 +914,10 @@ class TestNostrClientRelay(unittest.TestCase):
                     time.sleep(0.05)
                 assert client.numReceiving() == 0
                 for i in range(200):
-                    if client.numReceiving() == 1:
+                    if (
+                        relay.num_subscriptions_closed == 4
+                        and client.numReceiving() == 1
+                    ):
                         break
                     time.sleep(0.05)
                 assert client.numReceiving() == 1
@@ -1425,6 +1443,50 @@ class TestNetworkSettings(BasicSwapFixture):
             n for n in self.sc.settings["networks"] if n["type"] == "simplex"
         )
         assert simplex["group_link"] == link
+
+    def test_simplex_server_address_checked(self):
+        address = "smp://u2dS9sG8nMNURyZwqASV4yROM28Er0luVTx5X1CsMrU=@smp4.simplex.im"
+        self.sc.settings["networks"].append(
+            {"type": "simplex", "server_address": address, "enabled": False}
+        )
+        for value in (
+            "smp://server",
+            "smp://hash@smp4.simplex.im & calc.exe",
+            "smp://hash@smp4.simplex.im|calc",
+            "smp://hash@smp4.simplex.im:5223 -e /quit",
+            "smp://hash@smp4.simplex.im:0",
+            "smp://hash@smp4.simplex.im:65536",
+            "smp://hash@.",
+            "smp://hash@..",
+            "smp://hash@-x",
+            "smp://hash@a..b",
+            "smp://hash@:",
+            "smp://hash@:5223",
+            "smp://hash@[1.2.3.4]",
+            "smp://hash@" + "a" * 64,
+        ):
+            with self.assertRaisesRegex(ValueError, "Invalid server address"):
+                self.sc.editNetworkSettings("simplex", {"server_address": value})
+        simplex = next(
+            n for n in self.sc.settings["networks"] if n["type"] == "simplex"
+        )
+        assert simplex["server_address"] == address
+
+        for value in (
+            "smp://Q8SNxc2SRcKyXlhJM8KFUgPNW4KXPGRm4eSLtT_oh-I=:password@127.0.0.1:5223",
+            "smp://hash@smp8.simplex.im,smp8.onion:5223",
+            "smp://hash@[2001:db8::1]:5223",
+            "smp://hash@2001:db8::1",
+            "smp://hash@smp4.simplex.im:65535",
+        ):
+            changed, reboot = self.sc.editNetworkSettings(
+                "simplex", {"server_address": value}
+            )
+            assert changed and reboot
+            simplex = next(
+                n for n in self.sc.settings["networks"] if n["type"] == "simplex"
+            )
+            assert simplex["server_address"] == value
 
     def test_cannot_disable_last_network(self):
         changed, _ = self.sc.editNetworkSettings("smsg", {"enabled": False})
@@ -2296,6 +2358,7 @@ class TestNostrHandshake(BasicSwapFixture):
             "resp": {
                 "Right": {
                     "contact": {
+                        "contactId": 7,
                         "activeConn": {"connId": "conn-77"},
                         "localDisplayName": "peer",
                     }
@@ -2392,6 +2455,77 @@ class TestNostrPrepare(unittest.TestCase):
         assert nostr["relays"] == ["wss://a.example", "wss://b.example"]
         assert nostr["pow_target"] == 12
         assert nostr["private_key"] == key
+
+
+class TestSmsgReplayGates(BasicSwapFixture):
+
+    def offerSmsg(self, ttl: int, time_valid: int) -> tuple:
+        from basicswap.basicswap import PROTOCOL_VERSION_ADAPTOR_SIG
+        from basicswap.basicswap_util import MessageTypes
+        from basicswap.chainparams import Coins
+        from basicswap.messages_npb import OfferMessage
+        from basicswap.util.smsg import smsgEncrypt
+
+        offer = OfferMessage()
+        offer.protocol_version = PROTOCOL_VERSION_ADAPTOR_SIG
+        offer.coin_from = Coins.PART
+        offer.coin_to = Coins.BTC
+        offer.amount_from = 100000000
+        offer.amount_to = 100000000
+        offer.time_valid = time_valid
+        payload = bytes((MessageTypes.OFFER,)) + offer.to_bytes()
+        k_to = PrivateKey()
+        smsg = smsgEncrypt(
+            PrivateKey().secret, k_to.public_key.format(), payload, smsg_ttl=ttl
+        )
+        return smsg, k_to
+
+    def processOffer(self, smsg: bytes, k_to) -> None:
+        from unittest import mock
+        from basicswap.util.smsg import smsgDecrypt
+
+        msg = smsgDecrypt(k_to.secret, smsg, output_dict=True)
+        msg["msg_net"] = "nostr"
+        self.sc._smsg_payload_version = 2
+        with (
+            mock.patch.object(self.sc, "ci"),
+            mock.patch.object(self.sc, "validateSwapType"),
+            mock.patch.object(self.sc, "validateOfferAmounts"),
+            mock.patch.object(self.sc, "validateOfferLockValue"),
+            mock.patch.object(self.sc, "validateOfferValidTime"),
+            mock.patch.object(
+                self.sc, "validateMessageNets", side_effect=StopIteration
+            ),
+        ):
+            self.sc.processOffer(msg)
+
+    def test_offer_ttl_must_match_time_valid(self):
+        from basicswap.util.smsg import smsgGetID
+
+        smsg, k_to = self.offerSmsg(4 * 3600, 4 * 3600)
+        with self.assertRaises(StopIteration):
+            self.processOffer(smsg, k_to)
+
+        replayed = smsg[:19] + (4 * 3600 + 1).to_bytes(4, "little") + smsg[23:]
+        assert smsgGetID(replayed) != smsgGetID(smsg)
+        with self.assertRaisesRegex(ValueError, "ttl doesn't match"):
+            self.processOffer(replayed, k_to)
+
+    def test_future_message_ignored(self):
+        from unittest import mock
+        from basicswap.basicswap_util import MessageTypes
+
+        now = self.sc.getTime()
+        msg = {
+            "msgid": "00" * 28,
+            "hex": "{:02x}".format(MessageTypes.OFFER),
+            "msg_net": "nostr",
+        }
+        with mock.patch.object(self.sc, "processOffer") as process_offer:
+            self.sc.processMsg(dict(msg, sent=now + 3 * 60))
+            process_offer.assert_not_called()
+            self.sc.processMsg(dict(msg, sent=now))
+            process_offer.assert_called_once()
 
 
 if __name__ == "__main__":

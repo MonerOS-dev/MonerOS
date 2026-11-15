@@ -26,6 +26,8 @@ sudo chmod 600 "$DEF_DIR"/* 2>/dev/null
 # 4. Start Tor
 sudo systemctl start tor
 
+clear
+
 # 5. Wait for hostname with a 30-second timeout (Prevents infinite hang)
 MAX_RETRIES=30
 COUNT=0
@@ -75,3 +77,5 @@ fi
 
 # Start or restart Apache manually
 systemctl restart apache2 || true
+
+clear

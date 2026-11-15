@@ -324,19 +324,16 @@ def parseOfferFormData(swap_client, form_data, page_data, options={}):
                 )
                 parsed_data["from_fee_override"] = page_data["from_fee_override"]
 
-                lock_spend_tx_vsize = (
-                    ci_from.xmr_swap_b_lock_spend_tx_vsize()
+                from_fee_rate: int = ci_from.make_int(from_fee_override, r=1)
+                lock_spend_tx_fee: int = (
+                    ci_from.feeForVSize(
+                        from_fee_rate, ci_from.xmr_swap_b_lock_spend_tx_vsize()
+                    )
                     if reverse_bid
-                    else ci_from.xmr_swap_a_lock_spend_tx_vsize()
-                )
-                lock_spend_tx_fee = ci_from.make_int(
-                    ci_from.make_int(from_fee_override, r=1)
-                    * lock_spend_tx_vsize
-                    / 1000,
-                    r=1,
+                    else ci_from.estLockSpendFee(from_fee_rate)
                 )
                 page_data["amt_from_lock_spend_tx_fee"] = ci_from.format_amount(
-                    lock_spend_tx_fee // ci_from.COIN()
+                    lock_spend_tx_fee
                 )
                 page_data["tla_from"] = ci_from.ticker()
 
@@ -362,7 +359,7 @@ def parseOfferFormData(swap_client, form_data, page_data, options={}):
                     parsed_data["to_fee_override"] = page_data["to_fee_override"]
     except Exception as e:
         # Error is expected if missing fields
-        if swap_client.debug is True:
+        if swap_client.debug_logs:
             swap_client.log.warning(f"parseOfferFormData failed to set fee: Error {e}")
 
     return parsed_data, errors
@@ -488,7 +485,7 @@ def offer_to_post_string(self, swap_client, offer_id):
     if amount_to is None:
         amount_to = (offer.amount_from * offer.rate) // ci_from.COIN()
     offer_data = {
-        "formid": self.server.session_tokens["csrf"],
+        "formid": self.generate_form_id(),
         "addr_to": offer.addr_to,
         "addr_from": offer.addr_from,
         "coin_from": offer.coin_from,
@@ -576,7 +573,7 @@ def _add_review_insights(swap_client, page_data, parsed_data) -> None:
                 delta = (user_rate - inferred_f) / inferred_f * 100.0
                 page_data["market_rate_delta_pct"] = round(delta, 1)
     except Exception as e:
-        if swap_client.debug:
+        if swap_client.debug_logs:
             swap_client.log.warning(f"Review market rate lookup failed: {e}")
 
     try:
@@ -622,7 +619,7 @@ def _add_review_insights(swap_client, page_data, parsed_data) -> None:
             page_data["competitor_coin_from"] = int(coin_from)
             page_data["competitor_coin_to"] = int(coin_to)
     except Exception as e:
-        if swap_client.debug:
+        if swap_client.debug_logs:
             swap_client.log.warning(f"Review competitor lookup failed: {e}")
 
     try:
@@ -632,7 +629,7 @@ def _add_review_insights(swap_client, page_data, parsed_data) -> None:
                 total, page_data.get("tla_from", "")
             ).strip()
     except Exception as e:
-        if swap_client.debug:
+        if swap_client.debug_logs:
             swap_client.log.warning(f"Review fee total failed: {e}")
 
 
@@ -724,7 +721,7 @@ def page_newoffer(self, url_split, post_string, get_string=""):
             for e in errors:
                 err_messages.append(str(e))
         except Exception as e:
-            if swap_client.debug is True:
+            if swap_client.debug_logs:
                 swap_client.log.error(traceback.format_exc())
             err_messages.append(str(e))
 
@@ -737,7 +734,7 @@ def page_newoffer(self, url_split, post_string, get_string=""):
             page_data["offer_id"] = offer_id.hex()
             wizard_step = "success"
         except Exception as e:
-            if swap_client.debug is True:
+            if swap_client.debug_logs:
                 swap_client.log.error(traceback.format_exc())
             page_data["publish_error"] = str(e)
 
@@ -755,13 +752,13 @@ def page_newoffer(self, url_split, post_string, get_string=""):
         try:
             _add_review_insights(swap_client, page_data, parsed_data)
         except Exception as e:
-            if swap_client.debug is True:
+            if swap_client.debug_logs:
                 swap_client.log.warning(f"Could not build review insights: {e}")
     if wizard_step in ("review", "success"):
         try:
             _add_tracking_review(swap_client, page_data, parsed_data)
         except Exception as e:
-            if swap_client.debug is True:
+            if swap_client.debug_logs:
                 swap_client.log.warning(f"Could not build tracking review: {e}")
 
     template_names = {
@@ -935,7 +932,7 @@ def page_offer(self, url_split: list[str], post_string: str) -> bytes:
                 return bytes()
 
             except Exception as ex:
-                if self.server.swap_client.debug is True:
+                if self.server.swap_client.debug_logs:
                     self.server.swap_client.log.error(traceback.format_exc())
                 err_messages.append("Send bid failed: " + str(ex))
                 show_bid_form = True
@@ -982,7 +979,6 @@ def page_offer(self, url_split: list[str], post_string: str) -> bytes:
         "active_ind": offer.active_ind,
         "swap_type": strSwapDesc(offer.swap_type),
         "reverse": reverse_bid,
-        "form_id": get_data_entry_or(form_data, "formid", "") if form_data else "",
         "auto_accept_type": (
             offer.auto_accept_type if hasattr(offer, "auto_accept_type") else 0
         ),
@@ -1030,23 +1026,20 @@ def page_offer(self, url_split: list[str], post_string: str) -> bytes:
         elif chain_a_fee_rate > a_fee_rate_now * warning_threshold:
             data["a_fee_warn"] = "high"
 
-        lock_spend_tx_vsize = (
-            ci_from.xmr_swap_b_lock_spend_tx_vsize()
-            if reverse_bid
-            else ci_from.xmr_swap_a_lock_spend_tx_vsize()
-        )
         # Paid in coin_from, so sized by the offer's from rate, which is
         # a_fee_rate whichever chain coin_from is on, unless coin_from sets its
         # own redeem fee.
         redeem_fee_rate = ci_from.getRedeemFeeRate()
         if redeem_fee_rate is None:
             redeem_fee_rate = xmr_offer.a_fee_rate
-        lock_spend_tx_fee = ci_from.make_int(
-            redeem_fee_rate * lock_spend_tx_vsize / 1000, r=1
+        lock_spend_tx_fee: int = (
+            ci_from.feeForVSize(
+                redeem_fee_rate, ci_from.xmr_swap_b_lock_spend_tx_vsize()
+            )
+            if reverse_bid
+            else ci_from.estLockSpendFee(redeem_fee_rate)
         )
-        data["amt_from_lock_spend_tx_fee"] = ci_from.format_amount(
-            lock_spend_tx_fee // ci_from.COIN()
-        )
+        data["amt_from_lock_spend_tx_fee"] = ci_from.format_amount(lock_spend_tx_fee)
 
     if offer.was_sent:
         try:
@@ -1077,7 +1070,7 @@ def page_offer(self, url_split: list[str], post_string: str) -> bytes:
     try:
         tracking = swap_client.getOfferTrackingSummary(offer)
     except Exception as e:
-        if swap_client.debug is True:
+        if swap_client.debug_logs:
             swap_client.log.warning(f"getOfferTrackingSummary failed: {e}")
         tracking = None
     if tracking is not None:
@@ -1124,6 +1117,10 @@ def page_offer(self, url_split: list[str], post_string: str) -> bytes:
         else:
             balance_key = "balance"
         data["coin_to_balance"] = coin_to_wallet[balance_key]
+        if coin_to_variant in swap_client.xmr_based_coins:
+            data["coin_to_balance"] = coin_to_wallet.get(
+                "max_lock_amount", data["coin_to_balance"]
+            )
 
         bid_can_subfee: bool = True
         if offer.swap_type != SwapTypes.XMR_SWAP:

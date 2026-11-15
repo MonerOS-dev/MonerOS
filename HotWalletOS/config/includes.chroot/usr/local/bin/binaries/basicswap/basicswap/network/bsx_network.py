@@ -53,6 +53,9 @@ from basicswap.util.address import (
 )
 from basicswap.util.logging import LogCategories as LC
 from basicswap.util.smsg import smsgGetID
+from basicswap.contrib.test_framework.messages import uint256_from_compact
+
+MAX_PORTAL_SMSG_DIFFICULTY: int = 0x1E3FFFFF  # Compact target
 
 
 def networkTypeToID(type: str) -> int:
@@ -97,8 +100,12 @@ class BSXNetwork:
             )
         )  # Seconds
         self._connect_request_times = {}
+        self._sender_connect_request_times = {}
         self._max_connect_requests_per_hour = self.settings.get(
-            "max_connect_requests_per_hour", 30
+            "max_connect_requests_per_hour", 100
+        )
+        self._max_connect_requests_per_sender_per_hour = self.settings.get(
+            "max_connect_requests_per_sender_per_hour", 5
         )
         self.check_smsg_seconds = self.get_int_setting(
             "check_smsg_seconds", 10, 1, 10 * 60
@@ -113,6 +120,8 @@ class BSXNetwork:
         self._smsg_rpc_bulk_limit = self.get_int_setting("smsg_rpc_bulk_limit", 5000, 1)
         self._last_checked_bridges = 0
         self._forget_portals_after = 86400 * 7
+        self._portal_time_valid = 30 * 60
+        self._max_known_portals = self.get_int_setting("max_known_portals", 20, 1, 1000)
 
         self._zmq_queue_enabled = self.settings.get("zmq_queue_enabled", True)
         self._poll_smsg = self.settings.get("poll_smsg", False)
@@ -141,10 +150,6 @@ class BSXNetwork:
         super().__init__(data_dir=data_dir, settings=settings, **kwargs)
 
     def finalise(self):
-        if self._network:
-            self._network.stopNetwork()
-            self._network = None
-
         if self.zmqContext:
             self.zmqContext.destroy()
 
@@ -286,15 +291,6 @@ class BSXNetwork:
 
         finally:
             self.closeDB(cursor)
-
-    def add_connection(self, host, port, peer_pubkey):
-        self.log.info(f"add_connection {host} {port} {peer_pubkey.hex()}.")
-        self._network.add_connection(host, port, peer_pubkey)
-
-    def get_network_info(self):
-        if not self._network:
-            return {"Error": "Not Initialised"}
-        return self._network.get_info()
 
     def getNetworksInfo(self) -> list:
         network_config_list = self.settings.get("networks", [])
@@ -809,16 +805,7 @@ class BSXNetwork:
 
                 if network_type_to not in portals_from:
                     portals_from[network_type_to] = []
-                portals_from_to = portals_from[network_type_to]
-                use_portal = None
-                for portal in portals_from_to:
-                    if use_portal is None:
-                        use_portal = portal
-                    else:
-                        # TODO:  Pick better
-                        if portal.num_issues < use_portal.num_issues:
-                            use_portal = portal
-
+                use_portal = self.pickPortal(portals_from[network_type_to])
                 if use_portal is None:
                     self.log.warning(
                         f"Could not pick portal to network {network_type_to}, msg {self.logIDM(net_message_id)}"
@@ -882,7 +869,7 @@ class BSXNetwork:
                 return bytes.fromhex(ro["msgid"]), bytes.fromhex(ro["msg"])
             return bytes.fromhex(ro["msgid"])
         except Exception as e:
-            if self.debug:
+            if self.debug_logs:
                 if ro is None:
                     self.log.error(f"smsgsend failed {e}")
                 else:
@@ -910,19 +897,37 @@ class BSXNetwork:
     def getSmsgMsgPayloadVersion(self, msg) -> int:
         return msg.get("payloadversion", self._smsg_payload_version)
 
-    def checkConnectRequestRateLimit(self, network_id: int) -> None:
+    def checkConnectRequestRateLimit(
+        self, network_id: int, addr_from: str, new_route: bool = True
+    ) -> None:
         now_rl: int = self.getTime()
-        request_times = [
+        for key, times in list(self._sender_connect_request_times.items()):
+            if now_rl - times[-1] >= 3600:
+                del self._sender_connect_request_times[key]
+        sender_key = (network_id, addr_from)
+        sender_times = [
             t
-            for t in self._connect_request_times.get(network_id, [])
+            for t in self._sender_connect_request_times.get(sender_key, [])
             if now_rl - t < 3600
         ]
         ensure(
-            len(request_times) < self._max_connect_requests_per_hour,
-            "Connection request rate limit exceeded",
+            len(sender_times) < self._max_connect_requests_per_sender_per_hour,
+            "Connection request rate limit exceeded for sender",
         )
-        request_times.append(now_rl)
-        self._connect_request_times[network_id] = request_times
+        if new_route:
+            request_times = [
+                t
+                for t in self._connect_request_times.get(network_id, [])
+                if now_rl - t < 3600
+            ]
+            ensure(
+                len(request_times) < self._max_connect_requests_per_hour,
+                "Connection request rate limit exceeded",
+            )
+            request_times.append(now_rl)
+            self._connect_request_times[network_id] = request_times
+        sender_times.append(now_rl)
+        self._sender_connect_request_times[sender_key] = sender_times
 
     def expireMessageRoutes(self) -> None:
         if self._is_locked is True:
@@ -1012,7 +1017,7 @@ class BSXNetwork:
                     self.log.warning(
                         f"Bid {self.log.id(linked_id)} not sent on route {route_id}, will retry: {e}"
                     )
-                    if self.debug:
+                    if self.debug_logs:
                         self.log.error(traceback.format_exc())
                     continue
                 query = "UPDATE direct_message_route_links SET active_ind = 2 WHERE record_id = :record_id "
@@ -1071,7 +1076,7 @@ class BSXNetwork:
                     self.log.warning(
                         f"checkPendingMessageRoutes route {record_id}: {e}"
                     )
-                    if self.debug:
+                    if self.debug_logs:
                         self.log.error(traceback.format_exc())
         finally:
             self.closeDB(cursor)
@@ -1087,7 +1092,7 @@ class BSXNetwork:
             return  # TODO: Switch to paid?
 
         msg_id = message[2:]
-        options = {"encoding": "hex", "updatestatus": True}
+        options = {"encoding": "hex", "setread": True}
         if self._can_use_smsg_payload2:
             options["pubkey_from"] = True
         num_tries = 5
@@ -1103,6 +1108,24 @@ class BSXNetwork:
 
         self.processMsg(msg)
 
+    def pickPortal(self, portals: list):
+        now: int = self.getTime()
+        live_portals = [
+            portal for portal in portals if portal.time_start + portal.time_valid >= now
+        ]
+        if len(live_portals) < 1:
+            # Portals are refreshed after they expire
+            return max(portals, key=lambda portal: portal.time_start, default=None)
+        use_portal = None
+        for portal in live_portals:
+            if use_portal is None:
+                use_portal = portal
+            else:
+                # TODO:  Pick better
+                if portal.num_issues < use_portal.num_issues:
+                    use_portal = portal
+        return use_portal
+
     def newPortal(self, network_from_id, network_to_id, now):
         addr_to: str = self.network_addr
         cursor = self.openDB()
@@ -1112,7 +1135,12 @@ class BSXNetwork:
             )
             portal = NetworkPortal()
             portal.set(
-                now, 30 * 60, network_from_id, network_to_id, addr_portal, addr_to
+                now,
+                self._portal_time_valid,
+                network_from_id,
+                network_to_id,
+                addr_portal,
+                addr_to,
             )
             portal.created_at = now
             portal.own_portal = True
@@ -1283,6 +1311,23 @@ class BSXNetwork:
         portal_data.from_bytes(msg_bytes)
         if portal_data.network_type_from != network_received_on:
             raise RuntimeError("Network from must match network received on.")
+        smsg_difficulty: int = portal_data.smsg_difficulty
+        min_target: int = uint256_from_compact(MAX_PORTAL_SMSG_DIFFICULTY)
+        if self._have_smsg_rpc:
+            # Stakers can raise the smsg difficulty past the fixed cap
+            min_target = min(
+                min_target,
+                uint256_from_compact(self.callrpc("smsggetdifficulty", [-1, True])),
+            )
+        # uint256_from_compact can't decode exponents below 3, all far too hard
+        if (
+            smsg_difficulty >> 24 < 3
+            or uint256_from_compact(smsg_difficulty) < min_target
+        ):
+            self.log.debug(
+                f"Ignoring portal, smsg difficulty {smsg_difficulty:x} is too high."
+            )
+            return
 
         network_from = self.getActiveNetwork(portal_data.network_type_from)
 
@@ -1312,7 +1357,8 @@ class BSXNetwork:
             return
 
         now: int = self.getTime()
-        if time_start + portal_data.time_valid < now:
+        time_valid: int = min(portal_data.time_valid, self._portal_time_valid)
+        if time_start + time_valid < now:
             self.log.warning("Offered portal is expired.")
             return
 
@@ -1326,10 +1372,21 @@ class BSXNetwork:
                 },
             )
             if received_portal is None:
+                portals_from_to = self.known_portals.get(
+                    portal_data.network_type_from, {}
+                ).get(portal_data.network_type_to, [])
+                num_live: int = sum(
+                    1
+                    for portal in portals_from_to
+                    if portal.time_start + portal.time_valid >= now
+                )
+                if num_live >= self._max_known_portals:
+                    self.log.debug(f"Ignoring portal, {num_live} are already known.")
+                    return
                 received_portal = NetworkPortal()
                 received_portal.set(
                     time_start,
-                    portal_data.time_valid,
+                    time_valid,
                     portal_data.network_type_from,
                     portal_data.network_type_to,
                     addr_portal,
@@ -1340,7 +1397,7 @@ class BSXNetwork:
                 received_portal.num_refreshes += 1
             received_portal.smsg_difficulty = portal_data.smsg_difficulty
             received_portal.time_start = time_start
-            received_portal.time_valid = portal_data.time_valid
+            received_portal.time_valid = time_valid
 
             self.add(received_portal, cursor, upsert=True)
 
@@ -1447,19 +1504,29 @@ class BSXNetwork:
                     if portal.time_start + portal.time_valid <= now - (5 * 60):
                         self.refreshPortal(portal)
 
+        time_delete: int = now - self._forget_portals_after
         cursor = self.openDB()
         try:
             query: str = "DELETE FROM network_portals WHERE time_start < :time_delete"
-            cursor.execute(query, {"time_delete": now - self._forget_portals_after})
+            cursor.execute(query, {"time_delete": time_delete})
+            cursor.execute(
+                "DELETE FROM smsgaddresses WHERE use_type = :use_type AND addr NOT IN (SELECT address_from FROM network_portals)",
+                {"use_type": int(AddressTypes.PORTAL)},
+            )
         finally:
             self.closeDB(cursor)
+        for portals_from in self.known_portals.values():
+            for network_to, portals in portals_from.items():
+                portals_from[network_to] = [
+                    portal for portal in portals if portal.time_start >= time_delete
+                ]
         self._last_checked_bridges = now
 
     def updateNetwork(self) -> None:
         now: int = self.getTime()
 
         if self._poll_smsg:
-            if now - self._last_checked_smsg >= self.check_smsg_seconds:
+            if self.checkDue(now, self._last_checked_smsg, self.check_smsg_seconds):
                 self._last_checked_smsg = now
                 options = {
                     "encoding": "hex",
@@ -1479,7 +1546,9 @@ class BSXNetwork:
         try:
             if self._bridge_networks:
                 if len(self.active_networks) > 1:
-                    if now - self._last_checked_bridges >= self.check_bridges_seconds:
+                    if self.checkDue(
+                        now, self._last_checked_bridges, self.check_bridges_seconds
+                    ):
                         self.updateNetworkBridges(now)
             for network in self.active_networks:
                 if network["type"] == "simplex":

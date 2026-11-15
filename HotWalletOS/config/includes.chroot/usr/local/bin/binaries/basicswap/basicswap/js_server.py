@@ -705,17 +705,20 @@ def parseMultiBidRequest(swap_client, post_data):
 
     have_receive: bool = have_data_entry(post_data, "receive_amount")
     have_spend: bool = have_data_entry(post_data, "spend_amount")
+    spend_max: bool = toBool(get_data_entry_or(post_data, "spend_max", "false"))
     ensure(
-        have_receive != have_spend,
-        "Requires one of receive_amount or spend_amount",
+        have_receive + have_spend + spend_max == 1,
+        "Requires one of receive_amount, spend_amount or spend_max",
     )
 
+    target = None
     if have_receive:
         mode = FILL_RECEIVE
         target = inputAmount(get_data_entry(post_data, "receive_amount"), ci_from)
     else:
         mode = FILL_SPEND
-        target = inputAmount(get_data_entry(post_data, "spend_amount"), ci_to)
+        if have_spend:
+            target = inputAmount(get_data_entry(post_data, "spend_amount"), ci_to)
 
     max_bids = int(get_data_entry_or(post_data, "max_bids", DEFAULT_MAX_BIDS))
     ensure(max_bids >= 1, "max_bids must be at least 1")
@@ -728,6 +731,7 @@ def parseMultiBidRequest(swap_client, post_data):
         "coin_to": coin_to,
         "mode": mode,
         "target": target,
+        "spend_max": spend_max,
         "anchor": get_data_entry_or(post_data, "anchor", ANCHOR_MARKET),
         "slip_percent": float(
             get_data_entry_or(post_data, "slip_percent", DEFAULT_SLIP_PERCENT)
@@ -911,7 +915,7 @@ def js_bids(self, url_split, post_string: str, is_json: bool) -> bytes:
                         post_data, "destination_address"
                     )
                 else:
-                    extra_options["dest_af"] = ci_from.decodeAddress(
+                    extra_options["dest_af"] = ci_from.decodeSwapDest(
                         get_data_entry(post_data, "destination_address")
                     )
             if have_data_entry(post_data, "destination_script"):
@@ -1066,12 +1070,6 @@ def js_sentbids(self, url_split, post_string, is_json) -> bytes:
     return formatBids(swap_client, bids, filters)
 
 
-def js_network(self, url_split, post_string, is_json) -> bytes:
-    swap_client = self.server.swap_client
-    swap_client.checkSystemStatus()
-    return bytes(json.dumps(swap_client.get_network_info()), "UTF-8")
-
-
 def js_networks(self, url_split, post_string, is_json) -> bytes:
     swap_client = self.server.swap_client
     swap_client.checkSystemStatus()
@@ -1224,19 +1222,16 @@ def js_offer_fee_estimate(self, url_split, post_string, is_json) -> bytes:
             coin_from, conf_target
         )
         fee_rate_int = ci_from.make_int(from_fee_override, r=1)
-        lock_spend_tx_vsize = (
-            ci_from.xmr_swap_b_lock_spend_tx_vsize()
+        lock_spend_tx_fee: int = (
+            ci_from.feeForVSize(fee_rate_int, ci_from.xmr_swap_b_lock_spend_tx_vsize())
             if reverse_bid
-            else ci_from.xmr_swap_a_lock_spend_tx_vsize()
+            else ci_from.estLockSpendFee(fee_rate_int)
         )
-        lock_spend_tx_fee = ci_from.make_int(
-            fee_rate_int * lock_spend_tx_vsize / 1000, r=1
-        )
-        rv["fee"] = ci_from.format_amount(lock_spend_tx_fee // ci_from.COIN())
+        rv["fee"] = ci_from.format_amount(lock_spend_tx_fee)
         rv["fee_rate"] = ci_from.format_amount(fee_rate_int)
         rv["fee_src"] = fee_src
     except Exception as e:
-        if swap_client.debug:
+        if swap_client.debug_logs:
             swap_client.log.warning(f"offer_fee_estimate failed: {e}")
         rv["error"] = "Fee estimate unavailable"
     return bytes(json.dumps(rv), "UTF-8")
@@ -1715,6 +1710,20 @@ def js_lock(self, url_split, post_string, is_json) -> bytes:
     return bytes(json.dumps({"success": True}), "UTF-8")
 
 
+def js_logging(self, url_split, post_string, is_json) -> bytes:
+    swap_client = self.server.swap_client
+    if post_string:
+        post_data = getFormData(post_string, is_json)
+        names = []
+        for key in ("include", "exclude"):
+            value = get_data_entry_or(post_data, key, [])
+            if isinstance(value, str):
+                value = [name for name in value.split(",") if name != ""]
+            names.append(value)
+        swap_client.setLogCategories(*names)
+    return bytes(json.dumps(swap_client.logCategories()), "UTF-8")
+
+
 def js_404(self, url_split, post_string, is_json) -> bytes:
     return bytes(json.dumps({"Error": "path unknown"}), "UTF-8")
 
@@ -2144,11 +2153,9 @@ def js_modeswitchinfo(self, url_split, post_string, is_json) -> bytes:
     try:
         fee_rate, rate_src = ci.get_fee_rate(ci._conf_target)
         est_vsize = 180
-        if isinstance(fee_rate, int):
-            fee_per_vbyte = max(1, fee_rate // 1000)
-        else:
-            fee_per_vbyte = max(1, int(fee_rate * 100000))
-        estimated_fee_sats = est_vsize * fee_per_vbyte
+        if not isinstance(fee_rate, int):
+            fee_rate = ci.make_int(fee_rate, r=1)
+        estimated_fee_sats = max(est_vsize, ci.feeForVSize(fee_rate, est_vsize))
     except Exception:
         estimated_fee_sats = 180
         rate_src = "default"
@@ -2312,6 +2319,11 @@ def js_electrum_discover(self, url_split, post_string, is_json) -> bytes:
                 "UTF-8",
             )
 
+    from .interface.electrumx import is_valid_peer_host
+
+    discovered_servers = [
+        s for s in discovered_servers if is_valid_peer_host(s.get("host"))
+    ]
     onion_servers = [s for s in discovered_servers if s.get("is_onion")]
     clearnet_servers = [s for s in discovered_servers if not s.get("is_onion")]
 
@@ -2364,7 +2376,6 @@ endpoints = {
     "sentoffers": js_sentoffers,
     "bids": js_bids,
     "sentbids": js_sentbids,
-    "network": js_network,
     "networks": js_networks,
     "revokeoffer": js_revokeoffer,
     "smsgaddresses": js_smsgaddresses,
@@ -2385,6 +2396,7 @@ endpoints = {
     "unlock": js_unlock,
     "lock": js_lock,
     "help": js_help,
+    "logging": js_logging,
     "readurl": js_readurl,
     "active": js_active,
     "coinprices": js_coinprices,

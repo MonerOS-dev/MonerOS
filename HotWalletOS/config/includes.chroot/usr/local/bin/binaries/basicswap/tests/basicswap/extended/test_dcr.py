@@ -750,6 +750,16 @@ class Test(BaseTest):
                 ],
             )
 
+        for sc in cls.swap_clients:
+            for i in range(60):
+                try:
+                    sc.checkCoinsReady(cls.test_coin, cls.test_coin)
+                    break
+                except ValueError:
+                    if i == 59:
+                        raise
+                    test_delay_event.wait(1)
+
     @classmethod
     def tearDownClass(cls):
         logging.info("Finalising Decred Test")
@@ -819,12 +829,12 @@ class Test(BaseTest):
             max_tries=12,
         )
 
-        extra_opts.append("--pass=test_pass")
         args = [os.path.join(DCR_BINDIR, DCR_WALLET), "--create"] + extra_opts
-        createDCRWallet(args, cls.hex_seeds[i], logging, test_delay_event)
+        createDCRWallet(args, cls.hex_seeds[i], "test_pass", logging, test_delay_event)
 
         test_delay_event.wait(1.0)
 
+        extra_opts.append("--pass=test_pass")
         cls.dcr_daemons.append(
             startDaemon(
                 appdata,
@@ -849,7 +859,7 @@ class Test(BaseTest):
 
     @classmethod
     def addPIDInfo(cls, sc, i):
-        sc.setDaemonPID(Coins.DCR, cls.dcr_daemons[i].handle.pid)
+        sc.setDaemon(Coins.DCR, cls.dcr_daemons[i])
 
     @classmethod
     def addCoinSettings(cls, settings, datadir, node_id):
@@ -1474,6 +1484,22 @@ class Test(BaseTest):
         assert expect_size >= size_actual
         assert expect_size - size_actual < 10
 
+        seq = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_BLOCKS, 8)
+        refund_tx, _, _ = ci.createSCLockRefundTx(
+            lock_tx, lock_tx_script, A, B, seq, seq, fee_rate
+        )
+        refund_guarded_spend_tx = ci.createSCLockSpendTx(
+            lock_tx,
+            lock_tx_script,
+            pkh_out,
+            fee_rate,
+            tx_lock_refund_bytes=refund_tx,
+        )
+        spend_fee: int = amount - ci.getVoutValue(
+            ci.loadTx(refund_guarded_spend_tx).vout[0]
+        )
+        assert spend_fee == ci.estLockSpendFee(fee_rate)
+
         # Test chain b (no-script) lock tx size
         v = ci.getNewRandomKey()
         s = ci.getNewRandomKey()
@@ -1739,6 +1765,7 @@ class Test(BaseTest):
                 BidStates.BID_ERROR,
                 BidStates.BID_ABANDONED,
                 BidStates.XMR_SWAP_FAILED,
+                BidStates.XMR_SWAP_FAILED_NOTHING_TO_RECOVER,
                 BidStates.XMR_SWAP_FAILED_REFUNDED,
             )
             for i in range(900):

@@ -1,0 +1,1 @@
+total=$(curl -s "https://monero.fail/api/v1/nodes/" | jq '.pages'); for page in $(seq 1 $total); do curl -s "https://monero.fail/api/v1/nodes/?page=$page"; done | jq -s -r '[.[].nodes[]] | [.[] | select(.is_tor == true and .available == true and (.url | endswith(":18081")))] | sort_by(.last_height) | reverse | .[0].url'

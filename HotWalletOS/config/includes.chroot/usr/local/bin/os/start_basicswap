@@ -59,6 +59,7 @@ run_whiptail() {
     return "$ec"
 }
 
+clear
 
 # Space Check on raw parent block device (32GB decimal required for basicswap)
 REQUIRED_BYTES=$((30 * 1000 * 1000 * 1000))
@@ -479,6 +480,10 @@ fi
 if [ ! -f /var/www/backend/bs.en ]; then
     sudo touch /var/www/backend/bs.en
 fi
+
+
+sleep 1
+clear
 
 
 
