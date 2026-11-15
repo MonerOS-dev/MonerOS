@@ -19,6 +19,7 @@ import traceback
 import unittest
 
 from copy import deepcopy
+from unittest.mock import patch
 
 from coincurve.keys import PrivateKey
 
@@ -446,6 +447,7 @@ class BaseTest(unittest.TestCase):
                     # Load mnemonics after all nodes have started to avoid staking getting stuck in TryToSync
                     rpc = make_rpc_func(i)
                     waitForRPC(rpc, test_delay_event)
+                    rpc("reservebalance", [True, 1000000])
                     if i == 0:
                         rpc(
                             "extkeyimportmaster",
@@ -474,7 +476,10 @@ class BaseTest(unittest.TestCase):
                             {"stakecombinethreshold": 100, "stakesplitthreshold": 200},
                         ],
                     )
-                    rpc("reservebalance", [False])
+                # Only node 0 stakes. Competing regtest stakes can spend outputs that
+                # exist on one branch only, the other nodes then mark that branch
+                # invalid and never reorg onto it.
+                callnoderpc(0, "reservebalance", [False])
 
             btc_wallet_bin = "bitcoin-wallet" + (".exe" if os.name == "nt" else "")
             for i in range(NUM_BTC_NODES):
@@ -679,11 +684,11 @@ class BaseTest(unittest.TestCase):
                     log_name=f"BasicSwap{i}",
                 )
                 cls.swap_clients.append(sc)
-                sc.setDaemonPID(Coins.BTC, cls.btc_daemons[i].handle.pid)
-                sc.setDaemonPID(Coins.PART, cls.part_daemons[i].handle.pid)
+                sc.setDaemon(Coins.BTC, cls.btc_daemons[i])
+                sc.setDaemon(Coins.PART, cls.part_daemons[i])
 
                 if cls.start_ltc_nodes:
-                    sc.setDaemonPID(Coins.LTC, cls.ltc_daemons[i].handle.pid)
+                    sc.setDaemon(Coins.LTC, cls.ltc_daemons[i])
                 cls.addPIDInfo(sc, i)
 
                 sc.start()
@@ -1214,6 +1219,22 @@ class Test(BaseTest):
         assert expect_vsize >= vsize_actual
         assert expect_vsize - vsize_actual < 10
 
+        seq = ci.getExpectedSequence(TxLockTypes.SEQUENCE_LOCK_BLOCKS, 8)
+        refund_tx, _, _ = ci.createSCLockRefundTx(
+            lock_tx, lock_tx_script, A, B, seq, seq, fee_rate
+        )
+        refund_guarded_spend_tx = ci.createSCLockSpendTx(
+            lock_tx,
+            lock_tx_script,
+            pkh_out,
+            fee_rate,
+            tx_lock_refund_bytes=refund_tx,
+        )
+        spend_fee: int = amount - ci.getVoutValue(
+            ci.loadTx(refund_guarded_spend_tx).vout[0]
+        )
+        assert spend_fee == ci.estLockSpendFee(fee_rate)
+
         # Test chain b (no-script) lock tx size
         v = ci.getNewRandomKey()
         s = ci.getNewRandomKey()
@@ -1382,7 +1403,7 @@ class Test(BaseTest):
         assert rv[0]["addr_to"] == new_address
 
         # Disable all
-        json_rv = read_json_api(1800, "smsgaddresses/disableall")
+        json_rv = read_json_api(1800, "smsgaddresses/disableall", {})
         assert json_rv["num_disabled"] >= 1
 
     def test_01_part_xmr(self):
@@ -1492,6 +1513,7 @@ class Test(BaseTest):
             bid_id,
             BidStates.SWAP_COMPLETED,
             sent=True,
+            wait_for=180,
         )
 
     def test_01b_part_xmr_competing_accept_chunks(self):
@@ -1617,6 +1639,52 @@ class Test(BaseTest):
 
         self.waitForBothCompleted(bid_id, id_offerer=1, id_bidder=0)
 
+    def test_01f_xmr_part_reverse_double_accept_first_parts_lost(self):
+        logging.info(
+            "---------- Test XMR to PART, the offerer accepts a reverse bid twice, only the later's parts are sent"
+        )
+        swap_clients = self.swap_clients
+        offer_id = swap_clients[1].postOffer(
+            Coins.XMR,
+            Coins.PART,
+            1 * XMR_COIN,
+            10 * COIN,
+            1 * XMR_COIN,
+            SwapTypes.XMR_SWAP,
+        )
+        wait_for_offer(test_delay_event, swap_clients[0], offer_id)
+        offer = swap_clients[0].getOffer(offer_id)
+        bid_id = swap_clients[0].postXmrBid(offer_id, offer.amount_from)
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[1],
+            bid_id,
+            BidStates.BID_RECEIVED,
+            wait_for=(self.extra_wait_time + 40),
+        )
+
+        with patch.object(swap_clients[1], "sendXmrSplitMessages") as send_parts:
+            swap_clients[1].acceptADSReverseBid(bid_id)
+        send_parts.assert_called_once()
+        for _ in range(60):
+            bidder_bid, bidder_swap = swap_clients[0].getXmrBid(bid_id)
+            if bidder_bid.state != BidStates.BID_REQUEST_SENT:
+                break
+            if test_delay_event.wait(1):
+                raise ValueError("Test stopped.")
+        assert bidder_bid.state == BidStates.BID_RECEIVING
+        first_accept = bidder_swap.split_parent_msg_id
+        assert first_accept is not None
+
+        bid, xmr_swap = swap_clients[1].getXmrBid(bid_id)
+        bid.setState(BidStates.BID_RECEIVED)
+        swap_clients[1].saveBid(bid_id, bid, xmr_swap=xmr_swap)
+        swap_clients[1].acceptADSReverseBid(bid_id)
+
+        self.waitForBothCompleted(bid_id, id_offerer=1, id_bidder=0)
+        _, bidder_swap = swap_clients[0].getXmrBid(bid_id)
+        assert bidder_swap.split_parent_msg_id != first_accept
+
     def test_02_leader_recover_a_lock_tx(self):
         logging.info("---------- Test PART to XMR leader recovers coin a lock tx")
         swap_clients = self.swap_clients
@@ -1665,7 +1733,11 @@ class Test(BaseTest):
             test_delay_event,
             swap_clients[1],
             bid_id,
-            [BidStates.BID_STALLED_FOR_TEST, BidStates.XMR_SWAP_FAILED],
+            [
+                BidStates.BID_STALLED_FOR_TEST,
+                BidStates.XMR_SWAP_FAILED,
+                BidStates.XMR_SWAP_FAILED_NOTHING_TO_RECOVER,
+            ],
             sent=True,
         )
 
@@ -1738,7 +1810,21 @@ class Test(BaseTest):
         bidder_states = read_json_api(1801, path)
 
         bidder_states = [s for s in bidder_states if s[1] != "Bid Stalled (debug)"]
-        assert compare_bid_states(bidder_states, self.states_bidder[2]) is True
+        states_bidder_no_lock_b = [
+            s for s in self.states_bidder[2] if s != "Bid Scriptless coin locked"
+        ]
+        states_bidder_stalled_first = [
+            s
+            for s in states_bidder_no_lock_b
+            if s != "Bid Script pre-refund tx in chain"
+        ]
+        assert any(
+            [
+                compare_bid_states(bidder_states, self.states_bidder[2]),
+                compare_bid_states(bidder_states, states_bidder_no_lock_b),
+                compare_bid_states(bidder_states, states_bidder_stalled_first),
+            ]
+        )
 
     def test_03b_follower_recover_a_lock_tx_with_mercy(self):
         logging.info(
@@ -1864,11 +1950,15 @@ class Test(BaseTest):
         states_bidder_alt = deepcopy(self.states_bidder[1])
         states_bidder_alt[7] = "Bid Script pre-refund tx in chain"
         states_bidder_alt[8] = "Bid Scriptless coin locked"
+        states_bidder_refund_first = [
+            s for s in self.states_bidder[1] if s != "Bid Scriptless coin locked"
+        ]
         assert compare_bid_states(offerer_states, self.states_offerer[1]) is True
         assert any(
             [
                 compare_bid_states(bidder_states, self.states_bidder[1]),
                 compare_bid_states(bidder_states, states_bidder_alt),
+                compare_bid_states(bidder_states, states_bidder_refund_first),
             ]
         )
 
@@ -2372,9 +2462,6 @@ class Test(BaseTest):
         assert float(js_1["balance"]) > 200.0
         node1_anon_before = js_1["anon_balance"] + js_1["anon_pending"]
 
-        callnoderpc(
-            1, "reservebalance", [True, 1000000]
-        )  # Stop staking to avoid conflicts (input used by tx->anon staked before tx gets in the chain)
         post_json = {
             "value": 100,
             "address": js_1["stealth_address"],
@@ -2396,7 +2483,6 @@ class Test(BaseTest):
         js_1 = read_json_api(1801, "wallets/part")
         node1_anon_before = js_1["anon_balance"] + js_1["anon_pending"]
 
-        callnoderpc(1, "reservebalance", [False])
         post_json = {
             "value": 10,
             "address": js_0["stealth_address"],

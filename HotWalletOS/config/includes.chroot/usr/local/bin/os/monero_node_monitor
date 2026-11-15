@@ -9,7 +9,9 @@ PREVIOUS_NODE_STATE="unknown"
 
 while true; do
     if [ -f "$NODE_CACHE_FILE" ]; then
-        ACTIVE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+        RAW_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+        # Strip protocol prefixes and trailing slashes
+        ACTIVE_NODE=$(echo "$RAW_NODE" | sed 's|https://||g' | sed 's|http://||g' | sed 's|/$||')
     else
         ACTIVE_NODE="127.0.0.1:18081"
     fi

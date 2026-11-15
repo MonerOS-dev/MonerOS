@@ -139,6 +139,7 @@ class BidStates(IntEnum):
     XMR_SWAP_FAILED_SWIPED_USING_MERCY = 37
     XMR_SWAP_FAILED_SWIPED_MERCY_UNUSED = 38
     XMR_SWAP_FAILED_SWIPED_SENDING_MERCY = 39
+    XMR_SWAP_FAILED_NOTHING_TO_RECOVER = 41
 
 
 class TxStates(IntEnum):
@@ -241,6 +242,10 @@ class EventLogTypes(IntEnum):
     MERCY_TX_NOT_SENT = auto()
     MERCY_TX_UNUSABLE = auto()
     SWIPE_PAYOUT_SWEPT = auto()
+    LOCK_TX_B_ABANDONED_LOCK_CLOSE = auto()
+    LOCK_TX_B_SPEND_TX_MISSING = auto()
+    LOCK_TX_B_SPEND_TX_CONFIRMED = auto()
+    LOCK_TX_A_REFUND_SPEND_TX_CONFIRMED = auto()
 
 
 class XmrSplitMsgTypes(IntEnum):
@@ -273,6 +278,7 @@ class DebugTypes(IntEnum):
     DONT_SEND_COIN_B_LOCK = auto()
     DONT_RELEASE_COIN_A_LOCK = auto()
     MAKE_INVALID_MERCY_TX = auto()
+    SKIP_FIRST_REDEEM_BROADCAST = auto()
 
 
 class NotificationTypes(IntEnum):
@@ -391,6 +397,8 @@ def strBidState(state):
         return "Failed, swiped, mercy unused"
     if state == BidStates.XMR_SWAP_FAILED:
         return "Failed"
+    if state == BidStates.XMR_SWAP_FAILED_NOTHING_TO_RECOVER:
+        return "Failed, nothing to recover"
     if state == BidStates.SWAP_DELAYING:
         return "Delaying"
     if state == BidStates.XMR_SWAP_MSG_SCRIPT_LOCK_TX_SIGS:
@@ -478,7 +486,7 @@ def getLockName(lock_type):
 
 def describeEventEntry(event_type, event_msg):
     if event_type == EventLogTypes.FAILED_TX_B_LOCK_PUBLISH:
-        return "Failed to publish lock tx B"
+        return "Failed to publish lock tx B: " + event_msg
     if event_type == EventLogTypes.LOCK_TX_A_PUBLISHED:
         return "Lock tx A published"
     if event_type == EventLogTypes.LOCK_TX_B_PUBLISHED:
@@ -527,6 +535,8 @@ def describeEventEntry(event_type, event_msg):
         return "Lock tx A release abandoned, refund timelock too close"
     if event_type == EventLogTypes.LOCK_SPEND_ABANDONED_LOCK_CLOSE:
         return "Lock tx A spend abandoned, refund timelock too close"
+    if event_type == EventLogTypes.LOCK_TX_B_ABANDONED_LOCK_CLOSE:
+        return "Lock tx B send abandoned, refund timelock too close"
     if event_type == EventLogTypes.LOCK_TX_A_REFUND_SPEND_TX_SEEN:
         return "Lock tx A refund spend tx seen in chain"
     if event_type == EventLogTypes.SYSTEM_WARNING:
@@ -567,6 +577,12 @@ def describeEventEntry(event_type, event_msg):
         return "Lock tx B spend tx seen in chain"
     if event_type == EventLogTypes.LOCK_TX_B_REFUND_TX_SEEN:
         return "Lock tx B refund tx seen in chain"
+    if event_type == EventLogTypes.LOCK_TX_B_SPEND_TX_MISSING:
+        return "Lock tx B spend tx not found by daemon, resending"
+    if event_type == EventLogTypes.LOCK_TX_B_SPEND_TX_CONFIRMED:
+        return "Lock tx B spend tx confirmed in chain"
+    if event_type == EventLogTypes.LOCK_TX_A_REFUND_SPEND_TX_CONFIRMED:
+        return "Lock tx A refund spend tx confirmed in chain"
 
 
 def getVoutByAddress(txjs, p2sh):
@@ -671,6 +687,7 @@ inactive_states = [
     BidStates.BID_EXPIRED,
     BidStates.XMR_SWAP_FAILED_SWIPED_USED_MERCY,
     BidStates.XMR_SWAP_FAILED_SWIPED_MERCY_UNUSED,
+    BidStates.XMR_SWAP_FAILED_NOTHING_TO_RECOVER,
 ]
 
 
@@ -745,6 +762,7 @@ def isFailingBidState(state):
         BidStates.XMR_SWAP_FAILED_SWIPED_USING_MERCY,
         BidStates.XMR_SWAP_FAILED_SWIPED_MERCY_UNUSED,
         BidStates.XMR_SWAP_FAILED,
+        BidStates.XMR_SWAP_FAILED_NOTHING_TO_RECOVER,
     )
 
 

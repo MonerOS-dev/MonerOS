@@ -64,6 +64,7 @@ const STATE_MAP = {
     36: ['Failed, swiped, recovered'],
     38: ['Failed, swiped, mercy unused'],
     19: ['Failed'],
+    41: ['Failed, nothing to recover'],
     20: ['Delaying'],
     21: ['Timed-out', 'Expired'],
     22: ['Abandoned'],
@@ -830,7 +831,7 @@ const createIdentityTooltipContent = (identity) => {
             ${identity.label ? `
                 <div class="border-b border-gray-400 pb-2">
                     <div class="text-white text-xs tracking-wide font-semibold">Label:</div>
-                    <div class="text-white">${identity.label}</div>
+                    <div class="text-white">${window.config.utils.escapeHtml(identity.label)}</div>
                 </div>
             ` : ''}
 
@@ -839,7 +840,7 @@ const createIdentityTooltipContent = (identity) => {
             ${identity.note ? `
                 <div class="space-y-1">
                     <div class="text-white text-xs tracking-wide font-semibold">Note:</div>
-                    <div class="text-white text-sm italic">${identity.note}</div>
+                    <div class="text-white text-sm italic">${window.config.utils.escapeHtml(identity.note)}</div>
                 </div>
             ` : ''}
 
@@ -1125,7 +1126,7 @@ const createTableRow = async (bid, planId = null, isLast = false) => {
                                 <span>
                                     ${isSent ? 'Out:' : 'In:'}
                                 </span>
-                                ${identity?.label || formatAddressSMSG(rawAddress)}
+                                ${identity?.label ? window.config.utils.escapeHtml(identity.label) : formatAddressSMSG(rawAddress)}
                             </a>
                         </div>
                     </div>

@@ -239,6 +239,13 @@
           </div>
          </div>
 
+         <div class="mb-4 pt-2">
+          <h5 class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-3">Kept Connected</h5>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+           <input type="number" name="max_electrum_servers_{{ c.name }}" id="max_electrum_servers_{{ c.name }}" value="{{ c.max_electrum_servers }}" min="1" step="1" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-24 p-2.5 focus:ring-1 focus:outline-none" placeholder="{{ c.max_electrum_servers_default }}">
+          </div>
+         </div>
+
          <!-- Discover Servers Button -->
          <div class="mb-4 flex justify-end">
           <button type="button" class="discover-servers-btn inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-md transition-colors focus:outline-none focus:ring-0" data-coin="{{ c.name }}">
@@ -752,7 +759,7 @@
            </svg>
           </div>
          </div>
-         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable detailed logging and debug information</p>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Enable debug-only options and behaviour</p>
         </div>
 
         <div>
@@ -769,6 +776,22 @@
           </div>
          </div>
          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Show advanced UI elements and debug controls</p>
+        </div>
+
+        <div>
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Log Level</label>
+         <div class="relative">
+          <select name="loglevel" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+           <option {% if general_settings.log_level == "debug" %}selected{% endif %} value="debug">Debug</option>
+           <option {% if general_settings.log_level == "info" %}selected{% endif %} value="info">Info</option>
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+           <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+           </svg>
+          </div>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Debug adds detailed logs and error tracebacks</p>
         </div>
 
         <div class="md:col-span-2">
@@ -801,6 +824,39 @@
           </div>
          </div>
          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Automatically clean up database records for expired offers and bids and all related data</p>
+        </div>
+
+        <div class="md:col-span-2">
+         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Clean Up Monero/Wownero Swap Wallets (days unused)</label>
+         <div class="flex items-center gap-3">
+          <div class="relative max-w-xs">
+           <input type="number" form="prune-swap-wallets-form" name="prune_swap_wallets_days" autocomplete="off" min="14" value="{{ swap_wallets_prune.days if swap_wallets_prune else 90 }}" class="hover:border-blue-500 bg-gray-50 text-gray-900 appearance-none dark:bg-gray-700 dark:text-white border border-gray-300 dark:border-gray-600 dark:placeholder-gray-400 text-sm rounded-lg outline-none focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 focus:ring-1 focus:outline-none">
+          </div>
+          <button form="prune-swap-wallets-form" name="preview_swap_wallets_prune" value="Preview" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+           Preview
+          </button>
+         </div>
+         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Delete cached swap wallets not used in this many days. Key files are kept, a removed wallet is rescanned if it is needed again.</p>
+         {% if swap_wallets_prune %}
+         {% set prune_total = swap_wallets_prune.coins|sum(attribute='count') %}
+         <div id="swap-wallets-prune-preview" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mt-3">
+          {% for c in swap_wallets_prune.coins %}
+          <p class="text-sm text-gray-700 dark:text-gray-300">{{ c.name }}: {{ c.count }} swap wallet caches ({{ '%.1f'|format(c.mb) }} MB) not used in {{ swap_wallets_prune.days }} days</p>
+          {% else %}
+          <p class="text-sm text-gray-700 dark:text-gray-300">No Monero or Wownero wallet managed by BasicSwap is active.</p>
+          {% endfor %}
+          <div class="flex items-center gap-3 mt-3">
+           {% if prune_total > 0 %}
+           <button form="prune-swap-wallets-confirm-form" name="prune_swap_wallets" value="Delete" type="submit" class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+            Delete {{ prune_total }} Caches
+           </button>
+           {% endif %}
+           <button type="button" onclick="document.getElementById('swap-wallets-prune-preview').remove()" class="bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:hover:bg-gray-500 text-gray-900 dark:text-white font-medium py-2 px-4 rounded-lg transition-colors focus:outline-none">
+            {{ 'Cancel' if prune_total > 0 else 'Close' }}
+           </button>
+          </div>
+         </div>
+         {% endif %}
         </div>
 
        </div>
@@ -892,6 +948,15 @@
     </div>
     <input type="hidden" name="formid" value="{{ form_id }}">
    </form>
+   <form method="post" id="prune-swap-wallets-form">
+    <input type="hidden" name="formid" value="{{ form_id }}">
+   </form>
+   {% if swap_wallets_prune %}
+   <form method="post" id="prune-swap-wallets-confirm-form">
+    <input type="hidden" name="formid" value="{{ form_id }}">
+    <input type="hidden" name="prune_swap_wallets_days" value="{{ swap_wallets_prune.days }}">
+   </form>
+   {% endif %}
   </div>
 
   <div class="tab-content{% if current_tab != 'security' %} hidden{% endif %}" id="security" role="tabpanel" aria-labelledby="security-tab">

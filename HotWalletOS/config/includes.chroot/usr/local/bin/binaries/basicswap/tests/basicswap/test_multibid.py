@@ -7,11 +7,12 @@
 
 import json
 import logging
+import threading
 import unittest
 
 from types import SimpleNamespace
 
-from basicswap.basicswap_util import SwapTypes
+from basicswap.basicswap_util import ADAPTOR_SIG_LOCK_SPEND_FEE_BUFFER, SwapTypes
 from basicswap.bidplanner import (
     AUTO_ACCEPT_ANY,
     AUTO_ACCEPT_NONE,
@@ -26,6 +27,9 @@ from basicswap.bidplanner import (
     REASON_OWN,
 )
 from basicswap.chainparams import Coins
+from basicswap.interface.btc.btc import BTCInterface
+from basicswap.interface.ltc.ltc import LTCInterface
+from basicswap.interface.xmr.xmr import XMRInterface
 from basicswap.js_server import js_bids_bulk
 from basicswap.multibid import (
     ANCHOR_BEST,
@@ -39,6 +43,7 @@ from basicswap.multibid import (
 from basicswap.util import format_amount, make_int
 
 EXP = {Coins.XMR: 12, Coins.LTC: 8, Coins.BTC: 8}
+XMR_TX_WEIGHTS = {1: 1604, 2: 2216}
 
 
 def units(v: float, coin_type) -> int:
@@ -57,85 +62,61 @@ def exclusions(plan):
     return [(entry.offer_id, entry.reason) for entry in plan.excluded]
 
 
-class FakeCI:
-    def __init__(
-        self,
-        coin_type,
-        name: str,
-        balance: int = 0,
-        fee_rate: float = 0.0,
-        redeem_fee_rate=None,
-    ):
-        self._coin_type = coin_type
-        self._exp = EXP[coin_type]
-        self._name = name
-        self._balance = balance
-        self._fee_rate = fee_rate
-        self._redeem_fee_rate = redeem_fee_rate
-        self.outputs = None
-        self.locked = []
-        self.split_calls = []
-        self.split_fails = False
+def make_ci(cls, balance: int = 0, fee_rate: float = 0.0, redeem_fee_rate=None):
+    ci = cls.__new__(cls)
+    ci._conf_target = 2
+    ci._use_segwit = True
+    ci._fee_priority = 0
+    ci._mx_wallet = threading.Lock()
+    ci._wallet_filename = "fake"
+    ci.outputs = None
+    ci.locked = []
+    ci.split_calls = []
+    ci.split_fails = False
 
-    def getRedeemFeeRate(self):
-        return self._redeem_fee_rate
+    def lockOutput(txid_hex: str, vout: int, bid_id=None, cursor=None) -> None:
+        ci.locked.append((txid_hex, vout))
 
-    def getSpendableOutputs(self):
-        return self.outputs
-
-    def est_lock_tx_vsize(self) -> int:
-        return 200
-
-    def est_tx_input_vsize(self) -> int:
-        return 68
-
-    def lockOutput(self, txid_hex: str, vout: int, bid_id=None, cursor=None) -> None:
-        self.locked.append((txid_hex, vout))
-
-    def splitOutputs(self, values):
-        if self.split_fails:
+    def splitOutputs(values):
+        if ci.split_fails:
             raise ValueError("Insufficient funds")
-        self.split_calls.append(list(values))
+        ci.split_calls.append(list(values))
         return [
             {"txid": b"split".hex() + f"{i:02x}", "vout": i, "value": v}
             for i, v in enumerate(values)
         ]
 
-    def max_batched_lock_outputs(self):
-        return 15 if self._coin_type == Coins.XMR else None
+    def rpc(method, params=None):
+        if method == "get_fee_estimate":
+            per_kb = (
+                ci.make_int(fee_rate) if redeem_fee_rate is None else redeem_fee_rate
+            )
+            return {"fees": [per_kb // 1000] * 4, "quantization_mask": 0}
+        raise RuntimeError(f"unexpected daemon rpc {method}")
 
-    def xmr_swap_a_lock_spend_tx_vsize(self) -> int:
-        # Monero is never the scripted leader, matching the real interface.
-        if self._coin_type == Coins.XMR:
-            raise ValueError("Not possible")
-        return 100
+    def rpc_wallet(method, params=None):
+        if method == "incoming_transfers":
+            values = [o["value"] for o in ci.outputs] if ci.outputs else [balance]
+            return {"transfers": [{"amount": v, "unlocked": True} for v in values]}
+        if method == "estimate_tx_size_and_weight":
+            return {"weight": XMR_TX_WEIGHTS[params["n_inputs"]]}
+        raise RuntimeError(f"unexpected wallet rpc {method}")
 
-    def xmr_swap_b_lock_spend_tx_vsize(self) -> int:
-        return 100
+    ci.get_fee_rate = lambda conf_target=2: (fee_rate, "fake")
+    ci.getSpendableOutputs = lambda: ci.outputs
+    ci.getSpendableBalance = lambda: balance
+    ci.lockOutput = lockOutput
+    ci.splitOutputs = splitOutputs
+    ci.openWallet = lambda name: None
+    ci.isChainSynced = lambda: True
+    ci.rpc = rpc
+    ci.rpc_wallet = rpc_wallet
+    return ci
 
-    def getHTLCSpendTxVSize(self, redeem: bool = True) -> int:
-        return 100
 
-    def get_fee_rate(self, conf_target: int = 2):
-        return self._fee_rate, "fake"
-
-    def COIN(self) -> int:
-        return 10**self._exp
-
-    def exp(self) -> int:
-        return self._exp
-
-    def make_int(self, v, r: int = 0) -> int:
-        return make_int(v, self._exp, r=r)
-
-    def format_amount(self, v, conv_int: bool = False, r: int = 0) -> str:
-        return format_amount(v, self._exp)
-
-    def coin_name(self) -> str:
-        return self._name
-
-    def getSpendableBalance(self) -> int:
-        return self._balance
+def xmr_redeem_fee(swap_client) -> int:
+    ci = swap_client.ci(Coins.XMR)
+    return ci.feeForVSize(ci.getRedeemFeeRate(), ci.xmr_swap_b_lock_spend_tx_vsize())
 
 
 class FakeOffer:
@@ -189,18 +170,16 @@ class FakeSwapClient:
         self.bid_plans = {}
         self.kv = {}
         self.fail_offers = set()
+        self.xmr_based_coins = (Coins.XMR,)
         self._cis = {
-            Coins.XMR: FakeCI(
-                Coins.XMR,
-                "Monero",
+            Coins.XMR: make_ci(
+                XMRInterface,
                 balance=balance,
                 fee_rate=fee_rate,
                 redeem_fee_rate=redeem_fee_rate,
             ),
-            Coins.LTC: FakeCI(
-                Coins.LTC, "Litecoin", balance=balance, fee_rate=fee_rate
-            ),
-            Coins.BTC: FakeCI(Coins.BTC, "Bitcoin", balance=balance, fee_rate=fee_rate),
+            Coins.LTC: make_ci(LTCInterface, balance=balance, fee_rate=fee_rate),
+            Coins.BTC: make_ci(BTCInterface, balance=balance, fee_rate=fee_rate),
         }
 
     def getXmrOffer(self, offer_id: bytes, cursor=None):
@@ -311,12 +290,14 @@ class TestPlanMultiBid(unittest.TestCase):
         )
 
     def test_skips_offers_too_small_for_the_redeem_fee(self):
-        # floor = 20 * 5e8 * 100 // 1000 = 0.001 XMR; DUST is below it.
+        # floor = 20 * 5e8 * 1604 / 1000 = 0.01604 XMR; DUST is below it.
         book = [
             FakeOffer(b"BIG", 4, 0.42, min_bid_amount=0.1, a_fee_rate=500_000_000),
             FakeOffer(b"DUST", 0.0001, 0.42, a_fee_rate=500_000_000),
         ]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.43))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.43), redeem_fee_rate=500_000_000
+        )
 
         plan, _, _ = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(4)
@@ -326,10 +307,12 @@ class TestPlanMultiBid(unittest.TestCase):
         self.assertEqual([leg.offer_id for leg in plan.legs], [b"BIG"])
 
     def test_a_big_offer_is_not_bid_below_its_redeem_floor(self):
-        # BIG could fill 1, but the target is under its 0.001 redeem floor, so
+        # BIG could fill 1, but the target is under its 0.01604 redeem floor, so
         # taking that sliver would be mostly fee - leave it unused, unfilled.
         book = [FakeOffer(b"BIG", 1, 0.42, a_fee_rate=500_000_000)]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.43))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.43), redeem_fee_rate=500_000_000
+        )
 
         plan, _, _ = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(0.0005)
@@ -379,8 +362,8 @@ class TestPlanMultiBid(unittest.TestCase):
         self.assertEqual([leg.offer_id for leg in plan.legs], [b"BIG"])
 
     def test_reverse_bid_uses_the_coin_from_fee(self):
-        # The coin B lock-spend is paid in coin_from, so it is sized by
-        # a_fee_rate; b_fee_rate belongs to the coin_to chain.
+        # The coin B lock-spend is paid in coin_from at its wallet's rate, not
+        # at either rate the offer carries.
         book = [
             FakeOffer(
                 b"A",
@@ -391,13 +374,21 @@ class TestPlanMultiBid(unittest.TestCase):
                 b_fee_rate=1_000,
             )
         ]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.43))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.43), redeem_fee_rate=10_000_000
+        )
 
         plan, _, _ = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(1)
         )
 
-        self.assertEqual(plan.fees, 10_000_000)
+        ci = swap_client.ci(Coins.XMR)
+        self.assertEqual(plan.fees, xmr_redeem_fee(swap_client))
+        for offer_rate in (100_000_000, 1_000):
+            self.assertNotEqual(
+                plan.fees,
+                ci.feeForVSize(offer_rate, ci.xmr_swap_b_lock_spend_tx_vsize()),
+            )
 
     def test_the_wallet_redeem_rate_overrides_the_offer_rate(self):
         # Monero sweeps at its own priority, so that rate sizes the redeem
@@ -411,7 +402,7 @@ class TestPlanMultiBid(unittest.TestCase):
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(1)
         )
 
-        self.assertEqual(plan.fees, 10_000_000)
+        self.assertEqual(plan.fees, xmr_redeem_fee(swap_client))
 
     def test_does_not_split_across_equal_rate_offers(self):
         # Three offers at one rate, the first big enough for the whole buy;
@@ -420,7 +411,9 @@ class TestPlanMultiBid(unittest.TestCase):
             FakeOffer(o, 5, 0.42, min_bid_amount=0.1, a_fee_rate=100_000_000)
             for o in (b"A", b"B", b"C")
         ]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.43))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.43), redeem_fee_rate=100_000_000
+        )
 
         plan, _, _ = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(3)
@@ -430,18 +423,21 @@ class TestPlanMultiBid(unittest.TestCase):
         self.assertEqual(plan.total_receive - plan.fees, xmr(3))
 
     def test_receive_mode_grosses_up_for_the_redeem_fee(self):
-        # fee = 1e8 * 100 // 1000 = 1e7 per leg, deducted when the leg is
+        # fee = 1e8 * 1604 / 1000 per leg, deducted when the leg is
         # redeemed, so buy that much extra to net the requested target.
         book = [FakeOffer(b"A", 4, 0.42, min_bid_amount=0.1, a_fee_rate=100_000_000)]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.43))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.43), redeem_fee_rate=100_000_000
+        )
 
         plan, _, _ = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(1)
         )
 
-        self.assertEqual(plan.fees, 10_000_000)
-        self.assertEqual(plan.legs[0].amount, xmr(1) + 10_000_000)
-        self.assertEqual(plan.total_receive, xmr(1) + 10_000_000)
+        fee = xmr_redeem_fee(swap_client)
+        self.assertEqual(plan.fees, fee)
+        self.assertEqual(plan.legs[0].amount, xmr(1) + fee)
+        self.assertEqual(plan.total_receive, xmr(1) + fee)
 
     def test_receive_mode_grosses_up_across_every_leg(self):
         # Two legs are needed to fill, so the gross-up covers both redeem fees.
@@ -449,28 +445,34 @@ class TestPlanMultiBid(unittest.TestCase):
             FakeOffer(b"A", 1, 0.42, amount_negotiable=False, a_fee_rate=100_000_000),
             FakeOffer(b"B", 4, 0.43, min_bid_amount=0.1, a_fee_rate=100_000_000),
         ]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.43))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.43), redeem_fee_rate=100_000_000
+        )
 
         plan, _, _ = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(3)
         )
 
         self.assertEqual(len(plan.legs), 2)
-        self.assertEqual(plan.fees, 20_000_000)
-        self.assertEqual(plan.total_receive, xmr(3) + 20_000_000)
+        fee = xmr_redeem_fee(swap_client)
+        self.assertEqual(plan.fees, 2 * fee)
+        self.assertEqual(plan.total_receive, xmr(3) + 2 * fee)
 
     def test_spend_mode_takes_the_redeem_fee_out_of_what_is_received(self):
         # Spending a fixed budget, the redeem fee is not added to the target but
         # still comes out of the received amount, so it is reported net.
         book = [FakeOffer(b"A", 4, 0.42, min_bid_amount=0.1, a_fee_rate=100_000_000)]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.43))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.43), redeem_fee_rate=100_000_000
+        )
 
         plan, _, _ = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_SPEND, ltc(0.42)
         )
 
-        self.assertEqual(plan.fees, 10_000_000)
-        self.assertEqual(plan.total_receive - plan.fees, xmr(1) - 10_000_000)
+        fee = xmr_redeem_fee(swap_client)
+        self.assertEqual(plan.fees, fee)
+        self.assertEqual(plan.total_receive - plan.fees, xmr(1) - fee)
 
     def test_a_picked_dust_offer_is_still_bid_on(self):
         book = [FakeOffer(b"DUST", 0.0001, 0.42, a_fee_rate=500_000_000)]
@@ -693,9 +695,11 @@ class TestRateScale(unittest.TestCase):
 
         self.assertEqual(market_rate, xmr(3.0))
         self.assertEqual(limit_rate, xmr(3.15))
+        # The receive grosses up by the lock spend fee, the buffer at a zero rate
+        total_receive: int = ltc(2) + ADAPTOR_SIG_LOCK_SPEND_FEE_BUFFER
         self.assertEqual(plan.num_bids, 1)
-        self.assertEqual(plan.total_receive, ltc(2))
-        self.assertEqual(plan.total_spend, xmr(6))
+        self.assertEqual(plan.total_receive, total_receive)
+        self.assertEqual(plan.total_spend, total_receive * 3 * 10**4)
         self.assertEqual(plan.unfilled, 0)
 
     def test_reports_the_rate_against_market_at_par(self):
@@ -718,8 +722,8 @@ class TestRateScale(unittest.TestCase):
         self.assertEqual(described["pct_vs_market"], 0.0)
         self.assertEqual(described["avg_rate"], "3.000000000000")
         self.assertEqual(described["market_rate"], "3.000000000000")
-        self.assertEqual(described["total_receive"], "2.00000000")
-        self.assertEqual(described["total_spend"], "6.000000000000")
+        self.assertEqual(described["total_receive"], "2.00000012")
+        self.assertEqual(described["total_spend"], "6.000000360000")
 
 
 def outs(*values):
@@ -825,20 +829,22 @@ class TestPlaceMultiBid(unittest.TestCase):
         self.assertEqual(len(swap_client.ci(Coins.LTC).locked), 2)
 
     def test_leaves_each_led_leg_room_for_change(self):
-        # At 100 sat/vB the fake sizes give a lock fee of 20000 and an input 6800.
         book = [
             FakeOffer(b"A", 4, 0.42, min_bid_amount=0.1, b_fee_rate=100_000),
             FakeOffer(b"B", 9, 0.43, amount_negotiable=False, b_fee_rate=100_000),
         ]
-        lock_only = [ltc(0.42) + 20000, ltc(3.87) + 20000]
         swap_client = FakeSwapClient(book)
+        ci = swap_client.ci(Coins.LTC)
+        lock_fee = ci.feeForVSize(100_000, ci.est_lock_tx_vsize())
+        input_fee = ci.feeForVSize(100_000, ci.est_tx_input_vsize())
+        lock_only = [ltc(0.42) + lock_fee, ltc(3.87) + lock_fee]
         swap_client.ci(Coins.LTC).outputs = outs(*lock_only)
 
         placeMultiBid(swap_client, self.legs(swap_client))
 
         self.assertEqual(
             swap_client.ci(Coins.LTC).split_calls,
-            [[value + 6800 for value in lock_only]],
+            [[value + input_fee for value in lock_only]],
         )
 
     def test_splits_one_output_the_legs_cannot_share(self):
@@ -1027,19 +1033,71 @@ class TestPlaceMultiBid(unittest.TestCase):
 
     def test_rejects_a_plan_that_spends_the_whole_balance(self):
         # 4.29 LTC needed; a balance of exactly that leaves nothing for the lock fee.
-        swap_client = FakeSwapClient(self.book(), balance=ltc(4.29))
+        swap_client = FakeSwapClient(self.book(), balance=ltc(4.29), fee_rate=0.0001)
 
         with self.assertRaises(ValueError) as e:
             placeMultiBid(swap_client, self.legs(swap_client))
 
-        self.assertIn("fee reserve", str(e.exception))
+        self.assertIn("including fees", str(e.exception))
         self.assertEqual(swap_client.posted, [])
 
     def test_places_when_the_balance_covers_the_spend_and_the_reserve(self):
-        swap_client = FakeSwapClient(self.book(), balance=ltc(4.30))
+        swap_client = FakeSwapClient(self.book(), balance=ltc(4.30), fee_rate=0.0001)
 
         placed, failed, _ = placeMultiBid(swap_client, self.legs(swap_client))
 
+        self.assertEqual(len(placed), 2)
+        self.assertEqual(failed, [])
+
+    def test_a_spend_max_plan_places(self):
+        swap_client = FakeSwapClient(
+            self.book(), market_rate=ltc(0.43), balance=ltc(4.30), fee_rate=0.0001
+        )
+        plan, _, _ = planMultiBid(
+            swap_client, Coins.XMR, Coins.LTC, FILL_SPEND, None, spend_max=True
+        )
+
+        placed, failed, _ = placeMultiBid(
+            swap_client,
+            [{"offer_id": leg.offer_id, "amount": leg.amount} for leg in plan.legs],
+        )
+
+        self.assertEqual(plan.unfilled, 0)
+        self.assertEqual(len(placed), 2)
+        self.assertEqual(failed, [])
+
+    def test_a_spend_max_plan_paying_xmr_places(self):
+        book = [
+            FakeOffer(
+                b"X",
+                0.004,
+                160,
+                coin_from=Coins.BTC,
+                coin_to=Coins.XMR,
+                min_bid_amount=0.0001,
+            ),
+            FakeOffer(
+                b"Y",
+                0.01,
+                161,
+                coin_from=Coins.BTC,
+                coin_to=Coins.XMR,
+                min_bid_amount=0.0001,
+            ),
+        ]
+        swap_client = FakeSwapClient(
+            book, market_rate=xmr(160), balance=xmr(1), fee_rate=0.0001
+        )
+        plan, _, _ = planMultiBid(
+            swap_client, Coins.BTC, Coins.XMR, FILL_SPEND, None, spend_max=True
+        )
+
+        placed, failed, _ = placeMultiBid(
+            swap_client,
+            [{"offer_id": leg.offer_id, "amount": leg.amount} for leg in plan.legs],
+        )
+
+        self.assertEqual(plan.unfilled, 0)
         self.assertEqual(len(placed), 2)
         self.assertEqual(failed, [])
 
@@ -1171,7 +1229,9 @@ class TestDescribePlan(unittest.TestCase):
 
     def test_reports_the_fees_and_the_net_received(self):
         book = [FakeOffer(b"A", 4, 0.40, min_bid_amount=0.1, a_fee_rate=100_000_000)]
-        swap_client = FakeSwapClient(book, market_rate=ltc(0.40))
+        swap_client = FakeSwapClient(
+            book, market_rate=ltc(0.40), redeem_fee_rate=100_000_000
+        )
 
         plan, market_rate, limit_rate = planMultiBid(
             swap_client, Coins.XMR, Coins.LTC, FILL_RECEIVE, xmr(1)
@@ -1186,9 +1246,11 @@ class TestDescribePlan(unittest.TestCase):
             limit_rate,
         )
 
-        self.assertEqual(described["fees"], "0.000010000000")
+        ci = swap_client.ci(Coins.XMR)
+        fee = xmr_redeem_fee(swap_client)
+        self.assertEqual(described["fees"], ci.format_amount(fee))
         self.assertEqual(described["net_receive"], "1.000000000000")
-        self.assertEqual(described["total_receive"], "1.000010000000")
+        self.assertEqual(described["total_receive"], ci.format_amount(xmr(1) + fee))
 
     def test_describes_a_skipped_offer_at_its_own_size(self):
         book = [

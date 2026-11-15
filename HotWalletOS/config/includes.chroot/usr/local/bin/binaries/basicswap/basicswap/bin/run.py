@@ -7,6 +7,7 @@
 # file LICENSE or http://www.opensource.org/licenses/mit-license.php.
 
 import copy
+import getpass
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from basicswap.basicswap import BasicSwap
 from basicswap.chainparams import chainparams, Coins, isKnownCoinName
 from basicswap.network.simplex.client import startSimplexNetworkClient
 from basicswap.ui.util import getCoinName
+from basicswap.util import path_exists
 from basicswap.util.daemon import Daemon
 
 initial_logger = logging.getLogger()
@@ -65,7 +67,7 @@ def checkPARTZmqConfigBeforeStart(part_settings, swap_settings):
             return
 
         config_path = os.path.join(datadir, "particl.conf")
-        if not os.path.exists(config_path):
+        if not path_exists(config_path):
             return
 
         with open(config_path, "r") as f:
@@ -92,6 +94,27 @@ def checkPARTZmqConfigBeforeStart(part_settings, swap_settings):
 
     except Exception as e:
         logger.debug(f"Error checking PART ZMQ config: {e}")
+
+
+SECRET_ARG_NAMES = ("hdseed", "pass", "daemon-login")
+
+
+def redactArgs(args) -> str:
+    redacted = []
+    hide_next = False
+    for arg in args:
+        if hide_next:
+            redacted.append("***")
+            hide_next = False
+            continue
+        name, sep, _ = arg.partition("=")
+        if name.lstrip("-") in SECRET_ARG_NAMES:
+            if sep:
+                arg = name + "=***"
+            else:
+                hide_next = True
+        redacted.append(arg)
+    return " ".join(redacted)
 
 
 def startDaemon(node_dir, bin_dir, daemon_bin, opts=[], extra_config={}):
@@ -158,7 +181,7 @@ def startDaemon(node_dir, bin_dir, daemon_bin, opts=[], extra_config={}):
         args.append("-datadir=" + datadir_path)
     args += opts
     logger.info(f"Starting node {daemon_bin}")
-    logger.debug("Arguments {}".format(" ".join(args)))
+    logger.debug("Arguments {}".format(redactArgs(args)))
 
     opened_files = []
     if extra_config.get("stdout_to_file", False):
@@ -205,7 +228,7 @@ def startXmrDaemon(node_dir, bin_dir, daemon_bin, opts=[]):
         "--config-file=" + os.path.join(datadir_path, config_filename),
     ] + opts
     logger.info(f"Starting node {daemon_bin}")
-    logger.debug("Arguments {}".format(" ".join(args)))
+    logger.debug("Arguments {}".format(redactArgs(args)))
 
     # return subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     file_stdout = open(os.path.join(datadir_path, "core_stdout.log"), "w")
@@ -243,7 +266,7 @@ def startXmrWalletDaemon(node_dir, bin_dir, wallet_bin, opts=[]):
         else "monero_wallet.conf"
     )
     config_path = os.path.join(data_dir, wallet_config_filename)
-    if os.path.exists(config_path):
+    if path_exists(config_path):
         args += ["--config-file=" + config_path]
         with open(config_path) as fp:
             for line in fp:
@@ -269,7 +292,7 @@ def startXmrWalletDaemon(node_dir, bin_dir, wallet_bin, opts=[]):
                     fp_to.write(line)
 
     logger.info(f"Starting wallet daemon {wallet_bin}")
-    logger.debug("Arguments {}".format(" ".join(args)))
+    logger.debug("Arguments {}".format(redactArgs(args)))
 
     # TODO: return subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=data_dir)
     wallet_stdout = open(os.path.join(data_dir, "wallet_stdout.log"), "w")
@@ -369,11 +392,11 @@ def runClient(
                 "Please unset the WALLET_ENCRYPTION_PWD environment variable."
             )
 
-    if not os.path.exists(settings_path):
+    try:
+        with open(settings_path) as fs:
+            settings = json.load(fs)
+    except FileNotFoundError:
         raise ValueError("Settings file not found: " + str(settings_path))
-
-    with open(settings_path) as fs:
-        settings = json.load(fs)
 
     swap_client = BasicSwap(
         data_dir, settings, chain, log_name=log_prefix, extra_opts=extra_opts
@@ -532,8 +555,14 @@ def runClient(
                     if wallet_pwd == "":
                         # Only set when in startonlycoin mode
                         wallet_pwd = os.getenv("WALLET_ENCRYPTION_PWD", "")
+                    if (
+                        wallet_pwd == ""
+                        and "decred" in start_only_coins
+                        and sys.stdin.isatty()
+                    ):
+                        wallet_pwd = getpass.getpass("Wallet encryption password: ")
                     if wallet_pwd != "":
-                        wallet_opts.append(f'--pass="{wallet_pwd}"')
+                        wallet_opts.append("--promptpass")
                     extra_config = {
                         "add_datadir": False,
                         "stdout_to_file": True,
@@ -550,6 +579,11 @@ def runClient(
                             extra_config=extra_config,
                         )
                     )
+                    if wallet_pwd != "":
+                        daemons[-1].handle.stdin.write(
+                            (wallet_pwd + "\n").encode("utf-8")
+                        )
+                        daemons[-1].handle.stdin.flush()
                     pid = daemons[-1].handle.pid
                     swap_client.log.info(f"Started {filename} {pid}")
                 continue  # /decred
@@ -576,7 +610,7 @@ def runClient(
                 )
                 pid = daemons[-1].handle.pid
                 pids.append((c, pid))
-                swap_client.setDaemonPID(c, pid)
+                swap_client.setDaemon(c, daemons[-1])
                 swap_client.log.info(f"Started {filename} {pid}")
         if len(pids) > 0:
             with open(pids_path, "w") as fd:
@@ -619,6 +653,10 @@ def runClient(
                 if fp:
                     fp.close()
             closed_pids.append(d.handle.pid)
+        except subprocess.TimeoutExpired as e:
+            swap_client.log.error(
+                f"Waiting for {d.name} {d.handle.pid} to shutdown: timed out after {e.timeout} seconds"
+            )
         except Exception as e:
             swap_client.log.error(
                 f"Waiting for {d.name} {d.handle.pid} to shutdown: {e}"
@@ -679,6 +717,7 @@ def printHelp():
 
 
 def main():
+    os.umask(0o077)
     data_dir = None
     chain = "mainnet"
     start_only_coins = set()

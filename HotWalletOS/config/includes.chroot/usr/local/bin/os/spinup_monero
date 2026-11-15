@@ -39,6 +39,7 @@ run_whiptail() {
     rm -f "$ecfile"
     return "$ec"
 }
+
     
 # Restore proper keyboard mode
 sudo loadkeys us
@@ -102,7 +103,6 @@ if [ "$MONERO_EXISTS" = true ]; then
     TOTAL_DISK_BYTES=$(lsblk -bno SIZE "$DISK_PATH" | head -n1 | xargs)
     TOTAL_DISK_BYTES=${TOTAL_DISK_BYTES:-0}
     
-    # SCENARIO A: STORAGE DEPRIVED (MUST MANUALLY INPUT REMOTE TARGET)
     if [ "$TOTAL_DISK_BYTES" -lt "$REQUIRED_BYTES" ]; then
     
         MSG_LOW_SPACE="You do not have enough disk space (250GB+ required) to host a local node.\nYou must manually configure a custom remote node address to proceed or choose to shut down. Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details."
@@ -115,30 +115,77 @@ if [ "$MONERO_EXISTS" = true ]; then
             RUN_SELF_SETUP=false
     
             while true; do
-                # Native descriptor redirection bypasses script wrapper bugs for input boxes
-                # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
-                USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
-                    "Enter remote node address (e.g., 123.45.67.89:18081 or xyz.com:18081 or xyz.onion:18081):" 12 50 \
-                    "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
-                
-                if [ $? -ne 0 ]; then
-                    sudo bash /usr/local/bin/os/safe_shutdown
-                    exit 0
+                # Check if REMOTE_NODE_CFG exists to set default to Custom (--defaultno)
+                if [ -f "$REMOTE_NODE_CFG" ]; then
+                    AUTO_DEFAULT_FLAG="--defaultno"
+                else
+                    AUTO_DEFAULT_FLAG=""
                 fi
-                
-                # Strips EVERYTHING except alphanumeric characters, dots, colons, and hyphens
-                CLEAN_NODE=$(echo "$USER_NODE" | tr -cd '[:alnum:].:-')
-                
-                if [ -n "$CLEAN_NODE" ]; then
-                    if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
-                        echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
+
+                if run_whiptail whiptail --title " Remote Node Selection " \
+                    --yesno "Would you like to enter a custom remote node address or select a node automatically?" 11 50 --fb \
+                    $AUTO_DEFAULT_FLAG \
+                    --yes-button "Automatic" --no-button "Custom"; then
+                    
+                    # Automatic selected (Yes)
+                    if run_whiptail whiptail --title " Node Type Selection " \
+                        --yesno "Please select node type. Clearnet is the fastest but will reveal your IP Address. TOR is the recommended option if privacy is a concern. Automatic selections are determined simply by node health and are not vetted by us." 14 50 --fb \
+                        --defaultno \
+                        --yes-button "Clearnet" --no-button "TOR"; then
+                        
+                        # Clearnet selected (Yes)
+                        CLEAN_NODE=$(total=$(curl -s "https://monero.fail/api/v1/nodes/" | jq '.pages'); for page in $(seq 1 $total); do curl -s "https://monero.fail/api/v1/nodes/?page=$page"; done | jq -s -r '[.[].nodes[]] | [.[] | select((.is_tor != true) and .available == true and (.url | endswith(":18081")) and (.url | startswith("http://")) and (.url | contains("onion") | not) and (.url | contains("i2p") | not) and (.url | contains("[") | not))] | sort_by(.last_height) | reverse | .[0].url')
+                    else
+                        # TOR selected (No)
+                        CLEAN_NODE=$(total=$(curl -s "https://monero.fail/api/v1/nodes/" | jq '.pages'); for page in $(seq 1 $total); do curl -s "https://monero.fail/api/v1/nodes/?page=$page"; done | jq -s -r '[.[].nodes[]] | [.[] | select(.is_tor == true and .available == true and (.url | endswith(":18081")))] | sort_by(.last_height) | reverse | .[0].url')
+                    fi
+                    
+                    # Clean up the fetched node to strip any accidental quotes or whitespace
+                    CLEAN_NODE=$(echo "$CLEAN_NODE" | tr -d '"' | xargs)
+
+                    if [ -n "$CLEAN_NODE" ] && [ "$CLEAN_NODE" != "null" ]; then
                         echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
                         break
                     else
-                        whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                        whiptail --fb --msgbox "Failed to automatically fetch a node address. Please try again or use custom." 0 0
+                        continue
                     fi
+
                 else
-                    whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+                    # Custom selected (No) -> Run inputbox inside script to handle nested script stdin
+                    _node_file=$(mktemp)
+                    _ec_file=$(mktemp)
+                    
+                    script -q -c "whiptail --title \" Remote Node Configuration \" --inputbox \
+                        \"Enter remote node address (e.g., 123.45.67.89:18081 or xyz.com:18081 or xyz.onion:18081):\" 12 50 \
+                        \"$DEFAULT_NODE\" --fb 2>$_node_file; echo \$? > $_ec_file" /dev/null
+                    
+                    CANCEL_STATUS=$(cat "$_ec_file")
+                    USER_NODE=$(cat "$_node_file" | tr -d '\r' | xargs)
+                    rm -f "$_node_file" "$_ec_file"
+                    
+                    if [ "$CANCEL_STATUS" -ne 0 ]; then
+                        echo "User canceled remote node input. Looping back to menu."
+                        continue
+                    fi
+                    
+                    clear
+                    
+                    # Bulletproof sanitization using explicit character ranges
+                    CLEAN_NODE=$(echo "$USER_NODE" | tr -cd 'a-zA-Z0-9.:-')
+                    
+                    if [ -n "$CLEAN_NODE" ]; then
+                        if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
+                            echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
+                            echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
+                            break 2
+                        else
+                            whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                        fi
+                    else
+                        whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+                        continue
+                    fi
                 fi
             done
     
@@ -153,50 +200,99 @@ if [ "$MONERO_EXISTS" = true ]; then
         if [ ! -f /mnt/sallyport/config/monero.self ]; then
             DEFAULT_FLAG=""
             
-            # Ask the user if they want to enable atomic swaps since they have enough space
             MSG_NODE="Would you like to host your own Monero node locally (Self-Sync) or connect to a remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy but can take up to 4 days on typical hardware for the initial sync."
         else
             DEFAULT_FLAG="--defaultno"
             
-            # We've already synced so warn about enabling
             MSG_NODE="Would you like to continue running your own Monero node (Self-Sync) or connect to a remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy and is highly recommended."  
         fi
     
         while true; do
-            # Flip the buttons: "Remote Node" is now the default (Yes-button)
             if run_whiptail whiptail --title " Node Synchronization Engine " \
                 --yesno "$MSG_NODE" 15 50 --fb \
                 $DEFAULT_FLAG \
                 --yes-button "Remote Node" --no-button "Self-Sync"; then
     
-                # If they press Enter (Default), it hits 'Yes' (Remote Node)
                 RUN_SELF_SETUP=false
                 
-                # Native descriptor redirection bypasses script wrapper bugs for input boxes
-                # Added $DEFAULT_NODE at the end of the whiptail arguments to pre-fill the text field
-                USER_NODE=$(whiptail --title " Remote Node Configuration " --inputbox \
-                    "Enter remote node address (e.g., 123.45.67.89:18081 or xyz.com:18081 or xyz.onion:18081):" 12 50 \
-                    "$DEFAULT_NODE" --fb 3>&1 1>&2 2>&3)
-                
-                # If user presses CANCEL or ESC on the input box
-                if [ $? -ne 0 ]; then
-                    echo "User canceled remote node input. Looping back to menu."
-                    continue  # <--- This restarts the main loop, returning to the choice screen
-                fi
-                
-                # Strips EVERYTHING except alphanumeric characters, dots, colons, and hyphens
-                CLEAN_NODE=$(echo "$USER_NODE" | tr -cd '[:alnum:].:-')
-                
-                if [ -n "$CLEAN_NODE" ]; then
-                    if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
-                        echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
-                        echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
-                        break # Success! Break the main outer loop and proceed with the script
+                while true; do
+                    # Check if REMOTE_NODE_CFG exists to set default to Custom (--defaultno)
+                    if [ -f "$REMOTE_NODE_CFG" ]; then
+                        AUTO_DEFAULT_FLAG="--defaultno"
                     else
-                        whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                        AUTO_DEFAULT_FLAG=""
                     fi
-                else
-                    whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+
+                    if run_whiptail whiptail --title " Remote Node Selection " \
+                        --yesno "Would you like to enter a custom remote node address or select a node automatically?" 11 50 --fb \
+                        $AUTO_DEFAULT_FLAG \
+                        --yes-button "Automatic" --no-button "Custom"; then
+                        
+                        # Automatic selected (Yes)
+                        if run_whiptail whiptail --title " Node Type Selection " \
+                            --yesno "Please select node type. Clearnet is the fastest but will reveal your IP Address. TOR is the recommended option if privacy is a concern. Automatic selections are determined simply by node health and are not vetted by us." 14 50 --fb \
+                            --defaultno \
+                            --yes-button "Clearnet" --no-button "TOR"; then
+                            
+                            # Clearnet selected (Yes)
+                            CLEAN_NODE=$(total=$(curl -s "https://monero.fail/api/v1/nodes/" | jq '.pages'); for page in $(seq 1 $total); do curl -s "https://monero.fail/api/v1/nodes/?page=$page"; done | jq -s -r '[.[].nodes[]] | [.[] | select((.is_tor != true) and .available == true and (.url | endswith(":18081")) and (.url | startswith("http://")) and (.url | contains("onion") | not) and (.url | contains("i2p") | not) and (.url | contains("[") | not))] | sort_by(.last_height) | reverse | .[0].url')
+                        else
+                            # TOR selected (No)
+                            CLEAN_NODE=$(total=$(curl -s "https://monero.fail/api/v1/nodes/" | jq '.pages'); for page in $(seq 1 $total); do curl -s "https://monero.fail/api/v1/nodes/?page=$page"; done | jq -s -r '[.[].nodes[]] | [.[] | select(.is_tor == true and .available == true and (.url | endswith(":18081")))] | sort_by(.last_height) | reverse | .[0].url')
+                        fi
+                        
+                        # Clean up the fetched node to strip any accidental quotes or whitespace
+                        CLEAN_NODE=$(echo "$CLEAN_NODE" | tr -d '"' | xargs)
+
+                        if [ -n "$CLEAN_NODE" ] && [ "$CLEAN_NODE" != "null" ]; then
+                            echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
+                            break
+                        else
+                            whiptail --fb --msgbox "Failed to automatically fetch a node address. Please try again or use custom." 0 0
+                            continue
+                        fi
+
+                    else
+                        # Custom selected (No) -> Run inputbox inside script to handle nested script stdin
+                        _node_file=$(mktemp)
+                        _ec_file=$(mktemp)
+                        
+                        script -q -c "whiptail --title \" Remote Node Configuration \" --inputbox \
+                            \"Enter remote node address (e.g., 123.45.67.89:18081 or xyz.com:18081 or xyz.onion:18081):\" 12 50 \
+                            \"$DEFAULT_NODE\" --fb 2>$_node_file; echo \$? > $_ec_file" /dev/null
+                        
+                        CANCEL_STATUS=$(cat "$_ec_file")
+                        USER_NODE=$(cat "$_node_file" | tr -d '\r' | xargs)
+                        rm -f "$_node_file" "$_ec_file"
+                        
+                        if [ "$CANCEL_STATUS" -ne 0 ]; then
+                            echo "User canceled remote node input. Looping back to menu."
+                            continue
+                        fi
+                        
+                        clear
+                        
+                        # Bulletproof sanitization using explicit character ranges
+                        CLEAN_NODE=$(echo "$USER_NODE" | tr -cd 'a-zA-Z0-9.:-')
+                        
+                        if [ -n "$CLEAN_NODE" ]; then
+                            if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
+                                echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
+                                echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
+                                break 2
+                            else
+                                whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
+                            fi
+                        else
+                            whiptail --fb --msgbox "Node address cannot be blank. Please try again." 0 0
+                            continue
+                        fi
+                    fi
+                done
+                
+                # If we successfully broke out of the remote node config loop, break the main engine loop too
+                if [ -f "$REMOTE_NODE_CFG" ] && [ -s "$REMOTE_NODE_CFG" ]; then
+                    break
                 fi
                 
             else
@@ -205,7 +301,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                 sudo chown user:user "$NODE_CACHE_FILE"
                 
                 RUN_SELF_SETUP=true
-                break # Break out of the loop to proceed with self-sync setup
+                break 
             fi
         done
     fi

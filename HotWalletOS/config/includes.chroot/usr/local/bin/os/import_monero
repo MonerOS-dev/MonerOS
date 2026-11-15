@@ -120,7 +120,9 @@ if ss -tln | grep -q ":18081 "; then
     REMOTE_NODE="$LOCAL_TOR_NODE"
 # Otherwise, fall back to the remote config if it exists
 elif [ -f "$NODE_CACHE_FILE" ] && [ -n "$(cat "$NODE_CACHE_FILE" | tr -d '[:space:]')" ]; then
-    REMOTE_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+    RAW_NODE=$(cat "$NODE_CACHE_FILE" | tr -d '\n\r ')
+    # Strip protocol prefixes and trailing slashes immediately here
+    REMOTE_NODE=$(echo "$RAW_NODE" | sed 's|https://||g' | sed 's|http://||g' | sed 's|/$||')
     echo "[*] Remote node configuration found: $REMOTE_NODE"
 else
     echo "[!] No local node active and no remote config found. Defaulting to: $LOCAL_TOR_NODE"

@@ -70,21 +70,22 @@ done
 cd ..
 
 ########################################
-# Electrum Personal Server (HotWallet Only)
+# Ethereum (Go-Ethereum / Geth)
 ########################################
-echo "=== Electrum Personal Server ==="
-mkdir eps && cd eps
 
-# Download the latest source code tarball directly
-wget https://github.com/chris-belcher/electrum-personal-server/archive/refs/heads/master.tar.gz -O eps.tar.gz
-tar -xf eps.tar.gz
+# ### Ethereum support on hold until BasicSwap integrates it ###
 
-# Flatten and place into HotWalletOS binaries path
-mkdir -p "${TARGET_DIRS[0]}/eps"
-cp -r electrum-personal-server-*/* "${TARGET_DIRS[0]}/eps/"
-rm -f eps.tar.gz
+#echo "=== Ethereum (Geth) ==="
+#mkdir ethereum && cd ethereum
 
-cd ..
+#wget --show-progress https://gethstore.blob.core.windows.net/builds/geth-linux-amd64-1.17.10-1df30b18.tar.gz -O geth.tar.gz
+#tar -xf geth.tar.gz
+
+#for DIR in "${TARGET_DIRS[@]}"; do
+#    cp geth-linux-amd64-*/geth "$DIR/"
+#done
+
+#cd ..
 
 
 ########################################

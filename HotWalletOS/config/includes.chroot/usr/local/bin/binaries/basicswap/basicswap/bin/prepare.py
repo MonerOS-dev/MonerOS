@@ -8,6 +8,7 @@
 
 import base64
 import contextlib
+import getpass
 import gnupg
 import json
 import logging
@@ -17,6 +18,7 @@ import shutil
 import signal
 import socket
 import socks
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -31,7 +33,7 @@ from basicswap.basicswap import BasicSwap
 from basicswap.chainparams import Coins, chainparams, getCoinIdFromName
 from basicswap.contrib.rpcauth import generate_salt
 from basicswap.ui.util import getCoinName
-from basicswap.util import ensure, toBool
+from basicswap.util import ensure, path_exists, toBool
 from basicswap.util.network import urlretrieve, make_reporthook
 from basicswap.util.rfc2440 import rfc2440_hash_password
 from basicswap.bin.run import (
@@ -68,7 +70,6 @@ from basicswap.interface.wow.core import (
 from basicswap.interface.pivx.core import prepare_module as pivx_prepare
 from basicswap.interface.firo.core import prepare_module as firo_prepare
 from basicswap.interface.doge.core import prepare_module as doge_prepare
-from basicswap.interface.nav.core import prepare_module as nav_prepare
 from basicswap.interface.nmc.core import prepare_module as nmc_prepare
 from basicswap.network.nostr.prepare import prepare_module as nostr_prepare
 from basicswap.network.simplex.prepare import prepare_module as simplex_prepare
@@ -81,7 +82,6 @@ coin_prepare_modules = {
     "dash": dash_prepare,
     "decred": dcr_prepare,
     "dogecoin": doge_prepare,
-    "navcoin": nav_prepare,
     "namecoin": nmc_prepare,
     "monero": xmr_prepare,
     "wownero": wow_prepare,
@@ -140,11 +140,6 @@ known_coins = {
         firo_prepare.version_tag,
         firo_prepare.signers.keys(),
     ),
-    "navcoin": (
-        nav_prepare.version,
-        nav_prepare.version_tag,
-        nav_prepare.signers.keys(),
-    ),
     "bitcoincash": (
         bch_prepare.version,
         bch_prepare.version_tag,
@@ -157,9 +152,7 @@ known_coins = {
     ),
 }
 
-disabled_coins = [
-    "navcoin",
-]
+disabled_coins = []
 
 known_networks = ["smsg", "simplex", "nostr"]
 disabled_networks = []
@@ -265,6 +258,16 @@ default_socket_timeout = socket.getdefaulttimeout()
 default_socket_getaddrinfo = socket.getaddrinfo
 
 
+def readSecret(prompt: str, confirm: bool = False) -> str:
+    # getpass reads the terminal even when stdin is redirected
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\r\n")
+    value = getpass.getpass(prompt)
+    if confirm and getpass.getpass("Repeat " + prompt[0].lower() + prompt[1:]) != value:
+        exitWithError("The entries do not match")
+    return value
+
+
 def shouldManageDaemon(prefix: str) -> bool:
     """
     If the user sets a COIN _RPC_HOST or PORT variable, set manage_daemon for COIN to false.
@@ -301,7 +304,7 @@ def getWalletName(coin_params: str, default_name: str, prefix_override=None) -> 
 
 def getDescriptorWalletOption(coin_params):
     ticker: str = coin_params["ticker"]
-    default_option: bool = True if ticker in ("NMC",) else False
+    default_option: bool = True if ticker in ("BTC", "NMC") else False
     return toBool(os.getenv(ticker + "_USE_DESCRIPTORS", default_option))
 
 
@@ -579,6 +582,7 @@ def writeTorSettings(fp, coin, coin_settings, tor_control_password):
     if coin in ("decred",):
         return
 
+    fp.write(f"onion={TOR_PROXY_HOST}:{TOR_PROXY_PORT}\n")
     onionport = coin_settings["onionport"]
     fp.write(f"torpassword={tor_control_password}\n")
     fp.write(f"torcontrol={TOR_PROXY_HOST}:{TOR_CONTROL_PORT}\n")
@@ -593,6 +597,18 @@ def prepareDataDir(coin, settings, chain, particl_mnemonic, extra_opts={}):
     prepare_module = coin_prepare_modules.get(coin)
     if prepare_module is None:
         raise ValueError("Unknown coin")
+
+    core_settings = settings["chainclients"][coin]
+    for user_key, password_key in (
+        ("rpcuser", "rpcpassword"),
+        ("walletrpcuser", "walletrpcpassword"),
+    ):
+        if core_settings.get(user_key, "") != "" and not core_settings.get(
+            password_key, ""
+        ):
+            exitWithError(
+                f"The {coin} {user_key} is set but its {password_key} is empty"
+            )
 
     prepare_module.prepareDataDir(
         extra_opts["prepare_ctx"], settings, chain, extra_opts
@@ -683,9 +699,8 @@ def modify_tor_config(
                     for opt_line in monero_wallet_rpc_proxy_config:
                         fp.write(opt_line + "\n")
 
-            coin_settings["trusted_daemon"] = extra_opts.get(
-                "trust_remote_node", "auto"
-            )
+            if "trust_remote_node" in extra_opts:
+                coin_settings["trusted_daemon"] = extra_opts["trust_remote_node"]
         return
 
     core_conf_name: str = coin_settings.get(
@@ -693,7 +708,7 @@ def modify_tor_config(
     )
     config_path = os.path.join(data_dir, core_conf_name)
 
-    if not os.path.exists(config_path):
+    if not path_exists(config_path):
         exitWithError("{} does not exist".format(config_path))
 
     if "onionport" not in coin_settings:
@@ -718,7 +733,7 @@ def modify_tor_config(
     # Backup
     shutil.copyfile(config_path, config_path + ".last")
 
-    tor_settings = ("proxy=", "torpassword=", "torcontrol=", "bind=")
+    tor_settings = ("proxy=", "onion=", "torpassword=", "torcontrol=", "bind=")
     with open(config_path, "w") as fp:
         with open(config_path + ".last") as fp_in:
             # Disable tor first
@@ -744,7 +759,8 @@ def printVersion(with_coins):
         if with_coins_changed and coin not in with_coins:
             continue
         postfix = " (Disabled)" if coin in disabled_coins else ""
-        print(f"\t{coin.capitalize()}: {version[0]}{version[1]}{postfix}")
+        note = coin_prepare_modules[coin].getVersionNote()
+        print(f"\t{coin.capitalize()}: {version[0]}{version[1]}{note}{postfix}")
 
 
 def printHelp():
@@ -765,12 +781,21 @@ def printHelp():
         + '                         "auto" to create a wallet automatically - No mnemonic.'
         + '                         "none" to disable wallet initialisation.'
     )
+    print(
+        "--particl_mnemonic       Prompt for the recovery phrase, or read it from stdin when that isn't a terminal."
+    )
     print("--withcoin=              Prepare system to run daemon for coin.")
     print("--withoutcoin=           Do not prepare system to run daemon for coin.")
     print("--addcoin=               Add coin to existing setup.")
     print("--disablecoin=           Make coin inactive.")
     print(
         "--upgradecores           Upgrade all coin cores present in basicswap.json. Optionally use alongside --withcoin= or --withoutcoin="
+    )
+    print(
+        "--uselatest=             With --upgradecores, upgrade the coin's core from an older version line, such as Bitcoin Core 29.x, to the latest release. Implies --withcoin="
+    )
+    print(
+        "--noseedcheck            With --upgradecores, migrate a wallet that isn't derived from the Particl wallet's default account."
     )
     print("--preparebinonly         Don't prepare settings or datadirs.")
     print(
@@ -802,7 +827,7 @@ def printHelp():
         )
     )
     print(
-        "--trustremotenode        Set trusted-daemon for XMR, defaults to auto: true when daemon rpchost value is a private ip address else false"
+        '--trustremotenode        Set trusted-daemon for XMR and WOW, default:true, =false for untrusted. "trusted_daemon": "auto" in basicswap.json: true when daemon rpchost value is a private ip address else false'
     )
     print(
         "--noextractover          Prevent extracting cores if files exist.  Speeds up tests"
@@ -824,6 +849,9 @@ def printHelp():
     )
     print("--initwalletsonly        Setup coin wallets only.")
     print(
+        "--migratewallets         Migrate legacy wallets to descriptor wallets where possible.  Optionally use alongside --withcoin="
+    )
+    print(
         "--keysdirpath            Speed up tests by preloading all PGP keys in directory."
     )
     print(
@@ -834,6 +862,9 @@ def printHelp():
         "--dashv20compatible      Generate the same DASH wallet seed as for DASH v20 - Use only when importing an existing seed."
     )
     print("--client-auth-password=  Set or update the password to protect the web UI.")
+    print(
+        "--client-auth-password   Prompt for the web UI password, or read it from stdin when that isn't a terminal (after the mnemonic)."
+    )
     print("--disable-client-auth    Remove password protection from the web UI.")
     print(
         "--light                  Use light wallet mode (Electrum) for all supported coins."
@@ -858,6 +889,10 @@ def finalise_daemon(d):
         for fp in [d.handle.stdout, d.handle.stderr, d.handle.stdin] + d.files:
             if fp:
                 fp.close()
+    except subprocess.TimeoutExpired as e:
+        logging.info(
+            f"Error stopping {d.name}, process {d.handle.pid}: timed out after {e.timeout} seconds"
+        )
     except Exception as e:
         logging.info(f"Error stopping {d.name}, process {d.handle.pid}: {e}")
 
@@ -887,7 +922,7 @@ def test_particl_encryption(data_dir, settings, chain, use_tor_proxy, extra_opts
                     extra_config=extra_config,
                 )
             )
-            swap_client.setDaemonPID(c, daemons[-1].handle.pid)
+            swap_client.setDaemon(c, daemons[-1])
         swap_client.setCoinRunParams(c)
         swap_client.createCoinInterface(c)
         swap_client.waitForDaemonRPC(c, with_wallet=True)
@@ -926,6 +961,7 @@ def initialise_wallets(
     extended_keys = {}
 
     coins_failed_to_initialise = []
+    coins_failed_to_encrypt = []
 
     try:
         swap_client = BasicSwap(data_dir, settings, chain, transient_instance=True)
@@ -982,7 +1018,7 @@ def initialise_wallets(
                             extra_config=extra_config,
                         )
                     )
-                swap_client.setDaemonPID(c, daemons[-1].handle.pid)
+                swap_client.setDaemon(c, daemons[-1])
             swap_client.setCoinRunParams(c)
             swap_client.createCoinInterface(c)
 
@@ -1035,12 +1071,20 @@ def initialise_wallets(
             except Exception as e:
                 coins_failed_to_initialise.append((coin_name, c, e))
             if WALLET_ENCRYPTION_PWD != "" and module.needsPostInitPasswordChange():
+                ci = swap_client.ci(c)
                 try:
-                    swap_client.ci(c).changeWalletPassword(
+                    ci.changeWalletPassword(
                         "", WALLET_ENCRYPTION_PWD, check_seed_if_encrypt=False
                     )
-                except Exception as e:  # noqa: F841
+                except Exception as e:
                     logger.warning(f"changeWalletPassword failed for {coin_name}.")
+                    # An earlier run may have encrypted the wallet
+                    try:
+                        encrypted = ci.isWalletEncrypted()
+                    except Exception:
+                        encrypted = False
+                    if not encrypted:
+                        coins_failed_to_encrypt.append((c, e))
 
         zprv_prefix = 0x04B2430C if chain == "mainnet" else 0x045F18BC
         for coin_name in with_coins:
@@ -1077,6 +1121,8 @@ def initialise_wallets(
             )
         else:
             raise ValueError(f"Failed to initialise wallet for {getCoinName(c)}: {e}")
+    for c, e in coins_failed_to_encrypt:
+        raise ValueError(f"Failed to encrypt wallet for {getCoinName(c)}: {e}")
 
     for coin_name in with_coins:
         warning = coin_prepare_modules[coin_name].getPostInitWarning(prepare_ctx)
@@ -1105,8 +1151,108 @@ def initialise_wallets(
     return extended_keys
 
 
+def start_migration_daemons(swap_client, coin_names, settings, prepare_ctx, daemons):
+    daemon_args = ["-noconnect", "-nodnsseed"]
+    if not swap_client.use_tor_proxy:
+        # Cannot set -bind or -whitebind together with -listen=0
+        daemon_args.append("-nolisten")
+    for coin_name in coin_names:
+        module = coin_prepare_modules[coin_name]
+        coin_settings = settings["chainclients"][coin_name]
+        c = swap_client.getCoinIdFromName(coin_name)
+        if coin_settings["manage_daemon"]:
+            filename: str = getCoreBinName(c, coin_settings, coin_name + "d")
+            coin_args = module.getWalletInitDaemonArgs(
+                prepare_ctx, swap_client, c, coin_settings
+            )
+            coin_args += getCoreBinArgs(c, coin_settings, prepare=True)
+            daemons.append(
+                startDaemon(
+                    coin_settings["datadir"],
+                    coin_settings["bindir"],
+                    filename,
+                    daemon_args + coin_args,
+                    extra_config={"stdout_to_file": True, "coin_name": coin_name},
+                )
+            )
+            swap_client.setDaemon(c, daemons[-1])
+        swap_client.setCoinRunParams(c)
+        swap_client.createCoinInterface(c)
+
+
+def unlock_seed_wallet(swap_client, seed_coin, prepare_ctx) -> None:
+    c = swap_client.getCoinIdFromName(seed_coin)
+    swap_client.waitForDaemonRPC(c, with_wallet=True)
+    if not swap_client.ci(c).isWalletEncrypted():
+        return
+    if prepare_ctx.wallet_encryption_pwd == "":
+        if not sys.stdin.isatty():
+            raise ValueError(
+                "Must set WALLET_ENCRYPTION_PWD to migrate wallets when the Particl wallet is encrypted"
+            )
+        prepare_ctx.wallet_encryption_pwd = getpass.getpass(
+            "Wallet encryption password: "
+        )
+        if prepare_ctx.wallet_encryption_pwd == "":
+            raise ValueError("No wallet encryption password entered")
+    swap_client.ci(c).unlockWallet(prepare_ctx.wallet_encryption_pwd)
+
+
+def migrate_wallets(
+    migrate_coins,
+    data_dir,
+    settings,
+    chain,
+    extra_opts,
+    config_path,
+    check_seed: bool = False,
+):
+    prepare_ctx = extra_opts["prepare_ctx"]
+    swap_client = None
+    daemons = []
+    try:
+        swap_client = BasicSwap(data_dir, settings, chain, transient_instance=True)
+        seed_coin: str = next(
+            name
+            for name, module in coin_prepare_modules.items()
+            if module.provides_master_key
+        )
+        start_coins = [seed_coin] + [c for c in migrate_coins if c != seed_coin]
+        start_migration_daemons(
+            swap_client, start_coins, settings, prepare_ctx, daemons
+        )
+        unlock_seed_wallet(swap_client, seed_coin, prepare_ctx)
+
+        for coin_name in migrate_coins:
+            coin_settings = settings["chainclients"][coin_name]
+            c = swap_client.getCoinIdFromName(coin_name)
+            swap_client.waitForDaemonRPC(c, with_wallet=False)
+            if check_seed:
+                coin_prepare_modules[coin_name].checkWalletBeforeMigration(
+                    prepare_ctx, swap_client, c, coin_settings
+                )
+            coin_params = chainparams[c]
+            watch_wallet_name: str = getWalletName(
+                coin_params,
+                "bsx_watch",
+                prefix_override=f"{coin_params['ticker']}_WATCH",
+            )
+            try:
+                coin_prepare_modules[coin_name].migrateWallet(
+                    prepare_ctx, swap_client, c, coin_settings, watch_wallet_name
+                )
+            finally:
+                save_config(config_path, settings)
+    finally:
+        if swap_client:
+            swap_client.finalise()
+            del swap_client
+        for d in daemons:
+            finalise_daemon(d)
+
+
 def load_config(config_path):
-    if not os.path.exists(config_path):
+    if not path_exists(config_path):
         exitWithError("{} does not exist".format(config_path))
     with open(config_path) as fs:
         settings = json.load(fs)
@@ -1192,12 +1338,14 @@ def ensure_network_valid(network_name: str, test_disabled: bool = True) -> None:
 
 def main():
     global use_tor_proxy, with_coins_changed
+    os.umask(0o077)
     setTorrcVars()
     data_dir = None
     bin_dir = None
     port_offset = None
     chain = "mainnet"
     particl_wallet_mnemonic = None
+    prompt_particl_mnemonic = False
     with_coins = {
         "particl",
     }
@@ -1209,12 +1357,15 @@ def main():
     print_versions = False
     prepare_bin_only = False
     upgrade_cores = False
+    use_latest_coins = set()
     no_cores = False
     enable_tor = False
     disable_tor = False
     initwalletsonly = False
+    migratewallets = False
     tor_control_password = None
     client_auth_pwd_value = None
+    prompt_client_auth_pwd = False
     disable_client_auth_flag = False
     light_mode = False
     coin_modes = {}
@@ -1264,6 +1415,9 @@ def main():
         if name == "noextractover":
             extra_opts["extract_core_overwrite"] = False
             continue
+        if name == "noseedcheck":
+            extra_opts["check_wallet_seed"] = False
+            continue
         if name == "usetorproxy":
             use_tor_proxy = True
             continue
@@ -1294,6 +1448,9 @@ def main():
         if name == "initwalletsonly":
             initwalletsonly = True
             continue
+        if name == "migratewallets":
+            migratewallets = True
+            continue
         if name == "dashv20compatible":
             extra_opts["dash_v20_compatible"] = True
             continue
@@ -1309,6 +1466,10 @@ def main():
                 continue
             if name == "particl_mnemonic":
                 particl_wallet_mnemonic = s[1].strip('"')
+                if particl_wallet_mnemonic not in ("auto", "none"):
+                    logger.warning(
+                        "The mnemonic is visible in the process list, pass --particl_mnemonic alone to be prompted for it."
+                    )
                 continue
             if name in ("withcoin", "withcoins"):
                 for coin in [s.strip().lower() for s in s[1].split(",")]:
@@ -1320,6 +1481,13 @@ def main():
                 for coin in [s.strip().lower() for s in s[1].split(",")]:
                     ensure_coin_valid(coin, test_disabled=False)
                     with_coins.discard(coin)
+                with_coins_changed = True
+                continue
+            if name == "uselatest":
+                for coin in [s.strip().lower() for s in s[1].split(",")]:
+                    ensure_coin_valid(coin)
+                    use_latest_coins.add(coin)
+                    with_coins.add(coin)
                 with_coins_changed = True
                 continue
             if name == "addcoin":
@@ -1368,6 +1536,9 @@ def main():
                 continue
             if name == "client-auth-password":
                 client_auth_pwd_value = s[1].strip('"')
+                logger.warning(
+                    "The password is visible in the process list, pass --client-auth-password alone to be prompted for it."
+                )
                 continue
 
         if name == "disable-client-auth":
@@ -1375,6 +1546,12 @@ def main():
             continue
         if name == "light":
             light_mode = True
+            continue
+        if name == "particl_mnemonic":
+            prompt_particl_mnemonic = True
+            continue
+        if name == "client-auth-password":
+            prompt_client_auth_pwd = True
             continue
         if name.endswith("-mode") and len(s) == 2:
             coin_prefix = name[:-5]
@@ -1406,6 +1583,15 @@ def main():
         printVersion(with_coins)
         return 0
 
+    if prompt_particl_mnemonic:
+        particl_wallet_mnemonic = readSecret("Particl mnemonic: ").strip()
+        if particl_wallet_mnemonic == "":
+            exitWithError("No mnemonic entered")
+    if prompt_client_auth_pwd:
+        client_auth_pwd_value = readSecret("Client auth password: ", confirm=True)
+        if client_auth_pwd_value == "":
+            exitWithError("No password entered")
+
     if data_dir is None:
         data_dir = os.path.join(os.path.expanduser(cfg.BASICSWAP_DATADIR))
     if bin_dir is None:
@@ -1432,7 +1618,7 @@ def main():
         os.makedirs(gpg_homedir)
     config_path = os.path.join(data_dir, cfg.CONFIG_FILENAME)
 
-    config_exists = os.path.exists(config_path)
+    config_exists = path_exists(config_path)
     if config_exists and (
         client_auth_pwd_value is not None or disable_client_auth_flag
     ):
@@ -1465,9 +1651,15 @@ def main():
 
     # Automatically enable usetorproxy for certain commands if it's set in basicswap config
     if (
-        not (initwalletsonly or enable_tor or disable_tor or disable_coin)
+        not (
+            initwalletsonly
+            or enable_tor
+            or disable_tor
+            or disable_coin
+            or extra_opts.get("disablenetwork")
+        )
         and not use_tor_proxy
-        and os.path.exists(config_path)
+        and path_exists(config_path)
     ):
         settings = load_config(config_path)
         settings_use_tor = settings.get("use_tor", False)
@@ -1540,7 +1732,6 @@ def main():
         "pivx": pivx_prepare.getConfigSegment(prepare_ctx),
         "dash": dash_prepare.getConfigSegment(prepare_ctx),
         "firo": firo_prepare.getConfigSegment(prepare_ctx),
-        "navcoin": nav_prepare.getConfigSegment(prepare_ctx),
         "bitcoincash": bch_prepare.getConfigSegment(prepare_ctx),
         "dogecoin": doge_prepare.getConfigSegment(prepare_ctx),
     }
@@ -1580,9 +1771,7 @@ def main():
         else:
             default_name: str = "wallet.dat"
             use_name: str = (
-                "wallet.dat"
-                if coin_id in (Coins.NAV, Coins.FIRO, Coins.DCR)
-                else "bsx_wallet"
+                "wallet.dat" if coin_id in (Coins.FIRO, Coins.DCR) else "bsx_wallet"
             )
 
         if coin_name == "litecoin":
@@ -1635,6 +1824,27 @@ def main():
             chain,
             use_tor_proxy,
             extra_opts=extra_opts,
+        )
+
+        print("Done.")
+        return 0
+
+    if migratewallets:
+        settings = load_config(config_path)
+        check_coins = with_coins if with_coins_changed else settings["chainclients"]
+        migrate_coins = [
+            coin_name
+            for coin_name in check_coins
+            if coin_prepare_modules[coin_name].hasLegacyWallet(
+                settings["chainclients"][coin_name]
+            )
+        ]
+        if len(migrate_coins) < 1:
+            logger.info("No legacy wallets to migrate.")
+            return 0
+        logger.info("Migrating wallets: {}".format(", ".join(migrate_coins)))
+        migrate_wallets(
+            migrate_coins, data_dir, settings, chain, extra_opts, config_path
         )
 
         print("Done.")
@@ -1849,7 +2059,7 @@ def main():
         + (", ".join(with_coins))
         + ("" if with_coins_changed else " (default)")
     )
-    if os.path.exists(config_path):
+    if path_exists(config_path):
         if prepare_bin_only:
             settings = load_config(config_path)
 
@@ -1875,8 +2085,16 @@ def main():
                     exitWithError(f"{coin_name} not found in basicswap.json")
                 coin_settings = settings["chainclients"][coin_name]
 
-                current_version = current_coin_settings["core_version_no"]
                 have_version = coin_settings.get("core_version_no", "")
+                coin_module = coin_prepare_modules[coin_name]
+                latest_version = coin_module.version + coin_module.version_tag
+                coin_module.setUpgradeVersion(
+                    coin_settings, coin_name in use_latest_coins
+                )
+                current_coin_settings["core_version_no"] = (
+                    coin_module.version + coin_module.version_tag
+                )
+                current_version = current_coin_settings["core_version_no"]
 
                 current_version_group = current_coin_settings.get(
                     "core_version_group", ""
@@ -1886,6 +2104,10 @@ def main():
                 logger.info(
                     f"{coin_name}: have {have_version}, current {current_version}."
                 )
+                if current_version != latest_version:
+                    logger.info(
+                        f"  Staying on {current_version}, use --uselatest={coin_name} to update to {latest_version} now."
+                    )
                 if not BSX_UPDATE_UNMANAGED and not (
                     coin_settings.get("manage_daemon", False)
                     or coin_settings.get("manage_wallet_daemon", False)
@@ -1908,6 +2130,28 @@ def main():
             # Backup settings
             old_config_path = config_path[:-5] + "_" + str(int(time.time())) + ".json"
             save_config(old_config_path, settings, add_options=False)
+
+            migrate_coins = [
+                c
+                for c in with_coins
+                if coin_prepare_modules[c].needsWalletMigration(
+                    settings["chainclients"][c],
+                    settings["chainclients"][c].get("core_version_no", ""),
+                )
+            ]
+            # The old core still loads the legacy wallet, so a failed migration
+            # leaves the install as it was
+            if len(migrate_coins) > 0:
+                logger.info("Migrating wallets: {}".format(", ".join(migrate_coins)))
+                migrate_wallets(
+                    migrate_coins,
+                    data_dir,
+                    settings,
+                    chain,
+                    extra_opts,
+                    config_path,
+                    check_seed=extra_opts.get("check_wallet_seed", True),
+                )
 
             for c in with_coins:
                 prepareCore(c, settings, extra_opts)
@@ -1939,7 +2183,8 @@ def main():
         extra_opts["zmqsecret"] = base64.b64encode(zmq_server_key).decode("utf-8")
 
         settings = {
-            "debug": True,
+            "debug": False,
+            "log_level": "debug",
             "zmqhost": f"tcp://{PART_RPC_HOST}",
             "zmqport": PART_ZMQ_PORT + port_offset,
             "htmlhost": htmlhost,
@@ -1962,9 +2207,6 @@ def main():
             "zmq_client_key": base64.b64encode(zmq_client_key).decode("utf-8"),
             "zmq_client_pubkey": base64.b64encode(zmq_client_pubkey).decode("utf-8"),
             "zmq_server_pubkey": base64.b64encode(zmq_server_pubkey).decode("utf-8"),
-            "enabled_log_categories": [
-                "net",
-            ],
         }
 
         wshost: str = extra_opts.get("wshost", htmlhost)

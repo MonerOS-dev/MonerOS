@@ -29,7 +29,7 @@ if ss -tln | grep -q ":50001" || nc -z 127.0.0.1 50001 2>/dev/null; then
     electrum setconfig oneserver true
     electrum setconfig server 127.0.0.1:50001:t
 else
-    echo "=== Local Fulcrum server not running. Falling back to public servers over Tor ==="
+    #echo "=== Local Fulcrum server not running. Falling back to public servers over Tor ==="
     electrum setconfig oneserver false
     # Clear any previous local server pinning if it exists
     electrum setconfig server "" 2>/dev/null || true
