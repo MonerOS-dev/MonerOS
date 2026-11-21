@@ -15,6 +15,7 @@ if [ -f "$CONFIG_FILE" ] && [ -n "$INPUT_PASS" ]; then
     INPUT_PASS_HASH=$(echo -n "$INPUT_PASS" | sha256sum | awk '{print $1}')
     
     if [[ "$INPUT_PASS_HASH" != "$STORED_PASS_HASH" ]]; then
+        sleep 3
         echo "FAILURE: Incorrect Wallet Password."
         exit 1
     fi

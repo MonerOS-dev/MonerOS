@@ -66,20 +66,25 @@ sleep 1
 
 # 3. Restore and Verify
 # We capture the initialization output directly into a variable
-RESTORE_OUT=$(expect <<EOF
-    log_file "$LOG_FILE"
+RESTORE_OUT=$(
+    WALLET_PATH="$WALLET_DIR/$TEMP_NAME" \
+    MNEMONIC_ENV="$MNEMONIC" \
+    LOG_PATH="$LOG_FILE" \
+    PASSWORD_ENV="$PASSWORD" \
+    expect <<'EOF'
+    log_file $env(LOG_PATH)
     set timeout 60
     spawn -noecho /usr/local/bin/monero-wallet-cli \
-        --restore-deterministic-wallet "$WALLET_DIR/$TEMP_NAME" \
-        --password "$PASSWORD" \
+        --restore-deterministic-wallet $env(WALLET_PATH) \
+        --password $env(PASSWORD_ENV) \
         --daemon-address 127.0.0.1:0 \
         --offline \
         --create-address-file
 
     expect "Wallet file name"
-    send -- "$WALLET_DIR/$TEMP_NAME\r"
+    send -- "$env(WALLET_PATH)\r"
     expect "Specify Electrum seed"
-    send -- "$MNEMONIC\r"
+    send -- "$env(MNEMONIC_ENV)\r"
     expect "Enter seed offset passphrase"
     send -- "\r"
     expect "Restore from specific blockchain height"

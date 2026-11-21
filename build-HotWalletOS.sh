@@ -36,7 +36,7 @@ if [ "$PRODUCTION" = true ]; then
     fi
     
     # 4. Enable MAC Spoofing
-    sudo cp -r "$MODS_DIR/etc/systemd/network" "$BUILD_DIR/config/includes.chroot/etc/systemd"
+    #sudo cp -r "$MODS_DIR/etc/systemd/network" "$BUILD_DIR/config/includes.chroot/etc/systemd"
 
 else
     echo "[INFO] Configuring for DEV mode..."
@@ -55,7 +55,7 @@ else
     sudo rm -f "$BUILD_DIR/config/hooks/live/$UFW_HOOK"
     
     # 4. Disable MAC Spoofing
-    sudo rm -rf "$BUILD_DIR/config/includes.chroot/etc/systemd/network"
+    #sudo rm -rf "$BUILD_DIR/config/includes.chroot/etc/systemd/network"
 fi
 
 

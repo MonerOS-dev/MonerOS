@@ -85,8 +85,10 @@ if run_whiptail whiptail --title " Enable Atomic Swaps " \
     --yesno "$MSG_ENABLE_SWAPS" 15 50 --fb \
     --defaultno \
     --yes-button "$BTN_TEXT" --no-button "Not Now"; then
+    clear
     echo "Proceeding with Atomic Swaps setup..."
 else
+    clear
     echo "Atomic Swaps setup declined by user. Exiting."
     exit 0
 fi

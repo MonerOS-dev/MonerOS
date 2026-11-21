@@ -4,10 +4,23 @@
  * Update: Centered Column Data & Headers
  */
 
+function isLocalHostRequest(): bool
+{
+    $host = strtolower($_SERVER['HTTP_HOST'] ?? '');
+    $hostWithoutPort = preg_replace('/:\d+$/', '', $host);
+
+    return in_array($hostWithoutPort, ['localhost', '127.0.0.1'], true);
+}
+
 if (isset($_GET['action']) && $_GET['action'] === 'start_basicswap') {
+    if (!isLocalHostRequest()) {
+        header("Location: bsfail.php");
+        exit;
+    }
+
     // Run as user 'user' instead of default root, preserving DISPLAY=:0 permissions
     shell_exec('sudo -n -u user /usr/bin/bash /usr/local/bin/start-dashboard > /dev/null 2>&1 &');
-    header("Location: " . strtok($_SERVER["REQUEST_URI"], '?')); 
+    header("Location: " . strtok($_SERVER["REQUEST_URI"], '?'));
     exit;
 }
  
@@ -21,13 +34,17 @@ $coinConfigs = [
     "Monero"  => ["dir" => "/var/www/backend/Monero/",  "key" => "monero",  "display" => "Monero (XMR)"],
 ];
 
-// 2. Fetch Prices from GitHub raw prices.json
+// 2. Fetch Prices from GitHub raw prices.json via Tor
 $rawUrl = "https://gist.githubusercontent.com/MonerOS-dev/b715a2d6610d7ffd88a2231ae3576ff1/raw/prices.json";
 $curl = curl_init($rawUrl);
 curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($curl, CURLOPT_TIMEOUT, 5);
+curl_setopt($curl, CURLOPT_TIMEOUT, 15);
+curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 10);
 curl_setopt($curl, CURLOPT_USERAGENT, "HotWalletOS/Admin");
+curl_setopt($curl, CURLOPT_PROXY, "127.0.0.1:9050");
+curl_setopt($curl, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME);
 $response = curl_exec($curl);
+$curlError = curl_error($curl);
 $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
 curl_close($curl);
 
@@ -40,7 +57,7 @@ if ($httpCode === 200 && $response) {
 }
 
 // Fallback to local cache if GitHub fetch drops momentarily
-$cacheFile = '/tmp/hotwalletos_prices_cache.json';
+$cacheFile = '/var/www/backend/prices_cache.json';
 if (!empty($priceData)) {
     file_put_contents($cacheFile, json_encode($priceData));
 } elseif (file_exists($cacheFile)) {
@@ -366,7 +383,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
     </div>
 
     <div class="footer-nav">
-        <?php if (file_exists('/var/www/backend/bs.en')): ?>
+        <?php if (file_exists('/var/www/backend/bs.en') && isLocalHostRequest()): ?>
             <a href="?action=start_basicswap" class="btn-cmd btn-basicswap">Open BasicSwap</a>
         <?php endif; ?>
         <a href="remote.php" class="btn-cmd btn-remote">Remote viewing link</a>

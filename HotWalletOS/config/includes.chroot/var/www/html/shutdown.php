@@ -3,12 +3,23 @@
  * HotWalletOS - System Shutdown
  */
 $message = "";
+$status_class = "";
 $shutdown_triggered = false;
 
-if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
-    shell_exec('sudo bash /usr/local/bin/os/safe_shutdown > /dev/null 2>&1 &');
-    $message = "SYSTEM IS SHUTTING DOWN...";
-    $shutdown_triggered = true;
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $input_pass = $_POST['password'] ?? '';
+
+    $cmd = "sudo /usr/bin/bash /usr/local/bin/os/web_shutdown " . escapeshellarg($input_pass);
+    $output = shell_exec($cmd . " 2>&1");
+    $trimmed_output = trim((string)$output);
+
+    if ($trimmed_output !== "" && stripos($trimmed_output, 'FAILURE') !== false) {
+        $message = $trimmed_output;
+        $status_class = "error";
+    } else {
+        $message = "SYSTEM IS SHUTTING DOWN...";
+        $shutdown_triggered = true;
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -44,7 +55,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
         }
 
         h1 {
-            /* Slower scaling (4.5vw) so it stays normal on laptops, but reaches 7rem on big screens */
             font-size: clamp(3rem, 4.5vw, 7rem);
             margin: 0;
             letter-spacing: 8px;
@@ -86,6 +96,34 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
             background: linear-gradient(to right, transparent, var(--silver-mid), transparent);
         }
 
+        .form-group {
+            margin-bottom: 15px;
+            width: 100%;
+            text-align: left;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--silver-dark);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: bold;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid #333;
+            color: var(--glow-green);
+            font-family: 'Roboto Mono', monospace;
+            box-sizing: border-box;
+            border-radius: 2px;
+            font-size: 0.95rem;
+        }
+
         .status-msg {
             color: var(--alert-red);
             font-family: 'Roboto Mono', monospace;
@@ -119,10 +157,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
             cursor: pointer;
             box-sizing: border-box;
             margin-bottom: 12px;
+            font-family: inherit;
+            font-size: inherit;
         }
 
-        .btn-silver { 
-            color: var(--silver-light); 
+        .btn-silver {
+            color: var(--silver-light);
         }
         .btn-silver:hover {
             background: var(--silver-light);
@@ -139,6 +179,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
             color: #fff;
             border-color: var(--alert-red);
         }
+
+        .response {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 2px solid;
+            border-radius: 4px;
+            text-align: left;
+        }
+
+        .error {
+            border-color: var(--alert-red);
+            background: rgba(255, 0, 0, 0.05);
+            color: var(--alert-red);
+        }
     </style>
 </head>
 <body>
@@ -148,17 +202,29 @@ if (isset($_GET['action']) && $_GET['action'] === 'shutdown') {
 
     <div class="container">
         <?php if ($shutdown_triggered): ?>
-            <div class="status-msg"><?php echo $message; ?></div>
+            <div class="status-msg"><?php echo htmlspecialchars($message); ?></div>
             <p class="warning-text">
                 Power-off sequence initiated.<br>
                 Terminating sessions...
             </p>
         <?php else: ?>
+            <?php if ($message && $status_class === 'error'): ?>
+                <div class="response error">
+                    <p style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem; margin: 0;"><?php echo nl2br(htmlspecialchars($message)); ?></p>
+                </div>
+            <?php endif; ?>
+
             <p class="warning-text">
                 WARNING: THIS WILL TERMINATE ALL ACTIVE SESSIONS AND POWER DOWN THE HARDWARE SAFELY.
             </p>
-            
-            <a href="?action=shutdown" class="btn-cmd btn-red">Execute Shutdown</a>
+
+            <form method="POST" autocomplete="off">
+                <div class="form-group">
+                    <label>Wallet Password</label>
+                    <input type="password" name="password" autocomplete="off" required>
+                </div>
+                <button type="submit" class="btn-cmd btn-red">Execute Shutdown</button>
+            </form>
             <a href="index.php" class="btn-cmd btn-silver">Cancel</a>
         <?php endif; ?>
     </div>

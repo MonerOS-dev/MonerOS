@@ -20,3 +20,10 @@
 echo "www-data ALL=(ALL) NOPASSWD: /usr/bin/bash /usr/local/bin/os/*, /usr/sbin/shutdown, /usr/bin/pkill" > /etc/sudoers.d/99_cwos_web
 echo "www-data ALL=(user) NOPASSWD: /usr/bin/bash /usr/local/bin/start-dashboard" >> /etc/sudoers.d/99_cwos_web
 chmod 440 /etc/sudoers.d/99_cwos_web
+
+# 6. Allow www-data to write ONLY the price cache file
+CACHE_FILE="/var/www/backend/prices_cache.json"
+mkdir -p /var/www/backend
+touch "$CACHE_FILE"
+chown www-data:www-data "$CACHE_FILE"
+chmod 0644 "$CACHE_FILE"
