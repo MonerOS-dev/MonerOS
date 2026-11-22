@@ -206,7 +206,8 @@ if [ "$MONERO_EXISTS" = true ]; then
             
             MSG_NODE="Would you like to continue running your own Monero node (Self-Sync) or connect to a remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy and is highly recommended."  
         fi
-    
+        
+        NODE_SELECTED=false
         while true; do
             if run_whiptail whiptail --title " Node Synchronization Engine " \
                 --yesno "$MSG_NODE" 15 50 --fb \
@@ -246,6 +247,7 @@ if [ "$MONERO_EXISTS" = true ]; then
 
                         if [ -n "$CLEAN_NODE" ] && [ "$CLEAN_NODE" != "null" ]; then
                             echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
+                            NODE_SELECTED=true
                             break
                         else
                             whiptail --fb --msgbox "Failed to automatically fetch a node address. Please try again or use custom." 0 0
@@ -279,6 +281,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                             if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
                                 echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
                                 echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
+                                NODE_SELECTED=true
                                 break 2
                             else
                                 whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
@@ -291,7 +294,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                 done
                 
                 # If we successfully broke out of the remote node config loop, break the main engine loop too
-                if [ -f "$REMOTE_NODE_CFG" ] && [ -s "$REMOTE_NODE_CFG" ]; then
+                if [ "$NODE_SELECTED" = true ]; then
                     break
                 fi
                 

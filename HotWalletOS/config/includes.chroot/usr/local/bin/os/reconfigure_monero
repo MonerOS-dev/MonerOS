@@ -203,7 +203,8 @@ if [ "$MONERO_EXISTS" = true ]; then
     else
         
         MSG_NODE="System storage is verified. Would you like to host your own node locally (Self-Sync) or connect to an remote node? Using a remote node can be a privacy risk. See Node_Risks.pdf for risk details. Self-Sync provides absolute privacy but can take up to 1-3 days to sync."
-    
+        
+        NODE_SELECTED=false
         while true; do
             # Flip the buttons: "Remote Node" is now the default (Yes-button)
             if run_whiptail whiptail --title " Node Synchronization Engine " \
@@ -244,6 +245,7 @@ if [ "$MONERO_EXISTS" = true ]; then
 
                         if [ -n "$CLEAN_NODE" ] && [ "$CLEAN_NODE" != "null" ]; then
                             echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
+                            NODE_SELECTED=true
                             break
                         else
                             whiptail --fb --msgbox "Failed to automatically fetch a node address. Please try again or use custom." 0 0
@@ -277,6 +279,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                             if [[ "$CLEAN_NODE" =~ :[0-9]+$ ]]; then
                                 echo "$CLEAN_NODE" | sudo tee "$REMOTE_NODE_CFG" > /dev/null
                                 echo "$CLEAN_NODE" | sudo tee "$NODE_CACHE_FILE" > /dev/null
+                                NODE_SELECTED=true
                                 break 2
                             else
                                 whiptail --fb --msgbox "Missing port mapping. You must specify the port explicitly (e.g., target.com:18081)." 0 0
@@ -289,7 +292,7 @@ if [ "$MONERO_EXISTS" = true ]; then
                 done
 
                 # Check if we successfully configured a remote node and can break out of the main loop
-                if [ -f "$REMOTE_NODE_CFG" ] && [ -s "$REMOTE_NODE_CFG" ]; then
+                if [ "$NODE_SELECTED" = true ]; then
                     break
                 fi
                 
