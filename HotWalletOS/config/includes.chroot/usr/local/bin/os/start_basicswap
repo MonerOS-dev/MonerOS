@@ -191,7 +191,7 @@ if [ ! -f "$SWAP_CONTAINER" ]; then
             sudo mkfs.ext4 -q -F -L coinswaps "/dev/mapper/$SWAP_MAPPER" > /dev/null 2>&1
             sudo mkdir -p "$SWAP_DATADIR"
             sudo mount "/dev/mapper/$SWAP_MAPPER" "$SWAP_DATADIR"
-            sudo chown -R user:user "$SWAP_DATADIR"
+            sudo chown -R 1000:1000 "$SWAP_DATADIR"
             break
         else
             whiptail --title " Error " --fb --msgbox "\nPasswords do not match. Try again. " 10 45
@@ -210,7 +210,7 @@ else
         # Use printf -- to safely handle passwords with special characters without interpreting flags
         if printf -- '%s' "$PASS" | sudo cryptsetup open "$SWAP_CONTAINER" "$SWAP_MAPPER" -d - > /dev/null 2>&1; then
             if sudo mount "/dev/mapper/$SWAP_MAPPER" "$SWAP_DATADIR"; then
-                sudo chown -R user:user "$SWAP_DATADIR"
+                sudo chown -R 1000:1000 "$SWAP_DATADIR"
                 unset PASS
                 break
             else
@@ -224,7 +224,7 @@ else
 fi
 
 sudo mkdir -p "$SWAP_DATADIR"
-sudo chown -R user:user "$SWAP_DATADIR"
+sudo chown -R 1000:1000 "$SWAP_DATADIR"
 
 
 # ---------------------------------------------------------------------
@@ -399,6 +399,25 @@ tail -n0 -F "/mnt/coinswaps/particl/debug.log" | while IFS= read -r LINE; do
         # 2. Drop a flag file so the script knows why it broke out
         touch /tmp/index_corrupt_flag
         break
+    fi
+    
+    if [[ "$LINE" == *"Shutdown: done"* ]]; then
+        sudo pkill -9 -f bitcoind 2>/dev/null || true
+        sudo pkill -9 -f particld 2>/dev/null || true
+        sudo pkill -9 -f basicswap-run 2>/dev/null || true
+        
+        rm -f "$SWAP_DATADIR/bitcoin/"*.pid
+        rm -f "$SWAP_DATADIR/particl/"*.pid
+        rm -f "$SWAP_DATADIR/monero/"*.pid
+        sleep 2
+        
+        sudo chown -R 1000:1000 "$SWAP_DATADIR"
+        
+        nohup /usr/local/bin/basicswap/venv/bin/basicswap-run --datadir="$SWAP_DATADIR" > "$SWAP_DATADIR/basicswap.log" 2>&1 &
+        
+        sudo rm -f "/mnt/coinswaps/particl/debug.log"
+        
+        touch "/mnt/coinswaps/particl/debug.log"
     fi
 
     # Fully synced
