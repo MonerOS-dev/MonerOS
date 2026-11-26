@@ -193,14 +193,6 @@ Atomic Swaps are supported via BasicSwap. If enabled, a button will be visible o
 
 ---
 
-## **Important: Beta Phase Notice**
-
-**MonerOS is currently in Beta.** While we strive for maximum security, please be aware that the software is still under active development.
-
-* **Community Contribution:** Real-world testing is vital to the evolution of this project. By using MonerOS now, you are helping us identify edge cases and harden the system for the entire community.
-
----
-
 ## **Coming Soon**
 
 - arm64 support (including rpi4 & rpi5)

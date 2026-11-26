@@ -5,17 +5,68 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MonerOS</title>
   <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
     body {
+      margin: 0;
+      padding: 0;
       font-family: system-ui, -apple-system, sans-serif;
-      max-width: 720px;
-      margin: 4rem auto;
-      padding: 0 1.5rem;
       line-height: 1.6;
+    }
+    .header {
+      width: calc(100% - 2rem);
+      max-width: 960px; /* optional: keeps long lines and large GIFs readable on wide screens */
+      margin: 2rem auto 1rem;
+      padding: 0 1.5rem;
+    }
+    .header h1 {
+      text-align: center;
+    }
+    .demo-gif {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 1.5rem auto;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    .frame-stage {
+      width: calc(100% - 2rem); /* small side breathing room; use 100% for edge-to-edge */
+      margin: 0 auto 2rem;
+      height: 100vh;
+      overflow: hidden;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    .frame-stage iframe {
+      --scale: 0.75;
+      width: calc(100% / var(--scale));
+      height: calc(100% / var(--scale));
+      border: 0;
+      overflow: hidden;
+      transform: scale(var(--scale));
+      transform-origin: 0 0;
     }
   </style>
 </head>
 <body>
-  <h1>MonerOS</h1>
-  <p>The air-gapped crypto distro. Cold Wallet OS for Bitcoin and Monero.</p>
+  <div class="header">
+    <!--<h1>MonerOS</h1>-->
+    <p>
+      <strong>MonerOS</strong> turns any standard computer into an air-gapped hardware wallet for Monero and Bitcoin using two bootable flash drives&mdash;no expensive dedicated devices required. Exchanges fail and closed-source wallets carry supply chain and privacy risks, so MonerOS splits the workflow into <strong>HotWalletOS</strong> (for balances, unsigned transactions, and BasicSwap atomic swaps) and <strong>ColdWalletOS</strong> (a truly air-gapped vault with network drivers and package managers purged at the build level, using LUKS2 encryption and a &ldquo;Sallyport&rdquo; container to sign transactions safely).
+    </p>
+    <p>
+      Because your normal OS is bypassed and unplugged when done, it leaves no footprint behind. It&rsquo;s <strong>100% open source</strong>&mdash;you can download ready-built images on <a href="https://sourceforge.net/projects/moneros/files/" target="_blank" rel="noopener">SourceForge</a> or view and clone the source code on <a href="https://github.com/MonerOS-dev/MonerOS" target="_blank" rel="noopener">GitHub</a>.
+    </p>
+    <img
+      class="demo-gif"
+      src="https://raw.githubusercontent.com/MonerOS-dev/MonerOS/main/MonerOS_demo.gif"
+      alt="MonerOS Demo"
+      loading="lazy"
+    />
+  </div>
 </body>
 </html>

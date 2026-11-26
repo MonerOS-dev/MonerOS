@@ -1,7 +1,5 @@
 <?php
-/**
- * HotWalletOS - Remote Access View
- */
+
 $onion_file = '/var/www/html/onion_address.txt';
 $qr_file = 'onion_address.png';
 

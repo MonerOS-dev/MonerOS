@@ -1,6 +1,38 @@
 #!/bin/bash
 set -e
 
+cleanup() {
+    local exit_code=$?
+    set +e
+
+    echo "[CLEANUP] Running exit cleanup (exit status: $exit_code)..."
+
+    for mnt in /mnt/tmp_efi /mnt/tmp_p3 /mnt/verify_p1 /mnt/verify_p2; do
+        if mountpoint -q "$mnt" 2>/dev/null; then
+            sudo umount -lf "$mnt" 2>/dev/null || true
+        fi
+        sudo rmdir "$mnt" 2>/dev/null || true
+    done
+
+    if [ -n "${LOOPDEV:-}" ]; then
+        sudo losetup -d "$LOOPDEV" 2>/dev/null || true
+    fi
+
+    if [ -n "${BASE_DIR:-}" ]; then
+        sudo umount -lf "${BASE_DIR}/chroot/dev/pts" 2>/dev/null || true
+        sudo umount -lf "${BASE_DIR}/chroot/proc" 2>/dev/null || true
+        sudo umount -lf "${BASE_DIR}/chroot/sys" 2>/dev/null || true
+    fi
+
+    if [ -n "${TEMP_SQUASH:-}" ] && [ -d "$TEMP_SQUASH" ]; then
+        sudo rm -rf "$TEMP_SQUASH" 2>/dev/null || true
+    fi
+
+    return "$exit_code"
+}
+
+trap cleanup EXIT
+
 OUT_DIR="$HOME/MonerOS_Output/"
 sudo mkdir -p "$OUT_DIR"
 sudo chown 1000:1000 -R "$OUT_DIR"
@@ -10,14 +42,6 @@ cd $BASE_DIR
 
 echo "[INFO] Starting ColdWalletOS build..."
 
-# copy splash
-#convert $HOME/MonerOS/admin_mods/cwos_splash.png \
-#convert $HOME/MonerOS/admin_mods/generic_splash.png \
-#        -resize 1920x1080\! \
-#        -type TrueColor \
-#        -compress none \
-#        -flip \
-#        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
 
 # Update version string
 FILE="$HOME/MonerOS/ColdWalletOS/config/includes.chroot/usr/local/bin/cwversion"
@@ -58,15 +82,13 @@ sudo lb build
 echo "[CRITICAL] Shredding SquashFS to pass Integrity Test..."
 SQUASH_FILE="${BASE_DIR}/binary/live/filesystem.squashfs"
 TEMP_SQUASH="${BASE_DIR}/temp_squash"
-
-# Fix the "already exists" error by ensuring the destination is empty
 sudo rm -rf "$TEMP_SQUASH"
 sudo mkdir -p "$TEMP_SQUASH"
 
 # Extract with -f (force) to handle symlinks, but NO permission-altering flags
 sudo unsquashfs -f -d "$TEMP_SQUASH" "$SQUASH_FILE"
 
-# The shredding you wanted
+# Shred the necessary packages
 sudo rm -rf "$TEMP_SQUASH"/usr/bin/apt* "$TEMP_SQUASH"/usr/bin/dpkg* "$TEMP_SQUASH"/usr/sbin/dpkg*
 sudo rm -rf "$TEMP_SQUASH"/var/lib/dpkg "$TEMP_SQUASH"/var/lib/apt "$TEMP_SQUASH"/etc/apt
 
@@ -75,7 +97,7 @@ for tool in apt apt-get dpkg; do
     sudo chmod 000 "$TEMP_SQUASH/usr/bin/$tool"
 done
 
-# Rebuild WITHOUT '-all-root' so your user permissions stay exactly as they were
+# Rebuild WITHOUT '-all-root' so user permissions stay exactly as they were
 sudo rm "$SQUASH_FILE"
 sudo mksquashfs "$TEMP_SQUASH" "$SQUASH_FILE" -comp zstd -Xcompression-level 22 -noappend
 
@@ -98,7 +120,6 @@ NEW_ISO=$(ls -t ${BASE_DIR}/*.iso | head -n1)
 cp "$NEW_ISO" "$FINAL_IMG"
 
 # --- 7.5. PATCH THE ISO INTERNALS FIRST ---
-# Do this while the image still looks like a 'pure' ISO to xorriso
 echo "[INFO] Patching El Torito catalog for Dual-Arch UEFI..."
 sudo xorriso -dev "$FINAL_IMG" \
     -boot_image any next \
@@ -115,7 +136,7 @@ cp "$FINAL_IMG" "$UPDATE_FILE"
 # --- 8. SMART DYNAMIC EXPAND AND RE-LAYOUT ---
 echo "[INFO] Calculating ISO size and re-partitioning..."
 
-# Get actual Partition 1 size in sectors using your original fdisk method
+# Get actual Partition 1 size in sectors
 ISO_SIZE=$(sudo fdisk -l "$FINAL_IMG" | grep "${FINAL_IMG}1" | awk '{print $4}')
 
 # Set fixed 0.9GB target in sectors (900 MiB * 2048 sectors/MiB)
@@ -172,11 +193,11 @@ sudo mount "${LOOPDEV}p2" /mnt/tmp_efi
 # 1. Create the standard EFI folder structure PLUS the Debian stub folder
 sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub /mnt/tmp_efi/EFI/debian
 
-# 2. Create the Friendly Name labels
+# 2. Create Friendly Name labels
 echo "BOOTX64.EFI,ColdWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
 echo "BOOTIA32.EFI,ColdWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
 
-# 3. CRITICAL FIX: Pull the binaries from Debian 12 chroot, NOT the host system
+# 3. Pull the binaries from Debian 12 chroot, NOT the host system
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
 
@@ -234,7 +255,6 @@ echo ""
 echo "------------------------------------------------"
 echo "[4/4] VERIFYING GRUB CONFIGS (BOTH PARTITIONS)"
 echo "------------------------------------------------"
-# Check Partition 2 (The EFI "Pointing" Fix)
 if [ -f "/mnt/verify_p2/boot/grub/grub.cfg" ]; then 
     echo "[OK] Found grub.cfg on Partition 2 (EFI Pointing Fix)."; 
 else
@@ -260,7 +280,6 @@ echo ""
 echo "------------------------------------------------"
 echo "[SUCCESS] COLD WALLET OS IMAGE READY"
 echo "------------------------------------------------"
-# Logical size (1.5G) vs Physical size (391M)
 LOGICAL_SIZE=$(ls -lh "$FINAL_IMG" | awk '{print $5}')
 PHYSICAL_SIZE=$(du -h "$FINAL_IMG" | awk '{print $1}')
 

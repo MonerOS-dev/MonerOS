@@ -135,93 +135,97 @@ fi
 SWAP_CONTAINER="/mnt/p4/coinswaps.bin"
 SWAP_MAPPER="swap_unlocked"
 SWAP_DATADIR="/mnt/coinswaps"
+CONFIG_FILE="/home/user/password.cfg"
 
 # Safe cleanup of any stale mappings/mounts
 sudo umount "$SWAP_DATADIR" 2>/dev/null || true
 sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null || true
 
+if [ ! -f "$CONFIG_FILE" ]; then
+    whiptail --title " Error " --fb --msgbox "\nPassword configuration file not found." 10 50
+    exit 1
+fi
 
-if [ ! -f "$SWAP_CONTAINER" ]; then
-    while true; do
-        PASS1=$(whiptail --title " Atomic Swaps Vault Setup " --fb --nocancel --passwordbox "\nEnter Master Password for Your Atomic Swaps Container: " 11 50 3>&1 1>&2 2>&3)
-        
-        if [ -z "$PASS1" ]; then
-            whiptail --title " Error " --fb --msgbox "\nPassword cannot be empty! " 10 45
-            continue
-        fi
+STORED_PASS_HASH=$(tr -d '[:space:]' < "$CONFIG_FILE")
 
-        PASS2=$(whiptail --title " Verification " --fb --nocancel --passwordbox "\nPlease confirm your password: " 11 50 3>&1 1>&2 2>&3)
-        
-        if [ "$PASS1" == "$PASS2" ]; then
-            clear
-            echo
-            echo "Initializing Atomic Swaps Container..."
-            echo
-            
-            sudo dd if=/dev/zero of="$SWAP_CONTAINER" bs=1M count=20000 >/dev/null 2>&1 &
-            DD_PID=$!
-            
-            while kill -0 "$DD_PID" 2>/dev/null; do
-                CURRENT_SIZE=$(stat -c%s "$SWAP_CONTAINER" 2>/dev/null)
-                CURRENT_SIZE=${CURRENT_SIZE:-0}
-            
-                PCT=$(( CURRENT_SIZE * 100 / 20971520000 ))
-            
-                [ "$PCT" -gt 99 ] && PCT=99
-            
-                FILLED=$(( PCT * 33 / 100 ))
-                EMPTY=$(( 33 - FILLED ))
-            
-                BAR="$(printf '%*s' "$FILLED" '' | tr ' ' '#')"
-                BAR="$BAR$(printf '%*s' "$EMPTY" '' | tr ' ' '-')"
-            
-                printf "\r[%-33s] %3d%%" "$BAR" "$PCT"
-            
-                sleep 1
-            done
-            
-            wait "$DD_PID"
-            
-            printf "\r[#################################] 100%%\n"
-            echo
+while true; do
+    PASS1=$(whiptail --title " Atomic Swaps Vault " --fb --nocancel --passwordbox "\nEnter Master Password: " 10 50 3>&1 1>&2 2>&3)
+    INPUT_PASS_HASH=$(printf '%s' "$PASS1" | sha256sum | awk '{print $1}')
 
-            # Run setup steps silently after the write progress bar closes
-            printf "%s" "$PASS1" | sudo cryptsetup luksFormat --type luks2 "$SWAP_CONTAINER" -d - > /dev/null 2>&1
-            printf "%s" "$PASS1" | sudo cryptsetup open "$SWAP_CONTAINER" "$SWAP_MAPPER" -d - > /dev/null 2>&1
+    if [ "$INPUT_PASS_HASH" != "$STORED_PASS_HASH" ]; then
+        unset PASS1 INPUT_PASS_HASH
+        sleep 3
+        whiptail --title " Error " --fb --msgbox "\nIncorrect password." 10 40
+        continue
+    fi
+
+    unset INPUT_PASS_HASH
+
+    if [ ! -f "$SWAP_CONTAINER" ]; then
+        clear
+        echo
+        echo "Initializing Atomic Swaps Container..."
+        echo
+
+        sudo dd if=/dev/zero of="$SWAP_CONTAINER" bs=1M count=20000 >/dev/null 2>&1 &
+        DD_PID=$!
+
+        while kill -0 "$DD_PID" 2>/dev/null; do
+            CURRENT_SIZE=$(stat -c%s "$SWAP_CONTAINER" 2>/dev/null)
+            CURRENT_SIZE=${CURRENT_SIZE:-0}
+
+            PCT=$(( CURRENT_SIZE * 100 / 20971520000 ))
+
+            [ "$PCT" -gt 99 ] && PCT=99
+
+            FILLED=$(( PCT * 33 / 100 ))
+            EMPTY=$(( 33 - FILLED ))
+
+            BAR="$(printf '%*s' "$FILLED" '' | tr ' ' '#')"
+            BAR="$BAR$(printf '%*s' "$EMPTY" '' | tr ' ' '-')"
+
+            printf "\r[%-33s] %3d%%" "$BAR" "$PCT"
+
+            sleep 1
+        done
+
+        wait "$DD_PID"
+
+        printf "\r[#################################] 100%%\n"
+        echo
+
+        if printf -- '%s' "$PASS1" | sudo cryptsetup luksFormat --type luks2 "$SWAP_CONTAINER" -d - > /dev/null 2>&1 && \
+           printf -- '%s' "$PASS1" | sudo cryptsetup open "$SWAP_CONTAINER" "$SWAP_MAPPER" -d - > /dev/null 2>&1; then
+            unset PASS1
             sudo mkfs.ext4 -q -F -L coinswaps "/dev/mapper/$SWAP_MAPPER" > /dev/null 2>&1
             sudo mkdir -p "$SWAP_DATADIR"
             sudo mount "/dev/mapper/$SWAP_MAPPER" "$SWAP_DATADIR"
             sudo chown -R 1000:1000 "$SWAP_DATADIR"
             break
         else
-            whiptail --title " Error " --fb --msgbox "\nPasswords do not match. Try again. " 10 45
+            unset PASS1
+            sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null || true
+            whiptail --title " Error " --fb --msgbox "\nFailed to initialize encrypted container." 12 50
+            exit 1
         fi
-    done
-else
-    while true; do
-        PASS=$(whiptail --title " Unlock Atomic Swaps " --fb --nocancel --passwordbox "\nEnter Master Password: " 10 50 3>&1 1>&2 2>&3)
-        
-        sudo umount "$SWAP_DATADIR" > /dev/null 2>&1
-        sudo cryptsetup close "$SWAP_MAPPER" > /dev/null 2>&1
-
-        # Ensure mount directory exists BEFORE attempting to mount
+    else
         sudo mkdir -p "$SWAP_DATADIR"
 
-        # Use printf -- to safely handle passwords with special characters without interpreting flags
-        if printf -- '%s' "$PASS" | sudo cryptsetup open "$SWAP_CONTAINER" "$SWAP_MAPPER" -d - > /dev/null 2>&1; then
+        if printf -- '%s' "$PASS1" | sudo cryptsetup open "$SWAP_CONTAINER" "$SWAP_MAPPER" -d - > /dev/null 2>&1; then
+            unset PASS1
             if sudo mount "/dev/mapper/$SWAP_MAPPER" "$SWAP_DATADIR"; then
                 sudo chown -R 1000:1000 "$SWAP_DATADIR"
-                unset PASS
                 break
             else
                 sudo cryptsetup close "$SWAP_MAPPER" 2>/dev/null
                 whiptail --title " Error " --fb --msgbox "\nFailed to mount encrypted container." 12 50
             fi
         else
+            unset PASS1
             whiptail --title " Error " --fb --msgbox "\nIncorrect password or decryption error." 12 40
         fi
-    done
-fi
+    fi
+done
 
 sudo mkdir -p "$SWAP_DATADIR"
 sudo chown -R 1000:1000 "$SWAP_DATADIR"

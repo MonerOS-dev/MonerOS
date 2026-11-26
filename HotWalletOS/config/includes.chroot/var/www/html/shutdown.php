@@ -1,7 +1,5 @@
 <?php
-/**
- * HotWalletOS - System Shutdown
- */
+
 $message = "";
 $status_class = "";
 $shutdown_triggered = false;

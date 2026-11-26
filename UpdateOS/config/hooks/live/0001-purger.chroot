@@ -1,8 +1,6 @@
 #!/bin/bash
 set -e
 
-echo "[HOOK] Purging 1.4GB of bloat..."
-
 # 1. Mask services
 systemctl mask networking wpa_supplicant bluetooth avahi-daemon modemmanager || true
 
@@ -15,4 +13,7 @@ apt-get clean
 # 3. Manual Scrape (The extra insurance)
 rm -rf /lib/modules/*/kernel/drivers/net
 rm -rf /lib/modules/*/kernel/drivers/bluetooth
+rm -rf /lib/modules/*/kernel/net/bluetooth
+rm -rf /lib/modules/*/kernel/net/mac80211
+rm -rf /lib/modules/*/kernel/net/wireless
 rm -rf /lib/firmware/*

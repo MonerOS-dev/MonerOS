@@ -1,13 +1,47 @@
 #!/bin/bash
 set -e
 
+LOOPDEV=""
+TEMP_SQUASH=""
+
+cleanup() {
+    local exit_code=$?
+    set +e
+
+    echo "[CLEANUP] Running exit cleanup (exit status: $exit_code)..."
+
+    for mnt in /mnt/tmp_efi /mnt/tmp_p3 /mnt/verify_p1 /mnt/verify_p2; do
+        if mountpoint -q "$mnt" 2>/dev/null; then
+            sudo umount -lf "$mnt" 2>/dev/null || true
+        fi
+        sudo rmdir "$mnt" 2>/dev/null || true
+    done
+
+    if [ -n "${LOOPDEV:-}" ]; then
+        sudo losetup -d "$LOOPDEV" 2>/dev/null || true
+    fi
+
+    if [ -n "${BASE_DIR:-}" ]; then
+        sudo umount -lf "${BASE_DIR}/chroot/dev/pts" 2>/dev/null || true
+        sudo umount -lf "${BASE_DIR}/chroot/proc" 2>/dev/null || true
+        sudo umount -lf "${BASE_DIR}/chroot/sys" 2>/dev/null || true
+    fi
+
+    if [ -n "${TEMP_SQUASH:-}" ] && [ -d "$TEMP_SQUASH" ]; then
+        sudo rm -rf "$TEMP_SQUASH" 2>/dev/null || true
+    fi
+
+    return "$exit_code"
+}
+
+trap cleanup EXIT
 
 
 
 # Production version vs non-production
 
 # Do NOT change this to false unless you know what you're doing!
-# This will disable the firewall and allow ssh with username=user and password=live
+# Setting to false will disable the firewall and allow ssh with username=user and password=live
 PRODUCTION=true
 MODS_DIR="$HOME/MonerOS/admin_mods"
 BUILD_DIR="$HOME/MonerOS/HotWalletOS"
@@ -70,15 +104,6 @@ cd $BASE_DIR
 
 echo "[INFO] Starting HotWalletOS build..."
 
-# copy splash
-#convert $HOME/MonerOS/admin_mods/cwos_splash.png \
-#convert $HOME/MonerOS/admin_mods/generic_splash.png \
-#        -resize 1920x1080\! \
-#        -type TrueColor \
-#        -compress none \
-#        -flip \
-#        $HOME/MonerOS/ColdWalletOS/config/includes.binary/boot/grub/splash.tga
-
 # Update version string
 FILE="$HOME/MonerOS/HotWalletOS/config/includes.chroot/usr/local/bin/hwversion"
 FULL_STRING=$(cat "$FILE" | tr -d '\r\n' | xargs)
@@ -87,7 +112,6 @@ VERSION_PART=$(echo "$FULL_STRING" | grep -oE '[0-9]+$')
 NEXT_VERSION=$(printf "%03d" $((10#${VERSION_PART:-0} + 1)))
 echo "${PREFIX}${NEXT_VERSION}" > "$FILE"
 
-# --- 1. THE "STOP FRUSTRATING ME" BLOCK ---
 if [ -d "chroot" ]; then
     echo "[INFO] Forced unlocking of all files in chroot..."
     sudo find chroot/ -type f -exec chattr -i {} + 2>/dev/null || true
@@ -120,14 +144,12 @@ echo "[CRITICAL] Shredding SquashFS to pass Integrity Test..."
 SQUASH_FILE="${BASE_DIR}/binary/live/filesystem.squashfs"
 TEMP_SQUASH="${BASE_DIR}/temp_squash"
 
-# Fix the "already exists" error by ensuring the destination is empty
 sudo rm -rf "$TEMP_SQUASH"
 mkdir -p "$TEMP_SQUASH"
 
 # Extract with -f (force) to handle symlinks, but NO permission-altering flags
 sudo unsquashfs -f -d "$TEMP_SQUASH" "$SQUASH_FILE"
 
-# The shredding you wanted
 sudo rm -rf "$TEMP_SQUASH"/usr/bin/apt* "$TEMP_SQUASH"/usr/bin/dpkg* "$TEMP_SQUASH"/usr/sbin/dpkg*
 sudo rm -rf "$TEMP_SQUASH"/var/lib/dpkg "$TEMP_SQUASH"/var/lib/apt "$TEMP_SQUASH"/etc/apt
 
@@ -136,7 +158,7 @@ for tool in apt apt-get dpkg; do
     sudo chmod 000 "$TEMP_SQUASH/usr/bin/$tool"
 done
 
-# Rebuild WITHOUT '-all-root' so your user permissions stay exactly as they were
+# Rebuild WITHOUT '-all-root' so user permissions stay exactly as they were
 sudo rm "$SQUASH_FILE"
 sudo mksquashfs "$TEMP_SQUASH" "$SQUASH_FILE" -comp zstd -Xcompression-level 22 -noappend
 
@@ -180,7 +202,7 @@ echo "[INFO] Calculating ISO size and re-partitioning..."
 # Get actual Partition 1 size in sectors using your original fdisk method
 ISO_SIZE=$(sudo fdisk -l "$FINAL_IMG" | grep "${FINAL_IMG}1" | awk '{print $4}')
 
-# Set your fixed 2.1GB target in sectors (2100 MiB * 2048 sectors/MiB)
+# Set fixed 2.1GB target in sectors (2100 MiB * 2048 sectors/MiB)
 P1_SIZE=$(( 2100 * 2048 ))
 
 # CRITICAL FAIL GUARD: Stop if the real ISO size exceeds your 2.1GB limit
@@ -239,7 +261,7 @@ sudo mkdir -p /mnt/tmp_efi/EFI/BOOT /mnt/tmp_efi/boot/grub/fonts /mnt/tmp_efi/EF
 echo "BOOTX64.EFI,HotWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTX64.CSV > /dev/null
 echo "BOOTIA32.EFI,HotWalletOS,,UTF-8" | sudo tee /mnt/tmp_efi/EFI/BOOT/BOOTIA32.CSV > /dev/null
 
-# CRITICAL FIX: Pull the binaries from Debian 12 chroot, NOT the host system
+# Pull the binaries from Debian 12 chroot, NOT the host system
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/i386-efi/monolithic/grubia32.efi" /mnt/tmp_efi/EFI/BOOT/BOOTIA32.EFI
 sudo cp "${BASE_DIR}/chroot/usr/lib/grub/x86_64-efi/monolithic/grubx64.efi" /mnt/tmp_efi/EFI/BOOT/BOOTX64.EFI
 

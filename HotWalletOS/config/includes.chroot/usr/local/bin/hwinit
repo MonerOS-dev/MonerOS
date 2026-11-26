@@ -1,8 +1,5 @@
 #!/bin/bash
 
-######################### This page should be edited in hwos_mods ###########################
-
-#exit 0   # Temporarily disable this file
 
 # 1. CLAIM THE HARDWARE (TTY1)
 sudo chvt 1
@@ -18,7 +15,6 @@ clear
 setfont /usr/share/consolefonts/Lat2-TerminusBold32x16.psf.gz
 setterm -cursor off
 
-############################### Style and Unlock ############################################
 export DISPLAY=:0
 
 # --- 1. INITIALIZATION & KIOSK MODE ---

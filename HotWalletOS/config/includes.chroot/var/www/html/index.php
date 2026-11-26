@@ -1,8 +1,4 @@
 <?php
-/**
- * HotWalletOS Dashboard - Ultra-Silver Industrial
- * Update: Centered Column Data & Headers
- */
 
 function isLocalHostRequest(): bool
 {
@@ -18,7 +14,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'start_basicswap') {
         exit;
     }
 
-    // Run as user 'user' instead of default root, preserving DISPLAY=:0 permissions
     shell_exec('sudo -n -u user /usr/bin/bash /usr/local/bin/start-dashboard > /dev/null 2>&1 &');
     header("Location: " . strtok($_SERVER["REQUEST_URI"], '?'));
     exit;
@@ -118,7 +113,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             color: var(--silver-mid);
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             margin: 0;
-            padding: 40px 0; /* Changed horizontal padding to 0 since we control width directly */
+            padding: 40px 0; 
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -154,7 +149,7 @@ usort($rows, function($a, $b) { return $b['usd'] <=> $a['usd']; });
             margin-bottom: 20px;
             position: relative;
             overflow: hidden;
-            width: 95vw; /* Always 95% of screen width */
+            width: 95vw;
             box-sizing: border-box; /* Prevents padding from breaking the 95vw rule */
         }
 
