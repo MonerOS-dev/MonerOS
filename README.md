@@ -120,7 +120,7 @@ The hardware requirements for HotWalletOS vary depending on how you want to run 
 
 ## Downloading or Building the Software
 
-From a security standpoint, building the software yourself is best, but you can download a ready-built version at https://sourceforge.net/projects/moneros/files/.
+From a security standpoint, building the software yourself is best, but you can download a ready-built version at https://sourceforge.net/projects/moneros/.
 
 **Building the Software:**
 ```bash
